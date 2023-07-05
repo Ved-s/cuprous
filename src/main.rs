@@ -3,10 +3,13 @@
 #![feature(int_roundings)]
 
 use std::{
+    collections::{hash_map::DefaultHasher, HashSet},
     f32::consts::TAU,
+    hash::Hasher,
     mem::{size_of, MaybeUninit},
-    num::NonZeroU32,
-    sync::RwLock, time::Instant,
+    num::{NonZeroU32, NonZeroUsize},
+    sync::RwLock,
+    time::Instant,
 };
 
 use eframe::{
@@ -38,6 +41,7 @@ struct App {
 
     wire_drag_pos: Option<Vec2i>,
     wire_nodes: Chunks2D<16, WireNode>,
+    wires: FixedVec<Wire>,
 
     wire_parts_drawn: RwLock<u32>,
 }
@@ -57,6 +61,23 @@ struct TileDrawBounds {
     pub chunks_br: Vec2i,
 }
 
+#[derive(Debug, Default)]
+struct Wire {
+    id: usize,
+    color: Color32,
+    nodes: Vec<Vec2i>,
+}
+
+impl Wire {
+    fn dummy() -> Self {
+        Self {
+            id: 0,
+            color: Color32::from_rgb(255, 0, 255),
+            nodes: vec![],
+        }
+    }
+}
+
 struct WirePart {
     pub pos: Vec2i,
     pub length: NonZeroU32,
@@ -68,10 +89,6 @@ struct WireNode {
     up: u32,
     left: u32,
     wire: usize,
-}
-
-impl WireNode {
-    const WIRE_UNINIT: usize = usize::MAX;
 }
 
 impl eframe::App for App {
@@ -130,13 +147,14 @@ impl eframe::App for App {
                     |node, pos, _, this, paint, bounds, lookaround| {
                         fn draw_wire(
                             dist: u32,
-                            next_dist: Option<u32>,
+                            next_dist: u32,
                             wire: usize,
                             vertical: bool,
                             app: &App,
                             pos: Vec2i,
                             paint: &egui::Painter,
                             bounds: &TileDrawBounds,
+                            color: Color32,
                         ) {
                             if dist == 0 && wire == 0 {
                                 return;
@@ -152,14 +170,14 @@ impl eframe::App for App {
                             }
 
                             let length = match next_dist {
-                                None | Some(0) => {
+                                0 => {
                                     if dist == 0 {
                                         return;
                                     } else {
                                         dist
                                     }
                                 }
-                                Some(node_dist) => {
+                                node_dist => {
                                     if node_dist == dist + 1 {
                                         node_dist
                                     } else {
@@ -179,44 +197,72 @@ impl eframe::App for App {
                                 vertical,
                             };
 
-                            app.draw_wire_part(paint, &part, Color32::GREEN)
+                            app.draw_wire_part(paint, &part, color)
                         }
 
                         if node.wire == 0 && node.up == 0 && node.left == 0 {
                             return;
                         }
 
-                        let next_node_v_dist = lookaround.get_relative(0, 1).map(|n| n.up);
-                        let next_node_h_dist = lookaround.get_relative(1, 0).map(|n| n.left);
+                        let wires = this.wire_at_node(pos, node);
+
+                        let wire_color_v = wires
+                            .up()
+                            .map_or(Color32::from_rgb(255, 100, 255), |w| w.color);
+
+                        let wire_color_h = wires
+                            .left()
+                            .map_or(Color32::from_rgb(255, 100, 255), |w| w.color);
+
+                        let next_node_v = lookaround.get_relative(0, 1);
+                        let next_node_h = lookaround.get_relative(1, 0);
 
                         draw_wire(
                             node.left,
-                            next_node_h_dist,
+                            next_node_h.map_or(0, |n| n.left),
                             node.wire,
                             false,
                             this,
                             pos,
                             paint,
                             bounds,
+                            wire_color_h,
                         );
                         draw_wire(
                             node.up,
-                            next_node_v_dist,
+                            next_node_v.map_or(0, |n| n.up),
                             node.wire,
                             true,
                             this,
                             pos,
                             paint,
                             bounds,
+                            wire_color_v,
                         );
 
                         if node.wire > 0 {
-                            //let count = [node.left > 0, node.up > 0, next_node_h_dist == Some(1), next_node_v_dist == Some(1)].iter().filter(|v| **v).count();
-                            //if count > 0 {
-                            //
+                            //let count = [
+                            //    node.left > 0,
+                            //    node.up > 0,
+                            //    next_node_h.is_some_and(|n| n.left == 1),
+                            //    next_node_v.is_some_and(|n| n.up == 1),
+                            //]
+                            //.iter()
+                            //.filter(|v| **v)
+                            //.count();
+                            //if count > 2 {
+                            //    this.draw_wire_intersection(paint, pos, wire.color)
                             //}
 
-                            this.draw_wire_intersection(paint, pos, Color32::GREEN)
+                            if node.left > 0
+                                && node.up > 0
+                                && next_node_h.is_some_and(|n| n.left == 1)
+                                && next_node_v.is_some_and(|n| n.up == 1)
+                            {
+                                if let Some(wire) = self.wires.get(node.wire) {
+                                    this.draw_wire_intersection(paint, pos, wire.color)
+                                }
+                            }
                         }
 
                         let correct_up = node.up == 0
@@ -270,96 +316,9 @@ impl eframe::App for App {
                 {
                     self.wire_drag_pos = None;
 
-                    fn split_wire_at(wires: &mut Chunks2D<16, WireNode>, at: Vec2i, wire: usize) {
-                        let node = wires.get(at.x() as isize, at.y() as isize);
-                        let node = match node {
-                            Some(v) => *v,
-                            None => return,
-                        };
-
-                        fn split_wire_dir(
-                            wires: &mut Chunks2D<16, WireNode>,
-                            at: Vec2i,
-                            vertical: bool,
-                            dist: u32,
-                        ) {
-                            for split_dist in 1.. {
-                                let node = match vertical {
-                                    true => wires.get_mut(
-                                        at.x() as isize,
-                                        at.y() as isize + split_dist as isize,
-                                    ),
-                                    false => wires.get_mut(
-                                        at.x() as isize + split_dist as isize,
-                                        at.y() as isize,
-                                    ),
-                                };
-                                let node = match node {
-                                    Some(v) => v,
-                                    None => break,
-                                };
-                                let node_dir = match vertical {
-                                    true => &mut node.up,
-                                    false => &mut node.left,
-                                };
-                                if *node_dir != split_dist + dist {
-                                    // went off the rails!
-                                    break;
-                                }
-                                *node_dir = split_dist;
-
-                                if node.wire > 0 {
-                                    break;
-                                }
-                            }
-                        }
-
-                        if node.wire > 0 {
-                            return;
-                        }
-                        if node.up > 0 {
-                            split_wire_dir(wires, at, true, node.up);
-                        }
-                        if node.left > 0 {
-                            split_wire_dir(wires, at, false, node.left);
-                        }
-                        let node = wires
-                            .get_or_create_mut(at.x() as isize, at.y() as isize);
-                        node.wire = wire;
-                    }
-
                     // TODO: travel wires and equalize wire IDs
                     if let Some(part) = drawing_wire {
-                        let mut dist = 0;
-                        for i in 0..=part.length.get() {
-                            let pos = part.pos
-                                + match part.vertical {
-                                    true => [0, i as i32],
-                                    false => [i as i32, 0],
-                                };
-
-                            if i == 0 || i == part.length.get() {
-                                split_wire_at(&mut self.wire_nodes, pos, WireNode::WIRE_UNINIT);
-                            }
-
-                            let node = self
-                                .wire_nodes
-                                .get_or_create_mut(pos.x() as isize, pos.y() as isize);
-                            if i > 0 {
-                                match part.vertical {
-                                    true => node.up = dist,
-                                    false => node.left = dist,
-                                }
-                            }
-                            if node.wire > 0 {
-                                dist = 1
-                            } else {
-                                dist += 1;
-                            }
-                            if i == 0 || i == part.length.get() {
-                                node.wire = WireNode::WIRE_UNINIT;
-                            }
-                        }
+                        self.place_wire_part(part);
                     }
                 }
 
@@ -385,14 +344,18 @@ time: {:.4} ms
                         bounds.chunks_br,
                         *self.wire_parts_drawn.read().unwrap(),
                         format_size(self.wire_nodes.calc_size_outer()),
-                        format_size(self.wire_nodes
-                            .get_chunk(0, 0)
-                            .map(|c| c.calc_size_outer())
-                            .unwrap_or_default()),
-                        format_size(self.wire_nodes
-                            .get(0, 0)
-                            .map(|c| c.calc_size_outer())
-                            .unwrap_or_default()),
+                        format_size(
+                            self.wire_nodes
+                                .get_chunk(0, 0)
+                                .map(|c| c.calc_size_outer())
+                                .unwrap_or_default()
+                        ),
+                        format_size(
+                            self.wire_nodes
+                                .get(0, 0)
+                                .map(|c| c.calc_size_outer())
+                                .unwrap_or_default()
+                        ),
                         update_time.as_secs_f64() * 1000.0
                     ),
                     font_id,
@@ -406,6 +369,7 @@ impl App {
     fn new() -> Self {
         Self {
             scale: 16.0,
+            wires: vec![Wire::dummy()].into(),
             ..Default::default()
         }
     }
@@ -740,6 +704,313 @@ impl App {
             None
         }
     }
+
+    fn place_wire_part(&mut self, part: WirePart) {
+        fn split_wire_at(this: &mut App, at: Vec2i) {
+            let node = this.wire_nodes.get(at.x() as isize, at.y() as isize);
+            let node = match node {
+                Some(v) => *v,
+                None => return,
+            };
+
+            fn split_wire_dir(
+                wires: &mut Chunks2D<16, WireNode>,
+                at: Vec2i,
+                vertical: bool,
+                dist: u32,
+            ) {
+                for split_dist in 1.. {
+                    let node =
+                        match vertical {
+                            true => wires
+                                .get_mut(at.x() as isize, at.y() as isize + split_dist as isize),
+                            false => wires
+                                .get_mut(at.x() as isize + split_dist as isize, at.y() as isize),
+                        };
+                    let node = match node {
+                        Some(v) => v,
+                        None => break,
+                    };
+                    let node_dir = match vertical {
+                        true => &mut node.up,
+                        false => &mut node.left,
+                    };
+                    if *node_dir != split_dist + dist {
+                        // went off the rails!
+                        break;
+                    }
+                    *node_dir = split_dist;
+
+                    if node.wire > 0 {
+                        break;
+                    }
+                }
+            }
+
+            if node.wire > 0 {
+                return;
+            }
+
+            let (left, up) = match this.wire_at_node(at, &node) {
+                TileWires::None => return,
+                TileWires::One { wire, dir } => match dir {
+                    WireDirection::None => return,
+                    WireDirection::Up => (0, wire.id),
+                    WireDirection::Left => (wire.id, 0),
+                },
+                TileWires::Two { left, up } => (left.id, up.id),
+            };
+
+            if up == 0 && left == 0 {
+                return;
+            }
+
+            if up > 0 {
+                split_wire_dir(&mut this.wire_nodes, at, true, node.up);
+            }
+            if left > 0 {
+                split_wire_dir(&mut this.wire_nodes, at, false, node.left);
+            }
+            let node = this
+                .wire_nodes
+                .get_or_create_mut(at.x() as isize, at.y() as isize);
+
+            let first = if up > 0 { up } else { left };
+
+            if up > 0 && left > 0 && up != left {
+                todo!("Merge wires")
+            }
+            else {
+                node.wire = first;
+                let wire = this.wires.get_mut(first).unwrap();
+                wire.nodes.push(at);
+            }
+        }
+
+        let wires_crossed = {
+            let mut wires_crossed = HashSet::new();
+            for i in 0..=part.length.get() {
+                let pos = part.pos
+                    + match part.vertical {
+                        true => [0, i as i32],
+                        false => [i as i32, 0],
+                    };
+
+                let node = match self.wire_nodes.get(pos.x() as isize, pos.y() as isize) {
+                    None => continue,
+                    Some(v) => v,
+                };
+
+                if i == 0 || i == part.length.get() {
+                    match self.wires_at(pos) {
+                        TileWires::None => (),
+                        TileWires::One { wire, dir: _ } => {
+                            wires_crossed.insert(wire.id);
+                        }
+                        TileWires::Two { left, up } => {
+                            wires_crossed.insert(left.id);
+                            wires_crossed.insert(up.id);
+                        }
+                    }
+                } else if node.wire > 0 {
+                    wires_crossed.insert(node.wire);
+                }
+            }
+            wires_crossed
+        };
+
+        let new_wire = match wires_crossed.len() {
+            0 => self.create_wire().id,
+            1 => *wires_crossed.iter().next().unwrap(),
+            _ => {
+                let main_wire = self
+                    .wires
+                    .iter()
+                    .filter(|v| wires_crossed.contains(&v.id))
+                    .max_by(|x, y| x.nodes.len().cmp(&y.nodes.len()))
+                    .expect("Some matching wires")
+                    .id;
+
+                for wire in wires_crossed {
+                    if wire != main_wire {
+                        self.merge_wires(main_wire, wire)
+                    }
+                }
+                main_wire
+            }
+        };
+
+        let mut dist = 0;
+        for i in 0..=part.length.get() {
+            let pos = part.pos
+                + match part.vertical {
+                    true => [0, i as i32],
+                    false => [i as i32, 0],
+                };
+
+            if i == 0 || i == part.length.get() {
+                split_wire_at(self, pos, );
+            }
+
+            let node = self
+                .wire_nodes
+                .get_or_create_mut(pos.x() as isize, pos.y() as isize);
+
+            if i > 0 {
+                match part.vertical {
+                    true => node.up = dist,
+                    false => node.left = dist,
+                }
+            }
+            if node.wire > 0 {
+                dist = 1
+            } else {
+                dist += 1;
+            }
+            if (i == 0 || i == part.length.get()) && node.wire != new_wire {
+                node.wire = new_wire;
+                self.wires.get_mut(new_wire).unwrap().nodes.push(pos);
+            }
+        }
+    }
+
+    fn wires_at(&self, pos: Vec2i) -> TileWires<'_> {
+        match self.wire_nodes.get(pos.x() as isize, pos.y() as isize) {
+            None => TileWires::None,
+            Some(node) => self.wire_at_node(pos, node),
+        }
+    }
+
+    fn wire_at_node(&self, pos: Vec2i, node: &WireNode) -> TileWires {
+        if node.wire > 0 {
+            return match self.wires.get(node.wire) {
+                None => TileWires::None,
+                Some(wire) => TileWires::One {
+                    wire,
+                    dir: WireDirection::None,
+                },
+            };
+        }
+
+        let up = match node.up {
+            0 => None,
+            up => self
+                .wire_nodes
+                .get(pos.x() as isize, (pos.y() - up as i32) as isize)
+                .and_then(|n| match n.wire {
+                    0 => None,
+                    wire => self.wires.get(wire),
+                }),
+        };
+        let left = match node.left {
+            0 => None,
+            left => self
+                .wire_nodes
+                .get((pos.x() - left as i32) as isize, pos.y() as isize)
+                .and_then(|n| match n.wire {
+                    0 => None,
+                    wire => self.wires.get(wire),
+                }),
+        };
+
+        match (left, up) {
+            (None, None) => TileWires::None,
+            (None, Some(u)) => TileWires::One {
+                wire: u,
+                dir: WireDirection::Up,
+            },
+            (Some(l), None) => TileWires::One {
+                wire: l,
+                dir: WireDirection::Left,
+            },
+            (Some(left), Some(up)) => TileWires::Two { left, up },
+        }
+    }
+
+    fn create_wire(&mut self) -> &mut Wire {
+        let id = self.wires.first_free_pos();
+
+        let mut hash = DefaultHasher::new();
+        hash.write_usize(id);
+        hash.write_u16(61942);
+        let color = hash.finish().to_le_bytes();
+
+        let wire = Wire {
+            id,
+            color: Color32::from_rgb_additive(color[0], color[1], color[2]),
+            ..Default::default()
+        };
+
+        self.wires.set(wire, id).value_ref
+    }
+
+    fn merge_wires(&mut self, wire: usize, with: usize) {
+        if wire == 0
+            || !self.wires.exists(wire)
+            || with == 0
+            || !self.wires.exists(with)
+            || wire == with
+        {
+            return;
+        }
+
+        let Wire {
+            id: _,
+            color: _,
+            nodes,
+        } = self.wires.remove(with).unwrap();
+
+        for npos in nodes.iter() {
+            match self
+                .wire_nodes
+                .get_mut(npos.x() as isize, npos.y() as isize)
+            {
+                None => {}
+                Some(n) => n.wire = wire,
+            }
+        }
+
+        let wire = &mut self.wires.get_mut(wire).unwrap();
+        wire.nodes.extend(nodes);
+    }
+}
+
+enum WireDirection {
+    None,
+    Up,
+    Left,
+}
+
+enum TileWires<'a> {
+    None,
+    One { wire: &'a Wire, dir: WireDirection },
+    Two { left: &'a Wire, up: &'a Wire },
+}
+
+impl TileWires<'_> {
+    fn up(&self) -> Option<&Wire> {
+        match self {
+            TileWires::One { wire, dir }
+                if matches!(dir, WireDirection::Up) || matches!(dir, WireDirection::None) =>
+            {
+                Some(wire)
+            }
+            TileWires::Two { left: _, up } => Some(up),
+            _ => None,
+        }
+    }
+
+    fn left(&self) -> Option<&Wire> {
+        match self {
+            TileWires::One { wire, dir }
+                if matches!(dir, WireDirection::Left) || matches!(dir, WireDirection::None) =>
+            {
+                Some(wire)
+            }
+            TileWires::Two { left, up: _ } => Some(left),
+            _ => None,
+        }
+    }
 }
 
 type Chunk<const CHUNK_SIZE: usize, T> = [[T; CHUNK_SIZE]; CHUNK_SIZE];
@@ -838,14 +1109,23 @@ impl<const CHUNK_SIZE: usize, T: Default> Chunks2D<CHUNK_SIZE, T> {
         let ((qx, qy), qid) = Self::to_quarter_id_pos(x, y);
         let quarter = &mut self.quarters[qid];
 
+        if quarter.capacity() <= qx {
+            quarter.reserve_exact(qx + 1 - quarter.len());
+        }
+
         while quarter.len() <= qx {
             quarter.push(None);
         }
         let col = &mut quarter[qx];
 
-        if col.is_none() {
-            *col = Some(Vec::new());
+        match col.as_mut() {
+            None => {
+                *col = Some(Vec::with_capacity(qy + 1));
+            }
+            Some(v) if v.capacity() <= qy => v.reserve_exact(qy + 1 - v.len()),
+            _ => {}
         }
+
         let col = match col.as_mut() {
             Some(v) => v,
             None => unreachable!(),
@@ -980,8 +1260,7 @@ fn format_size(size: usize) -> String {
         if size >= next_div {
             label += 1;
             div = next_div;
-        }
-        else {
+        } else {
             break;
         }
     }
@@ -990,5 +1269,122 @@ fn format_size(size: usize) -> String {
     let ff = format!("{valf:.2}");
     let ff = ff.trim_end_matches('0').trim_end_matches('.');
     format!("{ff} {}", SIZE_LABELS[label])
+}
 
+#[derive(Default, Debug)]
+struct FixedVec<T> {
+    vec: Vec<Option<T>>,
+    first_free: Option<usize>,
+}
+
+struct VecSetResult<'a, T> {
+    value_ref: &'a mut T,
+    prev: Option<T>,
+}
+
+impl<T> FixedVec<T> {
+    fn new(mut vec: Vec<T>) -> Self {
+        Self {
+            vec: vec.drain(..).map(|v| Some(v)).collect(),
+            first_free: None,
+        }
+    }
+
+    fn get(&self, pos: usize) -> Option<&T> {
+        self.vec.get(pos)?.as_ref()
+    }
+
+    fn get_mut(&mut self, pos: usize) -> Option<&mut T> {
+        self.vec.get_mut(pos)?.as_mut()
+    }
+
+    fn remove(&mut self, pos: usize) -> Option<T> {
+        if pos >= self.vec.len() {
+            return None;
+        }
+
+        let item = &mut self.vec[pos];
+
+        if item.is_some() {
+            match &mut self.first_free {
+                Some(v) if *v < pos => {}
+                fe => *fe = Some(pos),
+            }
+        }
+
+        item.take()
+    }
+
+    fn exists(&self, pos: usize) -> bool {
+        self.vec.get(pos).is_some_and(|v| v.is_some())
+    }
+
+    fn set<'a>(&'a mut self, value: T, into: usize) -> VecSetResult<'a, T> {
+        if into >= self.vec.len() {
+            if self.vec.len() != into && self.first_free.is_none() {
+                self.first_free = Some(self.vec.len())
+            }
+            self.vec.reserve(into + 1 - self.vec.len());
+            while self.vec.len() < into {
+                self.vec.push(None)
+            }
+            self.vec.push(Some(value));
+            return VecSetResult {
+                value_ref: self.vec[into].as_mut().unwrap(),
+                prev: None,
+            };
+        };
+
+        if let Some(ff) = self.first_free {
+            if ff == into {
+                self.first_free = (ff + 1..self.vec.len()).find(|i| matches!(self.vec[*i], None));
+            }
+        }
+
+        let prev = self.vec.get_mut(into).unwrap().replace(value);
+
+        return VecSetResult {
+            value_ref: self.vec[into].as_mut().unwrap(),
+            prev: prev,
+        };
+    }
+
+    fn first_free_pos(&self) -> usize {
+        match self.first_free {
+            Some(v) => v,
+            None => self.vec.len(),
+        }
+    }
+
+    fn iter<'a>(&'a self) -> FixedVecIterator<'a, T> {
+        FixedVecIterator {
+            vec: &self.vec,
+            pos: 0,
+        }
+    }
+}
+
+impl<T> From<Vec<T>> for FixedVec<T> {
+    fn from(value: Vec<T>) -> Self {
+        Self::new(value)
+    }
+}
+
+struct FixedVecIterator<'a, T> {
+    vec: &'a Vec<Option<T>>,
+    pos: usize,
+}
+
+impl<'a, T> Iterator for FixedVecIterator<'a, T> {
+    type Item = &'a T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.pos < self.vec.len() {
+            self.pos += 1;
+            if let Some(v) = &self.vec[self.pos - 1] {
+                return Some(v);
+            }
+        }
+        None
+    }
 }
