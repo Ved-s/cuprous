@@ -8,13 +8,13 @@ use std::{
 };
 
 use eframe::{
-    egui::{self, Sense, Key},
+    egui::{self, Key, Sense},
     epaint::{Color32, Rounding},
 };
 use emath::{vec2, Rect};
 
 use crate::{
-    containers::{Chunks2D, FixedVec, ChunksLookaround},
+    containers::{Chunks2D, ChunksLookaround, FixedVec},
     vector::{Vec2f, Vec2i, Vector},
     PaintContext, SizeCalc, TileDrawBounds,
 };
@@ -83,7 +83,8 @@ impl Wires {
             &(&self, ctx),
             |node| node.wire > 0 || node.up > 0 || node.left > 0,
             |node, pos, _, ctx, paint, bounds, lookaround| {
-                ctx.0.draw_wires(ctx.1, node, pos, lookaround, bounds, paint);
+                ctx.0
+                    .draw_wires(ctx.1, node, pos, lookaround, bounds, paint);
             },
         );
 
@@ -119,20 +120,18 @@ impl Wires {
         }
 
         if let Some(mouse_pos) = mouse_tile_pos_i {
-            
             for i in 0..4 {
-                let vertical = i & 1 == 1; 
-                let forward = i & 2 == 2; 
-                if let Some((_, pos)) = self.find_node(mouse_pos, vertical, forward) {
-                    let world_pos = ctx.screen.world_to_screen_tile(pos);
+                let vertical = i & 1 == 1;
+                let forward = i & 2 == 2;
+                if let Some(found) = self.find_node(mouse_pos, vertical, forward) {
+                    let world_pos = ctx.screen.world_to_screen_tile(found.pos);
                     let size = vec2(ctx.screen.scale, ctx.screen.scale);
                     let rect = Rect::from_min_size(world_pos.into(), size);
 
-                    let r = if vertical { 255 } else { 0 }; 
-                    let g = if forward { 255 } else { 0 }; 
+                    let r = if vertical { 255 } else { 0 };
+                    let g = if forward { 255 } else { 0 };
                     let color = Color32::from_rgba_unmultiplied(r, g, 0, 128);
                     ctx.paint.rect_filled(rect, Rounding::none(), color);
-                    
                 }
             }
         }
@@ -236,18 +235,16 @@ impl Wires {
             wire_color_v,
         );
         if node.wire > 0 {
-
             let possible_intersection = if ctx.egui_ctx.input(|input| input.modifiers.shift) {
                 true
             } else {
                 node.left > 0
-                && node.up > 0
-                && next_node_h.is_some_and(|n| n.left == 1)
-                && next_node_v.is_some_and(|n| n.up == 1)
+                    && node.up > 0
+                    && next_node_h.is_some_and(|n| n.left == 1)
+                    && next_node_v.is_some_and(|n| n.up == 1)
             };
 
-            if possible_intersection
-            {
+            if possible_intersection {
                 if let Some(wire) = self.wires.get(node.wire) {
                     Wires::draw_wire_intersection(ctx, pos, wire.color)
                 }
@@ -511,64 +508,39 @@ impl Wires {
         let mut part_pos = part.pos;
         let mut part_len = part.length.get() as i32;
 
-        let new_start = self.wire_nodes.get(part_pos.x() as isize, part_pos.y() as isize).and_then(|n| if n.wire > 0 { None } else { self.find_node_from_node(n, part_pos, part.vertical, true).map(|v| v.1) });
+        let new_start = self
+            .wire_nodes
+            .get(part_pos.x() as isize, part_pos.y() as isize)
+            .and_then(|n| {
+                if n.wire > 0 {
+                    None
+                } else {
+                    self.find_node_from_node(n, part_pos, part.vertical, true)
+                }
+            });
 
-        // if self.wire_nodes.get(part_pos.x(), part_pos.y()).is_some_and(|n| n.wire == 0 && (part.vertical && n.up > 0 || !part.vertical && n.left > 0)) {
-        //     loop {
-        //         let next_node_pos: Vector<2, isize> = match part.vertical {
-        //             true => [part_pos.x(), part_pos.y() + 1].into(),
-        //             false => [part_pos.x() + 1, part_pos.y()].into(),
-        //         };
-        //         let next_node = self.wire_nodes.get(next_node_pos.x(), next_node_pos.y());
-        //         match next_node {
-        //             None => {
-        //                 break;
-        //             },
-        //             Some(n) => {
-        //                 let points_back = match part.vertical {
-        //                     true => n.up > 0,
-        //                     false => n.left > 0,
-        //                 };
-
-        //                 if !points_back {
-        //                     break;
-        //                 }
-        //                 part_pos = next_node_pos;
-        //                 part_len -= 1;
-
-        //                 if n.wire > 0 {
-        //                     break;
-        //                 }
-        //             }
-        //         }
-        //     }
-        // }
-
-        if let Some(pos) = new_start {
-            part_len -= match part.vertical {
-                true => pos.y() - part_pos.y(),
-                false => pos.x() - part_pos.x(),
-            };
-            part_pos = pos;
+        if let Some(found) = new_start {
+            part_len -= found.distance.get() as i32;
+            part_pos = found.pos;
         }
 
         let end_pos = match part.vertical {
             true => part_pos + [0, part_len],
             false => part_pos + [part_len, 0],
         };
-        let end_node = self.wire_nodes.get(end_pos.x() as isize, end_pos.y() as isize);
-        match end_node {
-            None => {},
-            Some(n) => {
-                if n.wire == 0 {
-                    let pointer = match part.vertical {
-                        true => n.up,
-                        false => n.left,
-                    };
-                    if pointer > 0 {
-                        part_len -= pointer as i32;
-                    }
-                }
+
+        let new_end_dist = self
+            .wire_nodes
+            .get(end_pos.x() as isize, end_pos.y() as isize)
+            .and_then(|n| {
+                self.find_node_from_node(n, end_pos, part.vertical, false)
+                    .map(|v| v.distance)
+            });
+
+        match new_end_dist {
+            None => {}
+            Some(dist) => {
+                part_len -= dist.get() as i32;
             }
         }
 
@@ -683,32 +655,40 @@ impl Wires {
         wire.nodes.extend(nodes);
     }
 
-    fn find_node<'a>(&'a self, pos: Vec2i, vertical: bool, forward: bool) -> Option<(&'a WireNode, Vec2i)> {
+    fn find_node<'a>(&'a self, pos: Vec2i, vertical: bool, forward: bool) -> Option<FoundNode> {
         let node = self.wire_nodes.get(pos.x() as isize, pos.y() as isize)?;
         self.find_node_from_node(node, pos, vertical, forward)
     }
 
-    fn find_node_from_node<'a>(&'a self, node: &WireNode, pos: Vec2i, vertical: bool, forward: bool) -> Option<(&'a WireNode, Vec2i)> {
+    fn find_node_from_node<'a>(
+        &'a self,
+        node: &WireNode,
+        pos: Vec2i,
+        vertical: bool,
+        forward: bool,
+    ) -> Option<FoundNode> {
         let pointer = match vertical {
             true => node.up,
             false => node.left,
         };
 
         if forward {
-            let start = if node.wire > 0 {
-                0
-            } else {
-                pointer
-            };
+            let start = if node.wire > 0 { 0 } else { pointer };
             for i in 1.. {
                 let offset = start + i;
                 let target_pos = match vertical {
                     true => pos + [0, i as i32],
-                    false =>  pos + [i as i32, 0],
+                    false => pos + [i as i32, 0],
                 };
-                let target = self.wire_nodes.get(target_pos.x() as isize, target_pos.y() as isize)?;
+                let target = self
+                    .wire_nodes
+                    .get(target_pos.x() as isize, target_pos.y() as isize)?;
                 if target.wire > 0 {
-                    return Some((target, target_pos))
+                    return Some(FoundNode {
+                        node: *target,
+                        pos: target_pos,
+                        distance: NonZeroU32::new(i).unwrap(),
+                    });
                 }
                 let target_pointer = match vertical {
                     true => target.up,
@@ -719,20 +699,31 @@ impl Wires {
                 }
             }
             None
-        }
-        else {
+        } else {
             if pointer == 0 {
                 None
             } else {
                 let target_pos = match vertical {
                     true => pos - [0, pointer as i32],
-                    false =>  pos - [pointer as i32, 0],
+                    false => pos - [pointer as i32, 0],
                 };
-                let target = self.wire_nodes.get(target_pos.x() as isize, target_pos.y() as isize)?;
-                Some((target, target_pos))
+                let target = self
+                    .wire_nodes
+                    .get(target_pos.x() as isize, target_pos.y() as isize)?;
+                Some(FoundNode {
+                    node: *target,
+                    pos: target_pos,
+                    distance: NonZeroU32::new(pointer).unwrap(),
+                })
             }
         }
     }
+}
+
+struct FoundNode {
+    node: WireNode,
+    pos: Vec2i,
+    distance: NonZeroU32,
 }
 
 enum WireDirection {
