@@ -7,7 +7,7 @@ use crate::r#const::*;
 pub trait VectorValue: Sized + Copy + Default {}
 impl<T> VectorValue for T where T: Sized + Copy + Default{}
 
-#[derive(PartialEq, Eq, Copy, Clone, Debug)]
+#[derive(PartialEq, Eq, Copy, Clone, Debug, Hash)]
 pub struct Vector<const SIZE: usize, T: VectorValue> (pub [T; SIZE]);
 
 pub type Vec2f = Vector<2, f32>;
