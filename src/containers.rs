@@ -1,7 +1,6 @@
-use std::mem::MaybeUninit;
+use std::{mem::MaybeUninit, ops::Range};
 
 use crate::{vector::Vector, SizeCalc};
-
 
 #[derive(Default, Debug)]
 pub struct FixedVec<T> {
@@ -121,8 +120,10 @@ impl<'a, T> Iterator for FixedVecIterator<'a, T> {
     }
 }
 
-
+// Cols then rows, chunk[x][y]
 type Chunk<const CHUNK_SIZE: usize, T> = [[T; CHUNK_SIZE]; CHUNK_SIZE];
+
+// Vec of rows, vec of cols, quaerter[y][x]
 type ChunksQuarter<const CHUNK_SIZE: usize, T> =
     Vec<Option<Vec<Option<Box<Chunk<CHUNK_SIZE, T>>>>>>;
 
@@ -139,7 +140,19 @@ pub struct ChunksLookaround<'a, const CHUNK_SIZE: usize, T: Default> {
 }
 
 impl<'a, const CHUNK_SIZE: usize, T: Default> ChunksLookaround<'a, CHUNK_SIZE, T> {
-    pub fn new(chunks: &'a Chunks2D<CHUNK_SIZE, T>, chunk: &'a Chunk<CHUNK_SIZE, T>, pos: Vector<2, isize>, in_chunk_pos: Vector<2, usize>) -> Self { Self { chunks, chunk, pos, in_chunk_pos } }
+    pub fn new(
+        chunks: &'a Chunks2D<CHUNK_SIZE, T>,
+        chunk: &'a Chunk<CHUNK_SIZE, T>,
+        pos: Vector<2, isize>,
+        in_chunk_pos: Vector<2, usize>,
+    ) -> Self {
+        Self {
+            chunks,
+            chunk,
+            pos,
+            in_chunk_pos,
+        }
+    }
 
     pub fn get_relative(&self, x: isize, y: isize) -> Option<&T> {
         let target_x = x + self.in_chunk_pos.x() as isize;
@@ -199,9 +212,9 @@ impl<const CHUNK_SIZE: usize, T: Default> Chunks2D<CHUNK_SIZE, T> {
     pub fn get_chunk<'a>(&'a self, x: isize, y: isize) -> Option<&'a Chunk<CHUNK_SIZE, T>> {
         let ((qx, qy), qid) = Self::to_quarter_id_pos(x, y);
         let quarter = &self.quarters[qid];
-        let col = quarter.get(qx)?;
-        col.as_ref()
-            .and_then(|col| col.get(qy)?.as_ref().map(|b| b.as_ref()))
+        let row = quarter.get(qy)?;
+        row.as_ref()
+            .and_then(|row| row.get(qx)?.as_ref().map(|b| b.as_ref()))
     }
 
     pub fn get_chunk_mut<'a>(
@@ -211,41 +224,41 @@ impl<const CHUNK_SIZE: usize, T: Default> Chunks2D<CHUNK_SIZE, T> {
     ) -> Option<&'a mut Chunk<CHUNK_SIZE, T>> {
         let ((qx, qy), qid) = Self::to_quarter_id_pos(x, y);
         let quarter = &mut self.quarters[qid];
-        let col = quarter.get_mut(qx)?;
-        col.as_mut()
-            .and_then(|col| col.get_mut(qy)?.as_mut().map(|b| b.as_mut()))
+        let row = quarter.get_mut(qy)?;
+        row.as_mut()
+            .and_then(|row| row.get_mut(qx)?.as_mut().map(|b| b.as_mut()))
     }
 
     pub fn get_or_create_chunk_mut(&mut self, x: isize, y: isize) -> &mut Chunk<CHUNK_SIZE, T> {
         let ((qx, qy), qid) = Self::to_quarter_id_pos(x, y);
         let quarter = &mut self.quarters[qid];
 
-        if quarter.capacity() <= qx {
-            quarter.reserve_exact(qx + 1 - quarter.len());
+        if quarter.capacity() <= qy {
+            quarter.reserve_exact(qy + 1 - quarter.len());
         }
 
-        while quarter.len() <= qx {
+        while quarter.len() <= qy {
             quarter.push(None);
         }
-        let col = &mut quarter[qx];
+        let row = &mut quarter[qy];
 
-        match col.as_mut() {
+        match row.as_mut() {
             None => {
-                *col = Some(Vec::with_capacity(qy + 1));
+                *row = Some(Vec::with_capacity(qx + 1));
             }
-            Some(v) if v.capacity() <= qy => v.reserve_exact(qy + 1 - v.len()),
+            Some(v) if v.capacity() <= qx => v.reserve_exact(qx + 1 - v.len()),
             _ => {}
         }
 
-        let col = match col.as_mut() {
+        let row = match row.as_mut() {
             Some(v) => v,
             None => unreachable!(),
         };
 
-        while col.len() <= qy {
-            col.push(None);
+        while row.len() <= qx {
+            row.push(None);
         }
-        let chunk = &mut col[qy];
+        let chunk = &mut row[qx];
 
         if chunk.is_none() {
             let mut arr: Chunk<CHUNK_SIZE, T> = unsafe { MaybeUninit::uninit().assume_init() };
@@ -293,6 +306,35 @@ impl<const CHUNK_SIZE: usize, T: Default> Chunks2D<CHUNK_SIZE, T> {
         let (chunk_y, _) = Self::to_chunk_pos(y);
 
         self.get_chunk(chunk_x, chunk_y).is_some()
+    }
+
+    pub fn get_chunk_row_range(&self, row: isize) -> Range<isize> {
+        let (leftq, rightq, row) = if row < 0 {
+            (
+                &self.quarters[Self::QUARTER_TL],
+                &self.quarters[Self::QUARTER_TR],
+                (-row - 1) as usize,
+            )
+        } else {
+            (
+                &self.quarters[Self::QUARTER_BL],
+                &self.quarters[Self::QUARTER_BR],
+                row as usize,
+            )
+        };
+
+        let leftcount = leftq
+            .get(row)
+            .map(|ro| ro.as_ref().map(|r| r.len()).unwrap_or(0))
+            .unwrap_or(0) as isize;
+        let rightcount = rightq
+            .get(row)
+            .map(|ro| ro.as_ref().map(|r| r.len()).unwrap_or(0))
+            .unwrap_or(0) as isize;
+        Range {
+            start: -leftcount,
+            end: rightcount,
+        }
     }
 }
 

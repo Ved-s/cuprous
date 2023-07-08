@@ -58,10 +58,10 @@ impl SizeCalc for WireNode {
 #[derive(Default)]
 pub struct Wires {
     pub wire_drag_pos: Option<Vec2i>,
-    pub wire_nodes: Chunks2D<16, WireNode>,
+    pub nodes: Chunks2D<16, WireNode>,
     pub wires: FixedVec<Wire>,
 
-    pub wire_parts_drawn: RwLock<u32>,
+    pub parts_drawn: RwLock<u32>,
 }
 
 impl Wires {
@@ -73,10 +73,10 @@ impl Wires {
     }
 
     pub fn update(&mut self, ctx: &PaintContext) {
-        *self.wire_parts_drawn.write().unwrap() = 0;
+        *self.parts_drawn.write().unwrap() = 0;
 
         ctx.draw_chunks(
-            &self.wire_nodes,
+            &self.nodes,
             ctx.rect,
             ctx.paint,
             ctx.bounds,
@@ -103,7 +103,9 @@ impl Wires {
             self.draw_wire_part(ctx, part, Color32::GRAY);
         }
 
-        let interaction = ctx.ui.interact(ctx.rect, ctx.ui.id(), Sense::drag());
+        let interaction = ctx
+            .ui
+            .interact(ctx.rect, ctx.ui.id(), Sense::click_and_drag());
 
         if self.wire_drag_pos.is_none() && interaction.drag_started_by(egui::PointerButton::Primary)
         {
@@ -113,13 +115,17 @@ impl Wires {
         {
             self.wire_drag_pos = None;
 
-            // TODO: travel wires and equalize wire IDs
             if let Some(part) = drawing_wire {
                 self.place_wire_part(part);
             }
         }
 
         if let Some(mouse_pos) = mouse_tile_pos_i {
+            if interaction.clicked_by(egui::PointerButton::Primary) && self.wire_drag_pos.is_none()
+            {
+                self.try_toggle_node_intersection(mouse_pos);
+            }
+
             for i in 0..4 {
                 let vertical = i & 1 == 1;
                 let forward = i & 2 == 2;
@@ -134,6 +140,46 @@ impl Wires {
                     ctx.paint.rect_filled(rect, Rounding::none(), color);
                 }
             }
+        }
+    }
+
+    fn try_toggle_node_intersection(&mut self, pos: Vec2i) {
+        let node = self.nodes.get(pos.x() as isize, pos.y() as isize);
+
+        let node = match node {
+            None => return,
+            Some(ref n) if n.wire == 0 && n.left == 0 && n.up == 0 => return,
+            Some(v) => v,
+        };
+
+        let center = node.wire > 0;
+        let left = node.left > 0;
+        let up = node.up > 0;
+        let right = (center || left)
+            && self
+                .nodes
+                .get(pos.x() as isize + 1, pos.y() as isize)
+                .is_some_and(|n| {
+                    let pointer = if center { 1 } else { node.left + 1 };
+                    n.left == pointer
+                });
+        let down = (center || up)
+            && self
+                .nodes
+                .get(pos.x() as isize, pos.y() as isize + 1)
+                .is_some_and(|n| {
+                    let pointer = if center { 1 } else { node.up + 1 };
+                    n.up == pointer
+                });
+
+        if up != down || left != right {
+            return;
+        }
+
+        if center {
+            todo!("Cutting wires")
+        } else {
+            self.split_wire_at_node(pos, *node, None)
         }
     }
 
@@ -288,7 +334,7 @@ impl Wires {
         let rect = Rect::from_min_size(pos.into(), rect_size);
         ctx.paint.rect_filled(rect, Rounding::none(), color);
 
-        *self.wire_parts_drawn.write().unwrap() += 1;
+        *self.parts_drawn.write().unwrap() += 1;
     }
 
     fn draw_wire_intersection(ctx: &PaintContext, pos: Vec2i, color: Color32) {
@@ -344,67 +390,108 @@ impl Wires {
         }
     }
 
-    fn place_wire_part(&mut self, part: WirePart) {
-        fn split_wire_at(this: &mut Wires, at: Vec2i, wire: usize) {
-            let node = this.wire_nodes.get(at.x() as isize, at.y() as isize);
-            let node = match node {
-                Some(v) => *v,
-                None => return,
-            };
+    fn split_wire_at(&mut self, at: Vec2i, wire: Option<usize>) {
+        let node = self.nodes.get(at.x() as isize, at.y() as isize);
+        let node = match node {
+            Some(v) => *v,
+            None => return,
+        };
+        self.split_wire_at_node(at, node, wire)
+    }
 
-            fn split_wire_dir(
-                wires: &mut Chunks2D<16, WireNode>,
-                at: Vec2i,
-                vertical: bool,
-                dist: u32,
-            ) {
-                for split_dist in 1.. {
-                    let node =
-                        match vertical {
-                            true => wires
-                                .get_mut(at.x() as isize, at.y() as isize + split_dist as isize),
-                            false => wires
-                                .get_mut(at.x() as isize + split_dist as isize, at.y() as isize),
-                        };
-                    let node = match node {
-                        Some(v) => v,
-                        None => break,
-                    };
-                    let node_dir = match vertical {
-                        true => &mut node.up,
-                        false => &mut node.left,
-                    };
-                    if *node_dir != split_dist + dist {
-                        // went off the rails!
-                        break;
-                    }
-                    *node_dir = split_dist;
+    // wire param: if Some(w) will split with wire w, if None, will try to figure ot which wire to use (with merging wires)
+    fn split_wire_at_node(&mut self, at: Vec2i, node: WireNode, wire: Option<usize>) {
+        fn split_wire_dir(
+            wires: &mut Chunks2D<16, WireNode>,
+            at: Vec2i,
+            vertical: bool,
+            dist: u32,
+        ) {
+            for split_dist in 1.. {
+                let node = match vertical {
+                    true => wires.get_mut(at.x() as isize, at.y() as isize + split_dist as isize),
+                    false => wires.get_mut(at.x() as isize + split_dist as isize, at.y() as isize),
+                };
+                let node = match node {
+                    Some(v) => v,
+                    None => break,
+                };
+                let node_dir = match vertical {
+                    true => &mut node.up,
+                    false => &mut node.left,
+                };
+                if *node_dir != split_dist + dist {
+                    // went off the rails!
+                    break;
+                }
+                *node_dir = split_dist;
 
-                    if node.wire > 0 {
-                        break;
-                    }
+                if node.wire > 0 {
+                    break;
                 }
             }
-
-            if node.wire > 0 {
-                return;
-            }
-
-            if node.up > 0 {
-                split_wire_dir(&mut this.wire_nodes, at, true, node.up);
-            }
-            if node.left > 0 {
-                split_wire_dir(&mut this.wire_nodes, at, false, node.left);
-            }
-            let node = this
-                .wire_nodes
-                .get_or_create_mut(at.x() as isize, at.y() as isize);
-
-            node.wire = wire;
-            let wire = this.wires.get_mut(wire).unwrap();
-            wire.nodes.push(at);
         }
 
+        if node.wire > 0 || node.up == 0 && node.left == 0 {
+            return;
+        }
+
+        let wire_up = self
+            .find_node_from_node(&node, at, true, false)
+            .map(|f| f.wire)
+            .unwrap_or(0);
+        let wire_left = self
+            .find_node_from_node(&node, at, false, false)
+            .map(|f| f.wire)
+            .unwrap_or(0);
+
+        let wire = wire.unwrap_or_else(|| {
+            if wire_up == wire_left {
+                wire_up
+            } else if wire_up == 0 {
+                wire_left
+            } else if wire_left == 0 {
+                wire_up
+            } else {
+                let up = self.wires.get(wire_up);
+                let left = self.wires.get(wire_left);
+
+                match (up, left) {
+                    (Some(wu), Some(wl)) => {
+                        if wu.nodes.len() > wl.nodes.len() {
+                            let id = wu.id;
+                            self.merge_wires(wu.id, wl.id);
+                            id
+                        } else {
+                            let id = wl.id;
+                            self.merge_wires(wl.id, wu.id);
+                            id
+                        }
+                    }
+                    _ => 0,
+                }
+            }
+        });
+        if wire == 0 {
+            return;
+        }
+
+        if node.up > 0 {
+            split_wire_dir(&mut self.nodes, at, true, node.up);
+        }
+        if node.left > 0 {
+            split_wire_dir(&mut self.nodes, at, false, node.left);
+        }
+        let node = self
+            .nodes
+            .get_or_create_mut(at.x() as isize, at.y() as isize);
+
+        node.wire = wire;
+        let wire = self.wires.get_mut(wire).unwrap();
+        wire.nodes.push(at);
+    }
+
+    fn place_wire_part(&mut self, part: WirePart) {
         let part = match self.optimize_part(part) {
             Some(value) => value,
             None => return,
@@ -419,7 +506,7 @@ impl Wires {
                         false => [i as i32, 0],
                     };
 
-                let node = match self.wire_nodes.get(pos.x() as isize, pos.y() as isize) {
+                let node = match self.nodes.get(pos.x() as isize, pos.y() as isize) {
                     None => continue,
                     Some(v) => v,
                 };
@@ -463,15 +550,14 @@ impl Wires {
             }
         };
 
-        split_wire_at(self, part.pos, new_wire);
-        split_wire_at(
-            self,
+        self.split_wire_at(part.pos, Some(new_wire));
+        self.split_wire_at(
             part.pos
                 + match part.vertical {
                     true => [0, part.length.get() as i32],
                     false => [part.length.get() as i32, 0],
                 },
-            new_wire,
+                Some(new_wire),
         );
 
         let mut dist = 0;
@@ -483,7 +569,7 @@ impl Wires {
                 };
 
             let node = self
-                .wire_nodes
+                .nodes
                 .get_or_create_mut(pos.x() as isize, pos.y() as isize);
 
             if i > 0 {
@@ -509,7 +595,7 @@ impl Wires {
         let mut part_len = part.length.get() as i32;
 
         let new_start = self
-            .wire_nodes
+            .nodes
             .get(part_pos.x() as isize, part_pos.y() as isize)
             .and_then(|n| {
                 if n.wire > 0 {
@@ -530,7 +616,7 @@ impl Wires {
         };
 
         let new_end_dist = self
-            .wire_nodes
+            .nodes
             .get(end_pos.x() as isize, end_pos.y() as isize)
             .and_then(|n| {
                 self.find_node_from_node(n, end_pos, part.vertical, false)
@@ -556,7 +642,7 @@ impl Wires {
     }
 
     fn wires_at(&self, pos: Vec2i) -> TileWires<'_> {
-        match self.wire_nodes.get(pos.x() as isize, pos.y() as isize) {
+        match self.nodes.get(pos.x() as isize, pos.y() as isize) {
             None => TileWires::None,
             Some(node) => self.wire_at_node(pos, node),
         }
@@ -576,7 +662,7 @@ impl Wires {
         let up = match node.up {
             0 => None,
             up => self
-                .wire_nodes
+                .nodes
                 .get(pos.x() as isize, (pos.y() - up as i32) as isize)
                 .and_then(|n| match n.wire {
                     0 => None,
@@ -586,7 +672,7 @@ impl Wires {
         let left = match node.left {
             0 => None,
             left => self
-                .wire_nodes
+                .nodes
                 .get((pos.x() - left as i32) as isize, pos.y() as isize)
                 .and_then(|n| match n.wire {
                     0 => None,
@@ -642,10 +728,7 @@ impl Wires {
         } = self.wires.remove(with).unwrap();
 
         for npos in nodes.iter() {
-            match self
-                .wire_nodes
-                .get_mut(npos.x() as isize, npos.y() as isize)
-            {
+            match self.nodes.get_mut(npos.x() as isize, npos.y() as isize) {
                 None => {}
                 Some(n) => n.wire = wire,
             }
@@ -656,7 +739,7 @@ impl Wires {
     }
 
     fn find_node<'a>(&'a self, pos: Vec2i, vertical: bool, forward: bool) -> Option<FoundNode> {
-        let node = self.wire_nodes.get(pos.x() as isize, pos.y() as isize)?;
+        let node = self.nodes.get(pos.x() as isize, pos.y() as isize)?;
         self.find_node_from_node(node, pos, vertical, forward)
     }
 
@@ -681,21 +764,22 @@ impl Wires {
                     false => pos + [i as i32, 0],
                 };
                 let target = self
-                    .wire_nodes
+                    .nodes
                     .get(target_pos.x() as isize, target_pos.y() as isize)?;
-                if target.wire > 0 {
-                    return Some(FoundNode {
-                        node: *target,
-                        pos: target_pos,
-                        distance: NonZeroU32::new(i).unwrap(),
-                    });
-                }
                 let target_pointer = match vertical {
                     true => target.up,
                     false => target.left,
                 };
                 if target_pointer != offset {
                     break;
+                }
+                if target.wire > 0 {
+                    return Some(FoundNode {
+                        node: *target,
+                        wire: target.wire,
+                        pos: target_pos,
+                        distance: NonZeroU32::new(i).unwrap(),
+                    });
                 }
             }
             None
@@ -708,13 +792,18 @@ impl Wires {
                     false => pos - [pointer as i32, 0],
                 };
                 let target = self
-                    .wire_nodes
+                    .nodes
                     .get(target_pos.x() as isize, target_pos.y() as isize)?;
-                Some(FoundNode {
-                    node: *target,
-                    pos: target_pos,
-                    distance: NonZeroU32::new(pointer).unwrap(),
-                })
+                if target.wire == 0 {
+                    None
+                } else {
+                    Some(FoundNode {
+                        node: *target,
+                        wire: target.wire,
+                        pos: target_pos,
+                        distance: NonZeroU32::new(pointer).unwrap(),
+                    })
+                }
             }
         }
     }
@@ -722,6 +811,7 @@ impl Wires {
 
 struct FoundNode {
     node: WireNode,
+    wire: usize,
     pos: Vec2i,
     distance: NonZeroU32,
 }

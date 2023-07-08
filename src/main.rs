@@ -4,7 +4,7 @@
 
 use std::{
     mem::size_of,
-    time::Instant,
+    time::Instant, ops::{Range, RangeInclusive},
 };
 
 use eframe::{
@@ -97,7 +97,14 @@ impl PaintContext<'_> {
         let screen = &self.screen;
 
         for cy in chunks_tl.y()..=chunks_br.y() {
-            for cx in chunks_tl.x()..=chunks_br.x() {
+
+            let rowrange = chunks.get_chunk_row_range(cy as isize);
+            let rowrange = Range {
+                start: rowrange.start as i32,
+                end: rowrange.end as i32,
+            };
+
+            for cx in (chunks_tl.x()..chunks_br.x() + 1).intersect(&rowrange) {
                 let chunk_coord: Vec2i = [cx, cy].into();
                 let chunk_tl = chunk_coord * 16;
                 let chunk =
@@ -301,7 +308,7 @@ time: {:.4} ms
                         bounds.tiles_br,
                         bounds.chunks_tl,
                         bounds.chunks_br,
-                        *self.wires.wire_parts_drawn.read().unwrap(),
+                        *self.wires.parts_drawn.read().unwrap(),
                         update_time.as_secs_f64() * 1000.0
                     ),
                     font_id,
@@ -521,4 +528,17 @@ fn format_size(size: usize) -> String {
     let ff = format!("{valf:.2}");
     let ff = ff.trim_end_matches('0').trim_end_matches('.');
     format!("{ff} {}", SIZE_LABELS[label])
+}
+
+trait Intersect {
+    fn intersect(&self, other: &Self) -> Self;
+}
+
+impl<T: Ord + Copy> Intersect for Range<T> {
+    fn intersect(&self, other: &Self) -> Self {
+        Self {
+            start: self.start.max(other.start),
+            end: self.end.min(other.end),
+        }
+    }
 }
