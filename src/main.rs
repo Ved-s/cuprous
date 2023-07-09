@@ -2,26 +2,27 @@
 #![feature(generic_const_exprs)]
 #![feature(int_roundings)]
 
-use std::{
-    mem::size_of,
-    time::Instant, ops::{Range, RangeInclusive},
-};
+use std::{mem::size_of, ops::Range, rc::Rc, time::Instant};
 
 use eframe::{
-    egui::{self, Context, Frame, Margin, Sense, TextStyle, Ui},
+    egui::{self, Context, Frame, Key, Margin, Sense, TextStyle, Ui},
     epaint::{Color32, Rounding, Stroke},
 };
 use emath::{pos2, vec2, Align2, Pos2, Rect};
-use vector::{Vec2i, Vector};
-
-use crate::vector::Vec2f;
-use containers::*;
-use wires::Wires;
 
 mod r#const;
-mod containers;
+
 mod vector;
+use vector::{Vec2f, Vec2i, Vector};
+
+mod containers;
+use crate::containers::*;
+
+mod tiles;
+use tiles::{CircuitPreview, Tiles};
+
 mod wires;
+use crate::wires::Wires;
 
 fn main() {
     eframe::run_native(
@@ -30,14 +31,6 @@ fn main() {
         Box::new(|_| Box::new(App::new())),
     )
     .unwrap();
-}
-
-#[derive(Default)]
-struct App {
-    last_win_pos: Option<Pos2>,
-
-    pub screen: PanAndZoom,
-    pub wires: Wires,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -56,48 +49,44 @@ struct TileDrawBounds {
 }
 
 pub struct PaintContext<'a> {
-    screen: PanAndZoom,
+    screen: Screen,
     paint: &'a egui::Painter,
     rect: Rect,
     bounds: TileDrawBounds,
-    ui: &'a mut Ui,
+    ui: Rc<&'a mut Ui>,
     egui_ctx: &'a Context,
 }
 
 impl PaintContext<'_> {
+    fn with_rect<'a>(&'a self, rect: Rect) -> PaintContext<'a> {
+        Self {
+            rect,
+            ui: self.ui.clone(),
+            ..*self
+        }
+    }
+
     fn draw_chunks<const CHUNK_SIZE: usize, T: Default, P>(
         &self,
         chunks: &Chunks2D<CHUNK_SIZE, T>,
-        rect: Rect,
-        paint: &egui::Painter,
-        bounds: TileDrawBounds,
         pass: &P,
         draw_tester: impl Fn(&T) -> bool,
-        drawer: impl Fn(
-            &T,
-            Vec2i,
-            Rect,
-            &P,
-            &egui::Painter,
-            &TileDrawBounds,
-            &ChunksLookaround<CHUNK_SIZE, T>,
-        ),
+        drawer: impl Fn(&T, Vec2i, &Self, &P, &ChunksLookaround<CHUNK_SIZE, T>),
     ) {
         let TileDrawBounds {
             tile_size: _,
-            chunk_size,
+            chunk_size: _,
             screen_tl: _,
             screen_br: _,
             tiles_tl,
             tiles_br,
             chunks_tl,
             chunks_br,
-        } = bounds;
+        } = self.bounds;
 
         let screen = &self.screen;
 
         for cy in chunks_tl.y()..=chunks_br.y() {
-
             let rowrange = chunks.get_chunk_row_range(cy as isize);
             let rowrange = Range {
                 start: rowrange.start as i32,
@@ -112,15 +101,6 @@ impl PaintContext<'_> {
                         Some(v) => v,
                         None => continue,
                     };
-
-                let pos = Vec2f::from(rect.left_top())
-                    + screen.world_to_screen(chunk_tl.convert_values(|v| v as f32));
-                let chunk_rect = Rect::from_min_size(pos.into(), chunk_size.into());
-                paint.rect_filled(
-                    chunk_rect,
-                    Rounding::none(),
-                    Color32::from_rgba_unmultiplied(100, 0, 100, 40),
-                );
 
                 let chunk_viewport_tl = tiles_tl - chunk_tl;
                 let chunk_viewport_br = tiles_br - chunk_tl;
@@ -138,14 +118,14 @@ impl PaintContext<'_> {
                         } else if i > chunk_viewport_br.x() {
                             break;
                         }
-                        
+
                         let tile = &chunk[i as usize][j as usize];
                         if !draw_tester(tile) {
                             continue;
                         }
-                        
+
                         let pos: Vec2i = chunk_tl + [i, j];
-                        let draw_pos = Vec2f::from(rect.left_top())
+                        let draw_pos = Vec2f::from(self.rect.left_top())
                             + screen.world_to_screen(pos.convert_values(|v| v as f32));
                         let rect =
                             Rect::from_min_size(draw_pos.into(), vec2(screen.scale, screen.scale));
@@ -155,7 +135,14 @@ impl PaintContext<'_> {
                             pos.convert_values(|v| v as isize),
                             [i as usize, j as usize].into(),
                         );
-                        drawer(tile, pos, rect, pass, paint, &bounds, &lookaround)
+
+                        let drawer_ctx = Self {
+                            rect,
+                            ui: self.ui.clone(),
+                            ..*self
+                        };
+
+                        drawer(tile, pos, &drawer_ctx, pass, &lookaround)
                     }
                 }
             }
@@ -194,14 +181,13 @@ impl PanAndZoom {
         }
 
         if zoom != 1.0 {
-            let pointer_screen = (ui
+            let pointer_screen = Vec2f::from(ui
                 .input(|i| i.pointer.hover_pos())
                 .unwrap_or_else(|| rect.center())
-                - rect.left_top())
-            .into();
-            let world_before = self.screen_to_world(pointer_screen);
+                - rect.left_top());
+            let world_before = self.pos + pointer_screen / self.scale;
             self.scale *= zoom;
-            let world_after = self.screen_to_world(pointer_screen);
+            let world_after = self.pos + pointer_screen / self.scale;
             self.pos -= world_after - world_before;
         }
     }
@@ -217,25 +203,59 @@ impl Default for PanAndZoom {
 }
 
 impl PanAndZoom {
-    fn new(pos: Vec2f, scale: f32) -> Self {
+    pub fn new(pos: Vec2f, scale: f32) -> Self {
         Self { pos, scale }
     }
 
-    fn screen_to_world(&self, v: Vec2f) -> Vec2f {
-        self.pos + v / self.scale
+    pub fn to_screen(&self, offset: Vec2f) -> Screen {
+        Screen {
+            offset,
+            pos: self.pos,
+            scale: self.scale,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Screen {
+    offset: Vec2f,
+    pos: Vec2f,
+    scale: f32,
+}
+
+impl Screen {
+    pub fn screen_to_world(&self, v: Vec2f) -> Vec2f {
+        self.pos + (v - self.offset) / self.scale
     }
 
-    fn world_to_screen(&self, v: Vec2f) -> Vec2f {
-        (v - self.pos) * self.scale
+    pub fn world_to_screen(&self, v: Vec2f) -> Vec2f {
+        (v - self.pos) * self.scale + self.offset
     }
 
-    fn screen_to_world_tile(&self, v: Vec2f) -> Vec2i {
-        (self.pos + v / self.scale).convert_values(|v| v.floor() as i32)
+    pub fn screen_to_world_tile(&self, v: Vec2f) -> Vec2i {
+        self.screen_to_world(v).convert_values(|v| v.floor() as i32)
     }
 
-    fn world_to_screen_tile(&self, v: Vec2i) -> Vec2f {
-        (v.convert_values(|v| v as f32) - self.pos) * self.scale
+    pub fn world_to_screen_tile(&self, v: Vec2i) -> Vec2f {
+        self.world_to_screen(v.convert_values(|v| v as f32))
     }
+}
+
+#[derive(Debug, Default)]
+enum SelectedItem {
+    #[default]
+    Wires,
+    Circuit(Box<dyn CircuitPreview>),
+}
+
+#[derive(Default)]
+struct App {
+    last_win_pos: Option<Pos2>,
+
+    pub pan_zoom: PanAndZoom,
+    pub wires: Wires,
+    pub tiles: Tiles,
+    pub selected: SelectedItem,
 }
 
 impl eframe::App for App {
@@ -246,31 +266,40 @@ impl eframe::App for App {
             if let Some(last_win_pos) = self.last_win_pos {
                 if win_pos != last_win_pos {
                     let diff: Vec2f = (win_pos - last_win_pos).into();
-                    self.screen.pos += diff / self.screen.scale;
+                    self.pan_zoom.pos += diff / self.pan_zoom.scale;
                 }
             }
         }
         self.last_win_pos = int_info.window_info.position;
+
+        if ctx.input(|input| input.key_pressed(Key::F1)) {
+            self.selected = match self.selected {
+                SelectedItem::Wires => {
+                    SelectedItem::Circuit(Box::new(tiles::TestCircuitPreview {}))
+                }
+                SelectedItem::Circuit(_) => SelectedItem::Wires,
+            }
+        }
 
         egui::CentralPanel::default()
             .frame(Frame::central_panel(ctx.style().as_ref()).inner_margin(Margin::same(0.0)))
             .show(ctx, |ui| {
                 let rect = ui.max_rect();
 
-                self.screen.update(ui, rect);
+                self.pan_zoom.update(ui, rect);
 
                 let paint = ui.painter_at(rect);
 
                 let font_id = TextStyle::Monospace.resolve(ui.style());
 
-                let mut grid_ds_cell_size = self.screen.scale;
+                let mut grid_ds_cell_size = self.pan_zoom.scale;
 
                 while grid_ds_cell_size < 6.0 {
                     grid_ds_cell_size *= 16.0;
                 }
 
                 App::draw_grid(
-                    self.screen.pos * self.screen.scale / grid_ds_cell_size,
+                    self.pan_zoom.pos * self.pan_zoom.scale / grid_ds_cell_size,
                     grid_ds_cell_size.into(),
                     16.into(),
                     rect,
@@ -281,15 +310,23 @@ impl eframe::App for App {
 
                 let bounds = self.calc_draw_bounds(rect);
                 let ctx = PaintContext {
-                    screen: self.screen,
+                    screen: self.pan_zoom.to_screen(rect.left_top().into()),
                     paint: &paint,
                     rect,
                     bounds,
-                    ui,
+                    ui: Rc::new(ui),
                     egui_ctx: ctx,
                 };
 
-                self.wires.update(&ctx);
+                self.wires
+                    .update(&ctx, matches!(self.selected, SelectedItem::Wires));
+                self.tiles.update(
+                    &ctx,
+                    match &self.selected {
+                        SelectedItem::Wires => None,
+                        SelectedItem::Circuit(p) => Some(&p),
+                    },
+                );
 
                 let update_time = Instant::now() - start_time;
 
@@ -301,15 +338,23 @@ impl eframe::App for App {
 Tile draw bounds: {} - {}
 Chunk draw bounds: {} - {}
 Wires drawn: {}
-time: {:.4} ms
+Time: {:.4} ms
+Sizes: 
+  wires:
+    nodes: {},
+    wires: {},
+Selected: {:?}
 "#,
-                        self.screen.pos,
+                        self.pan_zoom.pos,
                         bounds.tiles_tl,
                         bounds.tiles_br,
                         bounds.chunks_tl,
                         bounds.chunks_br,
                         *self.wires.parts_drawn.read().unwrap(),
-                        update_time.as_secs_f64() * 1000.0
+                        update_time.as_secs_f64() * 1000.0,
+                        format_size(self.wires.nodes.calc_size_outer()),
+                        format_size(self.wires.wires.calc_size_outer()),
+                        self.selected
                     ),
                     font_id,
                     Color32::WHITE,
@@ -321,8 +366,9 @@ time: {:.4} ms
 impl App {
     fn new() -> Self {
         Self {
-            screen: PanAndZoom::new(0.0.into(), 16.0),
+            pan_zoom: PanAndZoom::new(0.0.into(), 16.0),
             wires: Wires::new(),
+            tiles: Tiles::new(),
             ..Default::default()
         }
     }
@@ -406,14 +452,12 @@ impl App {
     }
 
     fn draw_cross(&mut self, bounds: Rect, paint: &egui::Painter) {
-        let mut cross_pos = self.screen.world_to_screen(0.0.into());
+        let mut cross_pos = self.pan_zoom.to_screen(bounds.left_top().into()).world_to_screen(0.0.into());
 
-        *cross_pos.x_mut() = cross_pos.x().clamp(0.0, bounds.width());
-        *cross_pos.y_mut() = cross_pos.y().clamp(0.0, bounds.height());
+        *cross_pos.x_mut() = cross_pos.x().clamp(bounds.left(), bounds.right());
+        *cross_pos.y_mut() = cross_pos.y().clamp(bounds.top(), bounds.bottom());
 
-        cross_pos += Vec2f::from(bounds.left_top());
-
-        let unit = Vec2f::single_value(self.screen.scale);
+        let unit = Vec2f::single_value(self.pan_zoom.scale);
 
         let cross_stroke = Stroke::new(2.0, Color32::WHITE);
 
@@ -434,7 +478,7 @@ impl App {
     }
 
     fn calc_draw_bounds(&self, rect: Rect) -> TileDrawBounds {
-        let screen = &self.screen;
+        let screen = &self.pan_zoom;
         let tile_size: Vec2f = screen.scale.into();
         let chunk_size: Vec2f = (screen.scale * 16.0).into();
 
@@ -465,6 +509,18 @@ where
     }
     fn calc_size_inner(&self) -> usize;
 }
+
+macro_rules! impl_empty_inner_size {
+    ($($t:ty),+) => {
+        $(impl SizeCalc for $t {
+            fn calc_size_inner(&self) -> usize {
+                0
+            }
+        })+
+    };
+}
+
+impl_empty_inner_size!(u8, i8, u16, i16, u32, i32, u64, i64, u128, i128, usize, isize, f32, f64);
 
 impl<T: SizeCalc> SizeCalc for &[T] {
     fn calc_size_inner(&self) -> usize {

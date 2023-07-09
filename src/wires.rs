@@ -36,6 +36,12 @@ impl Wire {
     }
 }
 
+impl SizeCalc for Wire {
+    fn calc_size_inner(&self) -> usize {
+        self.nodes.calc_size_inner()
+    }
+}
+
 pub struct WirePart {
     pub pos: Vec2i,
     pub length: NonZeroU32,
@@ -72,28 +78,29 @@ impl Wires {
         }
     }
 
-    pub fn update(&mut self, ctx: &PaintContext) {
+    pub fn update(&mut self, ctx: &PaintContext, selected: bool) {
         *self.parts_drawn.write().unwrap() = 0;
 
         ctx.draw_chunks(
             &self.nodes,
-            ctx.rect,
-            ctx.paint,
-            ctx.bounds,
-            &(&self, ctx),
+            &self,
             |node| node.wire > 0 || node.up > 0 || node.left > 0,
-            |node, pos, _, ctx, paint, bounds, lookaround| {
-                ctx.0
-                    .draw_wires(ctx.1, node, pos, lookaround, bounds, paint);
+            |node, pos, ctx, this, lookaround| {
+                this.draw_wires(ctx, node, pos, lookaround);
             },
         );
+
+        if !selected {
+            self.wire_drag_pos = None;
+            return;
+        }
 
         let mouse_tile_pos = ctx
             .egui_ctx
             .input(|input| input.pointer.interact_pos())
             .map(|p| {
                 ctx.screen
-                    .screen_to_world(Vec2f::from(p) - ctx.rect.left_top())
+                    .screen_to_world(Vec2f::from(p))
             });
 
         let mouse_tile_pos_i = mouse_tile_pos.map(|p| p.convert_values(|v| v.floor() as i32));
@@ -188,9 +195,7 @@ impl Wires {
         ctx: &PaintContext<'_>,
         node: &WireNode,
         pos: Vector<2, i32>,
-        lookaround: &ChunksLookaround<'_, 16, WireNode>,
-        bounds: &TileDrawBounds,
-        paint: &egui::Painter,
+        lookaround: &ChunksLookaround<'_, 16, WireNode>
     ) {
         fn draw_wire(
             dist: u32,
@@ -200,7 +205,6 @@ impl Wires {
             this: &Wires,
             pos: Vec2i,
             ctx: &PaintContext,
-            bounds: &TileDrawBounds,
             color: Color32,
         ) {
             if dist == 0 && wire == 0 {
@@ -208,8 +212,8 @@ impl Wires {
             }
 
             let edge = match vertical {
-                true => pos.y() == bounds.tiles_br.y(),
-                false => pos.x() == bounds.tiles_br.x(),
+                true =>  pos.y() == ctx.bounds.tiles_br.y(),
+                false => pos.x() == ctx.bounds.tiles_br.x(),
             };
 
             if (wire == 0 || dist == 0) && !edge {
@@ -266,7 +270,6 @@ impl Wires {
             self,
             pos,
             ctx,
-            bounds,
             wire_color_h,
         );
         draw_wire(
@@ -277,7 +280,6 @@ impl Wires {
             self,
             pos,
             ctx,
-            bounds,
             wire_color_v,
         );
         if node.wire > 0 {
@@ -312,7 +314,7 @@ impl Wires {
             let pos = ctx.screen.world_to_screen_tile(pos);
 
             let rect = Rect::from_min_size(pos.into(), vec2(ctx.screen.scale, ctx.screen.scale));
-            paint.rect_filled(
+            ctx.paint.rect_filled(
                 rect,
                 Rounding::none(),
                 Color32::from_rgba_unmultiplied(255, 0, 0, 100),

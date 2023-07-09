@@ -2,7 +2,7 @@
 
 use std::{ops::{Add, Mul, Div}, fmt::Display, f32::consts::TAU};
 
-use crate::r#const::*;
+use crate::{r#const::*, SizeCalc};
 
 pub trait VectorValue: Sized + Copy + Default {}
 impl<T> VectorValue for T where T: Sized + Copy + Default{}
@@ -123,6 +123,12 @@ impl_vec_component!(w, 3);
 impl<const SIZE: usize, T: VectorValue> Default for Vector<SIZE, T> {
     fn default() -> Self {
         Self([Default::default(); SIZE])
+    }
+}
+
+impl<const SIZE: usize, T: VectorValue + SizeCalc> SizeCalc for Vector<SIZE, T> {
+    fn calc_size_inner(&self) -> usize {
+        (0..SIZE).map(|i| self.0[i].calc_size_inner() ).sum()
     }
 }
 
@@ -260,5 +266,33 @@ impl From<emath::Pos2> for Vec2f {
 impl From<emath::Vec2> for Vec2f {
     fn from(value: emath::Vec2) -> Self {
         Self([value.x, value.y])
+    }
+}
+
+pub trait IsZero {
+    fn is_zero(&self) -> bool;
+}
+
+macro_rules! impl_number_is_zero {
+    ($zero:literal, $($t:ty),+) => {
+        $(impl IsZero for $t {
+            fn is_zero(&self) -> bool {
+                *self == $zero
+            }
+        })+
+    };
+}
+
+impl_number_is_zero!(0, u8, i8, u16, i16, u32, i32, u128, i128, usize, isize);
+impl_number_is_zero!(0.0, f32, f64);
+
+impl<const SIZE: usize, T: VectorValue + IsZero> IsZero for Vector<SIZE, T> {
+    fn is_zero(&self) -> bool {
+        for i in 0..SIZE {
+            if !self.0[i].is_zero() {
+                return false;
+            }
+        }
+        true
     }
 }

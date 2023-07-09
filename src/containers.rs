@@ -2,10 +2,16 @@ use std::{mem::MaybeUninit, ops::Range};
 
 use crate::{vector::Vector, SizeCalc};
 
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub struct FixedVec<T> {
     vec: Vec<Option<T>>,
     first_free: Option<usize>,
+}
+
+impl<T: Default> Default for FixedVec<T> {
+    fn default() -> Self {
+        Self { vec: vec![], first_free: None }
+    }
 }
 
 pub struct VecSetResult<'a, T> {
@@ -98,6 +104,12 @@ impl<T> FixedVec<T> {
 impl<T> From<Vec<T>> for FixedVec<T> {
     fn from(value: Vec<T>) -> Self {
         Self::new(value)
+    }
+}
+
+impl<T: SizeCalc> SizeCalc for FixedVec<T> {
+    fn calc_size_inner(&self) -> usize {
+        self.vec.calc_size_inner()
     }
 }
 
