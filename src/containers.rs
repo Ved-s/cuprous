@@ -49,7 +49,16 @@ impl<T> FixedVec<T> {
             }
         }
 
-        item.take()
+        let value = item.take();
+
+        if pos == self.vec.len() - 1 {
+            self.vec.remove(pos);
+            while self.vec.len() > 0 && self.vec[self.vec.len() - 1].is_none() {
+                self.vec.remove(self.vec.len() - 1);
+            }
+        }
+
+        value
     }
 
     pub fn exists(&self, pos: usize) -> bool {
@@ -353,5 +362,23 @@ impl<const CHUNK_SIZE: usize, T: Default> Chunks2D<CHUNK_SIZE, T> {
 impl<const CHUNK_SIZE: usize, T: SizeCalc + Default> SizeCalc for Chunks2D<CHUNK_SIZE, T> {
     fn calc_size_inner(&self) -> usize {
         self.quarters.calc_size_inner()
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::FixedVec;
+
+    #[test]
+    fn fixed_vec_remove_shrink() {
+        let mut fv = FixedVec::new(vec![]);
+
+        fv.set(35, 0);
+        fv.set(15, 1);
+        fv.set(100, 4);
+
+        assert_eq!(fv.vec.len(), 5);
+        fv.remove(4);
+        assert_eq!(fv.vec.len(), 2);
     }
 }

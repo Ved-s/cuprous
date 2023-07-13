@@ -3,12 +3,12 @@
 #![feature(int_roundings)]
 
 use std::{
-    collections::HashMap, default, hash::Hash, mem::size_of, ops::Range, rc::Rc, time::Instant,
+    mem::size_of, ops::Range, rc::Rc, time::Instant,
 };
 
 use eframe::{
     egui::{self, Context, Frame, Key, Margin, Sense, TextStyle, Ui},
-    epaint::{Color32, Rounding, Stroke},
+    epaint::{Color32, Stroke},
 };
 use emath::{pos2, vec2, Align2, Pos2, Rect};
 
@@ -21,7 +21,7 @@ mod containers;
 use crate::containers::*;
 
 mod circuits;
-use circuits::{CircuitPreview, Circuits, TestCircuitPreview};
+use circuits::{CircuitPreview, Circuits};
 
 mod wires;
 use crate::wires::Wires;
@@ -35,6 +35,7 @@ fn main() {
     .unwrap();
 }
 
+#[allow(unused)]
 #[derive(Debug, Clone, Copy)]
 struct TileDrawBounds {
     pub tile_size: Vec2f,
@@ -226,6 +227,7 @@ struct Screen {
     scale: f32,
 }
 
+#[allow(unused)]
 impl Screen {
     pub fn screen_to_world(&self, v: Vec2f) -> Vec2f {
         self.pos + (v - self.offset) / self.scale
@@ -614,6 +616,7 @@ impl<T: Integer> Default for OptionalInt<T> {
     }
 }
 
+#[allow(unused)]
 impl<T: Integer> OptionalInt<T> {
     const NONE_VALUE: T = if T::SIGNED { T::MIN } else { T::MAX };
 

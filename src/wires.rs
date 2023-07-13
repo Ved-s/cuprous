@@ -1,15 +1,13 @@
 use std::{
-    array,
     collections::{hash_map::DefaultHasher, HashMap, HashSet},
     f32::consts::TAU,
     hash::Hasher,
     num::NonZeroU32,
-    ops::ControlFlow,
     sync::{Arc, RwLock},
 };
 
 use eframe::{
-    egui::{self, Key, Sense},
+    egui::{self, Sense},
     epaint::{Color32, Rounding},
 };
 use emath::{vec2, Rect};
@@ -18,7 +16,7 @@ use crate::{
     circuits::{CircuitPin, Circuits},
     containers::{Chunks2D, ChunksLookaround, FixedVec},
     vector::{Vec2f, Vec2i, Vector},
-    OptionalInt, PaintContext, SizeCalc, TileDrawBounds,
+    OptionalInt, PaintContext, SizeCalc,
 };
 
 #[derive(Debug, Default)]
@@ -397,7 +395,12 @@ impl Wires {
     }
 
     // wire param: if Some(w) will use wire w, if None, will try to figure ot which wire to use (with merging wires)
-    pub fn create_intersection_at_node(&mut self, pos: Vec2i, node: WireNode, wire: Option<usize>) -> Option<&Wire> {
+    pub fn create_intersection_at_node(
+        &mut self,
+        pos: Vec2i,
+        node: WireNode,
+        wire: Option<usize>,
+    ) -> Option<&Wire> {
         fn fix_pointers(wires: &mut Chunks2D<16, WireNode>, pos: Vec2i, vertical: bool, dist: u32) {
             for int_dist in 1.. {
                 let node = match vertical {
@@ -480,6 +483,7 @@ impl Wires {
         Some(wire)
     }
 
+    #[allow(unused)]
     fn remove_intersection(&mut self, pos: Vec2i, split: bool) {
         let node = self.nodes.get(pos.x() as isize, pos.y() as isize);
         let node = match node {
@@ -697,7 +701,9 @@ impl Wires {
             } else {
                 dist += 1;
             }
-            if (i == 0 || i == part.length.get() || crossed_pin) && node.wire.is_none_or(|w| w != new_wire) {
+            if (i == 0 || i == part.length.get() || crossed_pin)
+                && node.wire.is_none_or(|w| w != new_wire)
+            {
                 node.wire.set(Some(new_wire));
                 self.wires.get_mut(new_wire).unwrap().nodes.insert(
                     pos,
@@ -943,7 +949,12 @@ impl Wires {
                     continue;
                 }
 
-                group.insert(pos, WirePoint { pin: connections.get(&pos).and_then(|c| Some(c.clone())) });
+                group.insert(
+                    pos,
+                    WirePoint {
+                        pin: connections.get(&pos).and_then(|c| Some(c.clone())),
+                    },
+                );
 
                 let (ints, intc) = self.node_neighboring_intersections(pos, Some(id));
                 for inti in 0..intc {
@@ -1017,6 +1028,7 @@ impl Wires {
     }
 }
 
+#[allow(unused)]
 struct FoundNode {
     node: WireNode,
     wire: usize,
