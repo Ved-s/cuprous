@@ -16,7 +16,7 @@ use emath::{vec2, Rect};
 
 use crate::{
     containers::{Chunks2D, ChunksLookaround, FixedVec},
-    tiles::{CircuitPin, Tiles},
+    circuits::{CircuitPin, Circuits},
     vector::{Vec2f, Vec2i, Vector},
     OptionalInt, PaintContext, SizeCalc, TileDrawBounds,
 };
@@ -47,7 +47,6 @@ impl SizeCalc for WireNode {
     }
 }
 
-#[derive(Default)]
 pub struct Wires {
     pub wire_drag_pos: Option<Vec2i>,
     pub nodes: Chunks2D<16, WireNode>,
@@ -59,11 +58,15 @@ pub struct Wires {
 impl Wires {
     pub fn new() -> Self {
         Self {
-            ..Default::default()
+            wire_drag_pos: None,
+            nodes: Default::default(),
+            wires: Default::default(),
+
+            parts_drawn: Default::default(),
         }
     }
 
-    pub fn update(&mut self, tiles: &mut Tiles, ctx: &PaintContext, selected: bool) {
+    pub fn update(&mut self, tiles: &mut Circuits, ctx: &PaintContext, selected: bool) {
         *self.parts_drawn.write().unwrap() = 0;
 
         ctx.draw_chunks(
@@ -548,7 +551,7 @@ impl Wires {
         }
     }
 
-    fn place_wire_part(&mut self, tiles: &Tiles, part: WirePart) {
+    fn place_wire_part(&mut self, tiles: &Circuits, part: WirePart) {
         let part = match self.optimize_part(part) {
             Some(value) => value,
             None => return,
@@ -659,7 +662,6 @@ impl Wires {
 
         let mut dist = 0;
 
-        // TODO: Make sure wire nodes are correctly added
         for i in 0..=part.length.get() {
             let pos = part.pos
                 + match part.vertical {
@@ -677,6 +679,15 @@ impl Wires {
                     false => node.left = dist,
                 }
             }
+
+            let crossed_pin = match pins_crossed.get(&pos) {
+                None => false,
+                Some(pin) => {
+                    pin.write().unwrap().wire = Some(new_wire);
+                    true
+                },
+            };
+
             if node.wire.is_some() {
                 dist = 1
             } else {

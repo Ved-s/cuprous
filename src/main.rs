@@ -18,8 +18,8 @@ use vector::{Vec2f, Vec2i, Vector};
 mod containers;
 use crate::containers::*;
 
-mod tiles;
-use tiles::{CircuitPreview, Tiles, TestCircuitPreview};
+mod circuits;
+use circuits::{CircuitPreview, Circuits, TestCircuitPreview};
 
 mod wires;
 use crate::wires::Wires;
@@ -241,20 +241,18 @@ impl Screen {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 enum SelectedItem {
-    #[default]
     Wires,
     Circuit(Box<dyn CircuitPreview>),
 }
 
-#[derive(Default)]
 struct App {
     last_win_pos: Option<Pos2>,
 
     pub pan_zoom: PanAndZoom,
     pub wires: Wires,
-    pub tiles: Tiles,
+    pub tiles: Circuits,
     pub selected: SelectedItem,
 }
 
@@ -275,7 +273,7 @@ impl eframe::App for App {
         if ctx.input(|input| input.key_pressed(Key::F1)) {
             self.selected = match self.selected {
                 SelectedItem::Wires => {
-                    SelectedItem::Circuit(Box::new(tiles::TestCircuitPreview {a: 10, b: 20}))
+                    SelectedItem::Circuit(Box::new(circuits::TestCircuitPreview {a: 10, b: 20}))
                 }
                 SelectedItem::Circuit(_) => SelectedItem::Wires,
             }
@@ -365,8 +363,9 @@ impl App {
         Self {
             pan_zoom: PanAndZoom::new(0.0.into(), 16.0),
             wires: Wires::new(),
-            tiles: Tiles::new(),
-            ..Default::default()
+            tiles: Circuits::new(),
+            last_win_pos: None,
+            selected: SelectedItem::Wires
         }
     }
 

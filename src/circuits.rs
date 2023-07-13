@@ -4,12 +4,12 @@ use eframe::{
     egui::Sense,
     epaint::{Color32, Rounding},
 };
-use emath::Rect;
+use emath::{Rect, Align2};
 
 use crate::{
     containers::{Chunks2D, FixedVec},
     vector::{IsZero, Vec2f, Vec2u, Vector, Vec2i},
-    PaintContext,
+    PaintContext, OptionalInt,
 };
 
 pub struct CircuitInfo {
@@ -34,15 +34,17 @@ impl CircuitPin {
 
 pub struct Circuit {
     pub id: usize,
+    pub pos: Vec2i,
     pub info: RwLock<CircuitInfo>,
     pub imp: Box<dyn CircuitImpl>,
 }
 
 impl Circuit {
-    fn create(id: usize, preview: &dyn CircuitPreview) -> Self {
+    fn create(id: usize, pos: Vec2i, preview: &dyn CircuitPreview) -> Self {
         let imp = preview.create_impl();
         Self {
             id,
+            pos,
             info: RwLock::new(CircuitInfo {
                 size: preview.size(),
                 pins: imp.create_pins()
@@ -50,31 +52,10 @@ impl Circuit {
             imp
         }
     }
-
-    fn dummy() -> Self {
-        pub struct DummyCircuitImpl {}
-
-        impl CircuitImpl for DummyCircuitImpl {
-            fn draw(&self, _: &PaintContext) {}
-
-            fn create_pins(&self) -> Box<[Arc<RwLock<CircuitPin>>]> {
-                Box::new([])
-            }
-        }
-
-        Self {
-            id: 0,
-            info: RwLock::new(CircuitInfo {
-                size: 0.into(),
-                pins: Box::new([])
-            }),
-            imp: Box::new(DummyCircuitImpl {})
-        }
-    }
 }
 
 pub trait CircuitImpl {
-    fn draw(&self, ctx: &PaintContext);
+    fn draw(&self, circuit: &Circuit, ctx: &PaintContext);
 
     fn create_pins(&self) -> Box<[Arc<RwLock<CircuitPin>>]>;
 }
@@ -86,22 +67,22 @@ pub trait CircuitPreview: std::fmt::Debug {
 }
 
 #[derive(Default)]
-pub struct TileNode {
+pub struct CircuitNode {
     origin_dist: Vector<2, u32>,
-    circuit: usize,
+    circuit: OptionalInt<usize>,
 }
 
-pub struct Tiles {
-    pub nodes: Chunks2D<16, TileNode>,
+pub struct Circuits {
+    pub nodes: Chunks2D<16, CircuitNode>,
     pub cirtuits: FixedVec<Circuit>,
 }
 
-impl Tiles {
+impl Circuits {
 
     pub fn new() -> Self {
         Self {
             nodes: Default::default(),
-            cirtuits: vec![Circuit::dummy()].into(),
+            cirtuits: vec![].into(),
         }
     }
 
@@ -109,7 +90,7 @@ impl Tiles {
         ctx.draw_chunks(
             &self.nodes,
             self,
-            |n| n.circuit > 0,
+            |n| n.circuit.is_some(),
             |node, pos, ctx, this, _| {
                 if !node.origin_dist.is_zero()
                     && pos.x() != ctx.bounds.tiles_tl.x()
@@ -117,8 +98,12 @@ impl Tiles {
                 {
                     return;
                 }
+                let circ_id = match node.circuit.get() {
+                    None => return,
+                    Some(c) => c,
+                };
 
-                let circuit = match this.cirtuits.get(node.circuit) {
+                let circuit = match this.cirtuits.get(circ_id) {
                     None => return,
                     Some(c) => c,
                 };
@@ -130,7 +115,7 @@ impl Tiles {
                 let screen_size = circ_info.size.convert_values(|v| v as f32) * ctx.screen.scale;
                 let rect = Rect::from_min_size(screen_pos.into(), screen_size.into());
                 let circ_ctx = ctx.with_rect(rect);
-                circuit.imp.draw(&circ_ctx);
+                circuit.imp.draw(&circuit, &circ_ctx);
             },
         );
 
@@ -169,7 +154,7 @@ impl Tiles {
                     if self
                         .nodes
                         .get(x as isize, y as isize)
-                        .is_some_and(|n| n.circuit > 0)
+                        .is_some_and(|n| n.circuit.is_some())
                     {
                         return;
                     }
@@ -177,7 +162,7 @@ impl Tiles {
             }
 
             let cid = self.cirtuits.first_free_pos();
-            let circ = Circuit::create(cid, preview.as_ref());
+            let circ = Circuit::create(cid, place_pos, preview.as_ref());
             self.cirtuits.set(circ, cid);
 
             for j in 0..size.y() {
@@ -186,7 +171,7 @@ impl Tiles {
                     let y = place_pos.y() + j as i32;
                     let node = self.nodes.get_or_create_mut(x as isize, y as isize);
 
-                    node.circuit = cid;
+                    node.circuit.set(Some(cid));
                     node.origin_dist = [i, j].into();
                 }
             }
@@ -195,17 +180,15 @@ impl Tiles {
 
     pub fn pin_at(&self, pos: Vec2i) -> Option<Arc<RwLock<CircuitPin>>> {
         let circ = self.nodes.get(pos.x() as isize, pos.y() as isize)?;
-        if circ.circuit == 0 {
-            return None;
-        }
         let pos = circ.origin_dist;
-        let circ = self.cirtuits.get(circ.circuit)?;
+        let circ = circ.circuit.get()?;
+        let circ = self.cirtuits.get(circ)?;
 
         circ.info.read().unwrap().pins.iter().find(|p| p.read().unwrap().pos == pos).map(|arc| arc.clone())
     }
 }
 
-impl Default for Tiles {
+impl Default for Circuits {
     fn default() -> Self {
         Self {
             nodes: Default::default(),
@@ -227,9 +210,16 @@ impl TestCircuitImpl {
 }
 
 impl CircuitImpl for TestCircuitImpl {
-    fn draw(&self, ctx: &PaintContext) {
+    fn draw(&self, circ: &Circuit, ctx: &PaintContext) {
+        let font_id = eframe::egui::TextStyle::Monospace.resolve(ctx.ui.style());
         ctx.paint
             .rect_filled(ctx.rect, Rounding::none(), Color32::GREEN);
+
+        let wire = self.pin.read().unwrap().wire.map(|v| v as i32).unwrap_or(-1);
+
+        let text = format!("{}, {}", circ.id, wire);
+
+        ctx.paint.text(ctx.rect.center(), Align2::CENTER_CENTER, text, font_id, Color32::WHITE);
     }
 
     fn create_pins(&self) -> Box<[Arc<RwLock<CircuitPin>>]> {
