@@ -1,24 +1,88 @@
-use std::{ops::ControlFlow, sync::RwLock};
+use std::sync::{RwLock, Arc};
 
-use eframe::{epaint::{Color32, Rounding}, egui::Sense};
+use eframe::{
+    egui::Sense,
+    epaint::{Color32, Rounding},
+};
 use emath::Rect;
 
 use crate::{
     containers::{Chunks2D, FixedVec},
-    vector::{Vec2f, Vec2u, Vector, IsZero, Vec2i},
+    vector::{IsZero, Vec2f, Vec2u, Vector, Vec2i},
     PaintContext,
 };
 
-pub trait Circuit {
-    fn id(&self) -> usize;
+pub struct CircuitInfo {
+    pub size: Vec2u,
+    pub pins: Box<[Arc<RwLock<CircuitPin>>]> 
+}
+
+#[derive(Debug)]
+pub struct CircuitPin {
+    pub pos: Vec2u,
+    pub wire: Option<usize>
+}
+
+impl CircuitPin {
+    fn new(pos: Vec2u) -> Self {
+        Self {
+            pos,
+            wire: None
+        }
+    }
+}
+
+pub struct Circuit {
+    pub id: usize,
+    pub info: RwLock<CircuitInfo>,
+    pub imp: Box<dyn CircuitImpl>,
+}
+
+impl Circuit {
+    fn create(id: usize, preview: &dyn CircuitPreview) -> Self {
+        let imp = preview.create_impl();
+        Self {
+            id,
+            info: RwLock::new(CircuitInfo {
+                size: preview.size(),
+                pins: imp.create_pins()
+            }),
+            imp
+        }
+    }
+
+    fn dummy() -> Self {
+        pub struct DummyCircuitImpl {}
+
+        impl CircuitImpl for DummyCircuitImpl {
+            fn draw(&self, _: &PaintContext) {}
+
+            fn create_pins(&self) -> Box<[Arc<RwLock<CircuitPin>>]> {
+                Box::new([])
+            }
+        }
+
+        Self {
+            id: 0,
+            info: RwLock::new(CircuitInfo {
+                size: 0.into(),
+                pins: Box::new([])
+            }),
+            imp: Box::new(DummyCircuitImpl {})
+        }
+    }
+}
+
+pub trait CircuitImpl {
     fn draw(&self, ctx: &PaintContext);
-    fn size(&self) -> Vec2i;
+
+    fn create_pins(&self) -> Box<[Arc<RwLock<CircuitPin>>]>;
 }
 
 pub trait CircuitPreview: std::fmt::Debug {
     fn draw_preview(&self, ctx: &PaintContext);
     fn size(&self) -> Vec2u;
-    fn create(&self, id: usize) -> Box<dyn Circuit>;
+    fn create_impl(&self) -> Box<dyn CircuitImpl>;
 }
 
 #[derive(Default)]
@@ -29,30 +93,46 @@ pub struct TileNode {
 
 pub struct Tiles {
     pub nodes: Chunks2D<16, TileNode>,
-    pub cirtuits: FixedVec<Box<dyn Circuit>>,
+    pub cirtuits: FixedVec<Circuit>,
 }
 
 impl Tiles {
+
+    pub fn new() -> Self {
+        Self {
+            nodes: Default::default(),
+            cirtuits: vec![Circuit::dummy()].into(),
+        }
+    }
+
     pub fn update(&mut self, ctx: &PaintContext, selected: Option<&Box<dyn CircuitPreview>>) {
+        ctx.draw_chunks(
+            &self.nodes,
+            self,
+            |n| n.circuit > 0,
+            |node, pos, ctx, this, _| {
+                if !node.origin_dist.is_zero()
+                    && pos.x() != ctx.bounds.tiles_tl.x()
+                    && pos.y() != ctx.bounds.tiles_tl.y()
+                {
+                    return;
+                }
 
-        ctx.draw_chunks(&self.nodes, self, |n| n.circuit > 0, |node, pos, ctx, this, _| {
+                let circuit = match this.cirtuits.get(node.circuit) {
+                    None => return,
+                    Some(c) => c,
+                };
 
-            if !node.origin_dist.is_zero() && pos.x() != ctx.bounds.tiles_tl.x() && pos.y() != ctx.bounds.tiles_tl.y() {
-                return;
-            } 
+                let circ_info = circuit.info.read().unwrap();
 
-            let circuit = match this.cirtuits.get(node.circuit) {
-                None => return,
-                Some(c) => c,
-            };
-
-            let pos = pos - node.origin_dist.convert_values(|v| v as i32);
-            let screen_pos = ctx.screen.world_to_screen_tile(pos);
-            let screen_size = circuit.size().convert_values(|v| v as f32) * ctx.screen.scale;
-            let rect = Rect::from_min_size(screen_pos.into(), screen_size.into());
-            let circ_ctx = ctx.with_rect(rect);
-            circuit.draw(&circ_ctx);
-        });
+                let pos = pos - node.origin_dist.convert_values(|v| v as i32);
+                let screen_pos = ctx.screen.world_to_screen_tile(pos);
+                let screen_size = circ_info.size.convert_values(|v| v as f32) * ctx.screen.scale;
+                let rect = Rect::from_min_size(screen_pos.into(), screen_size.into());
+                let circ_ctx = ctx.with_rect(rect);
+                circuit.imp.draw(&circ_ctx);
+            },
+        );
 
         match selected {
             None => return,
@@ -64,10 +144,7 @@ impl Tiles {
         let mouse_tile_pos = ctx
             .egui_ctx
             .input(|input| input.pointer.interact_pos())
-            .map(|p| {
-                ctx.screen
-                    .screen_to_world(Vec2f::from(p))
-            });
+            .map(|p| ctx.screen.screen_to_world(Vec2f::from(p)));
         let mouse_tile_pos_i = match mouse_tile_pos {
             None => return,
             Some(v) => v.convert_values(|v| v.floor() as i32),
@@ -89,14 +166,18 @@ impl Tiles {
                 for i in 0..size.x() {
                     let x = place_pos.x() + i as i32;
                     let y = place_pos.y() + j as i32;
-                    if self.nodes.get(x as isize, y as isize).is_some_and(|n| n.circuit > 0) {
+                    if self
+                        .nodes
+                        .get(x as isize, y as isize)
+                        .is_some_and(|n| n.circuit > 0)
+                    {
                         return;
                     }
                 }
             }
 
             let cid = self.cirtuits.first_free_pos();
-            let circ = preview.create(cid);
+            let circ = Circuit::create(cid, preview.as_ref());
             self.cirtuits.set(circ, cid);
 
             for j in 0..size.y() {
@@ -112,11 +193,15 @@ impl Tiles {
         }
     }
 
-    pub fn new() -> Self {
-        Self {
-            nodes: Default::default(),
-            cirtuits: vec![Box::new(DummyCircuit {}) as Box<dyn Circuit>].into(),
+    pub fn pin_at(&self, pos: Vec2i) -> Option<Arc<RwLock<CircuitPin>>> {
+        let circ = self.nodes.get(pos.x() as isize, pos.y() as isize)?;
+        if circ.circuit == 0 {
+            return None;
         }
+        let pos = circ.origin_dist;
+        let circ = self.cirtuits.get(circ.circuit)?;
+
+        circ.info.read().unwrap().pins.iter().find(|p| p.read().unwrap().pos == pos).map(|arc| arc.clone())
     }
 }
 
@@ -129,44 +214,34 @@ impl Default for Tiles {
     }
 }
 
-pub struct DummyCircuit {}
+pub struct TestCircuitImpl {
+    pin: Arc<RwLock<CircuitPin>>
+}
 
-impl Circuit for DummyCircuit {
-    fn draw(&self, _: &PaintContext) {}
-
-    fn id(&self) -> usize {
-        0
-    }
-
-    fn size(&self) -> Vec2i {
-        0.into()
+impl TestCircuitImpl {
+    fn new() -> Self {
+        Self {
+            pin: Arc::new(RwLock::new(CircuitPin::new(0.into())))
+        }
     }
 }
 
-pub struct TestCircuit {
-    id: usize
-}
-
-impl Circuit for TestCircuit {
+impl CircuitImpl for TestCircuitImpl {
     fn draw(&self, ctx: &PaintContext) {
         ctx.paint
             .rect_filled(ctx.rect, Rounding::none(), Color32::GREEN);
     }
 
-    fn id(&self) -> usize {
-        self.id
-    }
-
-    fn size(&self) -> Vec2i {
-        [2, 2].into()
+    fn create_pins(&self) -> Box<[Arc<RwLock<CircuitPin>>]> {
+        vec![self.pin.clone()].into_boxed_slice()
     }
 }
-
 
 #[derive(Debug)]
 pub struct TestCircuitPreview {
+    pub a: usize,
+    pub b: usize
 }
-
 
 impl CircuitPreview for TestCircuitPreview {
     fn draw_preview(&self, ctx: &PaintContext) {
@@ -178,7 +253,7 @@ impl CircuitPreview for TestCircuitPreview {
         [2, 2].into()
     }
 
-    fn create(&self, id: usize) -> Box<dyn Circuit> {
-        Box::new(TestCircuit { id })
+    fn create_impl(&self) -> Box<dyn CircuitImpl> {
+        Box::new(TestCircuitImpl::new())
     }
 }

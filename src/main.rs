@@ -2,7 +2,7 @@
 #![feature(generic_const_exprs)]
 #![feature(int_roundings)]
 
-use std::{mem::size_of, ops::Range, rc::Rc, time::Instant};
+use std::{mem::size_of, ops::Range, rc::Rc, time::Instant, any::Any};
 
 use eframe::{
     egui::{self, Context, Frame, Key, Margin, Sense, TextStyle, Ui},
@@ -19,7 +19,7 @@ mod containers;
 use crate::containers::*;
 
 mod tiles;
-use tiles::{CircuitPreview, Tiles};
+use tiles::{CircuitPreview, Tiles, TestCircuitPreview};
 
 mod wires;
 use crate::wires::Wires;
@@ -275,7 +275,7 @@ impl eframe::App for App {
         if ctx.input(|input| input.key_pressed(Key::F1)) {
             self.selected = match self.selected {
                 SelectedItem::Wires => {
-                    SelectedItem::Circuit(Box::new(tiles::TestCircuitPreview {}))
+                    SelectedItem::Circuit(Box::new(tiles::TestCircuitPreview {a: 10, b: 20}))
                 }
                 SelectedItem::Circuit(_) => SelectedItem::Wires,
             }
@@ -319,7 +319,7 @@ impl eframe::App for App {
                 };
 
                 self.wires
-                    .update(&ctx, matches!(self.selected, SelectedItem::Wires));
+                    .update(&mut self.tiles, &ctx,  matches!(self.selected, SelectedItem::Wires));
                 self.tiles.update(
                     &ctx,
                     match &self.selected {
@@ -340,9 +340,7 @@ Chunk draw bounds: {} - {}
 Wires drawn: {}
 Time: {:.4} ms
 Sizes: 
-  wires:
-    nodes: {},
-    wires: {},
+  wires.nodes: {},
 Selected: {:?}
 "#,
                         self.pan_zoom.pos,
@@ -353,7 +351,6 @@ Selected: {:?}
                         *self.wires.parts_drawn.read().unwrap(),
                         update_time.as_secs_f64() * 1000.0,
                         format_size(self.wires.nodes.calc_size_outer()),
-                        format_size(self.wires.wires.calc_size_outer()),
                         self.selected
                     ),
                     font_id,
@@ -598,3 +595,74 @@ impl<T: Ord + Copy> Intersect for Range<T> {
         }
     }
 }
+
+#[derive(Clone, Copy, Debug)]
+struct OptionalInt<T: Integer>(T);
+
+impl<T: Integer> Default for OptionalInt<T> {
+    fn default() -> Self {
+        Self(Self::NONE_VALUE)
+    }
+}
+
+impl<T: Integer> OptionalInt<T> {
+    const NONE_VALUE: T = if T::SIGNED { T::MIN } else { T::MAX };
+
+    fn is_none(&self) -> bool {
+        self.0 == Self::NONE_VALUE
+    }
+
+    fn is_some(&self) -> bool {
+        self.0 != Self::NONE_VALUE
+    }
+
+    fn is_some_and(&self, f: impl FnOnce(T) -> bool) -> bool {
+        self.0 != Self::NONE_VALUE && f(self.0)
+    }
+
+    fn is_none_or(&self, f: impl FnOnce(T) -> bool) -> bool {
+        self.0 == Self::NONE_VALUE || f(self.0)
+    }
+
+
+    fn get(&self) -> Option<T> {
+        if self.0 == Self::NONE_VALUE {
+            None
+        } else {
+            Some(self.0)
+        }
+    }
+
+    fn set(&mut self, value: Option<T>) {
+        self.0 = match value {
+            None => Self::NONE_VALUE,
+            Some(v) => v,
+        }
+    }
+}
+
+pub trait Integer: Eq + Copy {
+    const SIGNED: bool;
+    const MAX: Self;
+    const MIN: Self;
+}
+
+macro_rules! impl_integer_trait {
+    (signed $($t:ty),+) => {
+        $(impl crate::Integer for $t {
+            const SIGNED: bool = true;
+            const MIN: $t = <$t>::MIN;
+            const MAX: $t = <$t>::MAX;
+        })+
+    };
+    (unsigned $($t:ty),+) => {
+        $(impl crate::Integer for $t {
+            const SIGNED: bool = false;
+            const MIN: $t = <$t>::MIN;
+            const MAX: $t = <$t>::MAX;
+        })+
+    };
+}
+
+impl_integer_trait!(signed i8, i16, i32, i64, i128, isize);
+impl_integer_trait!(unsigned u8, u16, u32, u64, u128, usize);
