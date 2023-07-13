@@ -8,7 +8,7 @@ use std::{
 
 use eframe::{
     egui::{self, Sense},
-    epaint::{Color32, Rounding},
+    epaint::{Color32, Rounding, Stroke},
 };
 use emath::{vec2, Rect};
 
@@ -281,7 +281,12 @@ impl Wires {
 
             if possible_intersection {
                 if let Some(wire) = self.wires.get(wire) {
-                    Wires::draw_wire_intersection(ctx, pos, wire.color)
+                    Wires::draw_wire_intersection(
+                        ctx,
+                        pos,
+                        wire.color,
+                        wire.nodes.get(&pos).is_some_and(|p| p.pin.is_some()),
+                    )
                 }
             }
         }
@@ -332,7 +337,12 @@ impl Wires {
         *self.parts_drawn.write().unwrap() += 1;
     }
 
-    fn draw_wire_intersection(ctx: &PaintContext, pos: Vec2i, color: Color32) {
+    fn draw_wire_intersection(
+        ctx: &PaintContext,
+        pos: Vec2i,
+        color: Color32,
+        pin: bool,
+    ) {
         let screen = &ctx.screen;
         let thickness = screen.scale * 0.4;
 
@@ -340,6 +350,12 @@ impl Wires {
 
         let rect = Rect::from_min_size(pos.into(), vec2(thickness, thickness));
         ctx.paint.rect_filled(rect, Rounding::none(), color);
+
+        // DEBUG: visuals
+        if pin {
+            ctx.paint
+                .rect_stroke(rect, Rounding::none(), Stroke::new(1.0, Color32::RED));
+        }
     }
 
     fn calc_wire_part(from: Option<Vec2i>, to: Option<Vec2i>) -> Option<WirePart> {
@@ -385,7 +401,7 @@ impl Wires {
         }
     }
 
-    pub fn create_intersection(&mut self, pos: Vec2i, wire: Option<usize>) -> Option<&Wire> {
+    pub fn create_intersection(&mut self, pos: Vec2i, wire: Option<usize>) -> Option<&mut Wire> {
         let node = self.nodes.get(pos.x() as isize, pos.y() as isize);
         let node = match node {
             Some(v) => *v,
@@ -400,7 +416,7 @@ impl Wires {
         pos: Vec2i,
         node: WireNode,
         wire: Option<usize>,
-    ) -> Option<&Wire> {
+    ) -> Option<&mut Wire> {
         fn fix_pointers(wires: &mut Chunks2D<16, WireNode>, pos: Vec2i, vertical: bool, dist: u32) {
             for int_dist in 1.. {
                 let node = match vertical {
@@ -428,7 +444,7 @@ impl Wires {
         }
 
         if node.wire.is_some() || node.up == 0 && node.left == 0 {
-            return node.wire.get().and_then(|w| self.wires.get(w));
+            return node.wire.get().and_then(|w| self.wires.get_mut(w));
         }
 
         let wire_up = self
@@ -984,6 +1000,11 @@ impl Wires {
             } else {
                 let wire = self.create_wire().id;
                 self.set_node_wires(group.keys(), wire);
+                for p in group.values() {
+                    if let Some(pin) = &p.pin {
+                        pin.write().unwrap().wire = Some(wire)
+                    }
+                }
                 self.wires.get_mut(wire).unwrap()
             };
             wire.nodes = group
@@ -1023,8 +1044,6 @@ impl Wires {
                 Some(n) => n.wire.set(Some(wire)),
             }
         }
-
-        // TODO: correctly handle wire changes
     }
 }
 

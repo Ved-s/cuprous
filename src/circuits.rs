@@ -9,22 +9,56 @@ use emath::{Align2, Rect};
 use crate::{
     containers::{Chunks2D, FixedVec},
     vector::{IsZero, Vec2f, Vec2i, Vec2u, Vector},
-    OptionalInt, PaintContext, wires::Wires,
+    wires::Wires,
+    OptionalInt, PaintContext,
 };
 
 pub struct CircuitInfo {
     pub size: Vec2u,
-    pub pins: Box<[(Vec2u, Arc<RwLock<CircuitPin>>)]>,
+    pub pins: Box<[CircuitPinInfo]>,
+}
+
+#[derive(Debug, Clone)]
+enum PinDirection {
+    Inside,
+    Outside,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CircuitPinId {
+    pub id: usize,
+    pub circuit_id: usize,
+}
+
+impl CircuitPinId {
+    pub fn new(id: usize, circuit_id: usize) -> Self {
+        Self { id, circuit_id }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CircuitPinInfo {
+    pos: Vec2u,
+    dir: PinDirection,
+    pin: Arc<RwLock<CircuitPin>>,
 }
 
 #[derive(Debug)]
 pub struct CircuitPin {
+    pub id: CircuitPinId,
     pub wire: Option<usize>,
 }
 
-impl CircuitPin {
-    fn new() -> Self {
-        Self { wire: None }
+impl CircuitPinInfo {
+    fn new(pos: impl Into<Vec2u>, dir: PinDirection) -> Self {
+        Self {
+            pos: pos.into(),
+            dir,
+            pin: Arc::new(RwLock::new(CircuitPin {
+                id: Default::default(),
+                wire: None,
+            })),
+        }
     }
 }
 
@@ -38,12 +72,17 @@ pub struct Circuit {
 impl Circuit {
     fn create(id: usize, pos: Vec2i, preview: &dyn CircuitPreview) -> Self {
         let imp = preview.create_impl();
+        let mut pins = imp.create_pins();
+        for pin in pins.iter_mut().enumerate() {
+            pin.1.pin.write().unwrap().id = CircuitPinId::new(pin.0, id);
+        }
+
         Self {
             id,
             pos,
             info: RwLock::new(CircuitInfo {
                 size: preview.size(),
-                pins: imp.create_pins(),
+                pins,
             }),
             imp,
         }
@@ -53,7 +92,7 @@ impl Circuit {
 pub trait CircuitImpl {
     fn draw(&self, circuit: &Circuit, ctx: &PaintContext);
 
-    fn create_pins(&self) -> Box<[(Vec2u, Arc<RwLock<CircuitPin>>)]>;
+    fn create_pins(&self) -> Box<[CircuitPinInfo]>;
 }
 
 pub trait CircuitPreview: std::fmt::Debug {
@@ -81,7 +120,12 @@ impl Circuits {
         }
     }
 
-    pub fn update(&mut self, wires: &mut Wires, ctx: &PaintContext, selected: Option<&Box<dyn CircuitPreview>>) {
+    pub fn update(
+        &mut self,
+        wires: &mut Wires,
+        ctx: &PaintContext,
+        selected: Option<&Box<dyn CircuitPreview>>,
+    ) {
         ctx.draw_chunks(
             &self.nodes,
             self,
@@ -120,7 +164,12 @@ impl Circuits {
         };
     }
 
-    fn handle_preview(&mut self, wires: &mut Wires, ctx: &PaintContext<'_>, preview: &Box<dyn CircuitPreview>) {
+    fn handle_preview(
+        &mut self,
+        wires: &mut Wires,
+        ctx: &PaintContext<'_>,
+        preview: &Box<dyn CircuitPreview>,
+    ) {
         let mouse_tile_pos = ctx
             .egui_ctx
             .input(|input| input.pointer.interact_pos())
@@ -172,8 +221,14 @@ impl Circuits {
             }
 
             for pin in circ.info.read().unwrap().pins.iter() {
-                if let Some(wire) = wires.create_intersection(place_pos + pin.0.convert_values(|v| v as i32), None) {
-                    pin.1.write().unwrap().wire = Some(wire.id)
+                let pos = place_pos + pin.pos.convert_values(|v| v as i32);
+                if let Some(wire) = wires
+                    .create_intersection(pos, None)
+                {
+                    pin.pin.write().unwrap().wire = Some(wire.id);
+                    if let Some(p) = wire.nodes.get_mut(&pos) {
+                        p.pin = Some(pin.pin.clone());
+                    }
                 }
             }
         }
@@ -190,8 +245,8 @@ impl Circuits {
             .unwrap()
             .pins
             .iter()
-            .find(|p| p.0 == pos)
-            .map(|p| p.1.clone())
+            .find(|p| p.pos == pos)
+            .map(|p| p.pin.clone())
     }
 }
 
@@ -205,13 +260,13 @@ impl Default for Circuits {
 }
 
 pub struct TestCircuitImpl {
-    pin: Arc<RwLock<CircuitPin>>,
+    pin: CircuitPinInfo,
 }
 
 impl TestCircuitImpl {
     fn new() -> Self {
         Self {
-            pin: Arc::new(RwLock::new(CircuitPin::new())),
+            pin: CircuitPinInfo::new([0, 0], PinDirection::Inside),
         }
     }
 }
@@ -226,6 +281,7 @@ impl CircuitImpl for TestCircuitImpl {
         );
 
         let wire = self
+            .pin
             .pin
             .read()
             .unwrap()
@@ -244,8 +300,8 @@ impl CircuitImpl for TestCircuitImpl {
         );
     }
 
-    fn create_pins(&self) -> Box<[(Vec2u, Arc<RwLock<CircuitPin>>)]> {
-        vec![([0, 0].into(), self.pin.clone())].into_boxed_slice()
+    fn create_pins(&self) -> Box<[CircuitPinInfo]> {
+        vec![self.pin.clone()].into_boxed_slice()
     }
 }
 
