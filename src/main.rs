@@ -2,7 +2,9 @@
 #![feature(generic_const_exprs)]
 #![feature(int_roundings)]
 
-use std::{mem::size_of, ops::Range, rc::Rc, time::Instant, any::Any};
+use std::{
+    collections::HashMap, default, hash::Hash, mem::size_of, ops::Range, rc::Rc, time::Instant,
+};
 
 use eframe::{
     egui::{self, Context, Frame, Key, Margin, Sense, TextStyle, Ui},
@@ -181,10 +183,11 @@ impl PanAndZoom {
         }
 
         if zoom != 1.0 {
-            let pointer_screen = Vec2f::from(ui
-                .input(|i| i.pointer.hover_pos())
-                .unwrap_or_else(|| rect.center())
-                - rect.left_top());
+            let pointer_screen = Vec2f::from(
+                ui.input(|i| i.pointer.hover_pos())
+                    .unwrap_or_else(|| rect.center())
+                    - rect.left_top(),
+            );
             let world_before = self.pos + pointer_screen / self.scale;
             self.scale *= zoom;
             let world_after = self.pos + pointer_screen / self.scale;
@@ -273,7 +276,7 @@ impl eframe::App for App {
         if ctx.input(|input| input.key_pressed(Key::F1)) {
             self.selected = match self.selected {
                 SelectedItem::Wires => {
-                    SelectedItem::Circuit(Box::new(circuits::TestCircuitPreview {a: 10, b: 20}))
+                    SelectedItem::Circuit(Box::new(circuits::TestCircuitPreview { a: 10, b: 20 }))
                 }
                 SelectedItem::Circuit(_) => SelectedItem::Wires,
             }
@@ -316,9 +319,13 @@ impl eframe::App for App {
                     egui_ctx: ctx,
                 };
 
-                self.wires
-                    .update(&mut self.tiles, &ctx,  matches!(self.selected, SelectedItem::Wires));
+                self.wires.update(
+                    &mut self.tiles,
+                    &ctx,
+                    matches!(self.selected, SelectedItem::Wires),
+                );
                 self.tiles.update(
+                    &mut self.wires,
                     &ctx,
                     match &self.selected {
                         SelectedItem::Wires => None,
@@ -365,7 +372,7 @@ impl App {
             wires: Wires::new(),
             tiles: Circuits::new(),
             last_win_pos: None,
-            selected: SelectedItem::Wires
+            selected: SelectedItem::Wires,
         }
     }
 
@@ -448,7 +455,10 @@ impl App {
     }
 
     fn draw_cross(&mut self, bounds: Rect, paint: &egui::Painter) {
-        let mut cross_pos = self.pan_zoom.to_screen(bounds.left_top().into()).world_to_screen(0.0.into());
+        let mut cross_pos = self
+            .pan_zoom
+            .to_screen(bounds.left_top().into())
+            .world_to_screen(0.0.into());
 
         *cross_pos.x_mut() = cross_pos.x().clamp(bounds.left(), bounds.right());
         *cross_pos.y_mut() = cross_pos.y().clamp(bounds.top(), bounds.bottom());
@@ -622,7 +632,6 @@ impl<T: Integer> OptionalInt<T> {
     fn is_none_or(&self, f: impl FnOnce(T) -> bool) -> bool {
         self.0 == Self::NONE_VALUE || f(self.0)
     }
-
 
     fn get(&self) -> Option<T> {
         if self.0 == Self::NONE_VALUE {

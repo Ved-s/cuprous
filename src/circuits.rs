@@ -1,34 +1,30 @@
-use std::sync::{RwLock, Arc};
+use std::sync::{Arc, RwLock};
 
 use eframe::{
     egui::Sense,
     epaint::{Color32, Rounding},
 };
-use emath::{Rect, Align2};
+use emath::{Align2, Rect};
 
 use crate::{
     containers::{Chunks2D, FixedVec},
-    vector::{IsZero, Vec2f, Vec2u, Vector, Vec2i},
-    PaintContext, OptionalInt,
+    vector::{IsZero, Vec2f, Vec2i, Vec2u, Vector},
+    OptionalInt, PaintContext, wires::Wires,
 };
 
 pub struct CircuitInfo {
     pub size: Vec2u,
-    pub pins: Box<[Arc<RwLock<CircuitPin>>]> 
+    pub pins: Box<[(Vec2u, Arc<RwLock<CircuitPin>>)]>,
 }
 
 #[derive(Debug)]
 pub struct CircuitPin {
-    pub pos: Vec2u,
-    pub wire: Option<usize>
+    pub wire: Option<usize>,
 }
 
 impl CircuitPin {
-    fn new(pos: Vec2u) -> Self {
-        Self {
-            pos,
-            wire: None
-        }
+    fn new() -> Self {
+        Self { wire: None }
     }
 }
 
@@ -47,9 +43,9 @@ impl Circuit {
             pos,
             info: RwLock::new(CircuitInfo {
                 size: preview.size(),
-                pins: imp.create_pins()
+                pins: imp.create_pins(),
             }),
-            imp
+            imp,
         }
     }
 }
@@ -57,7 +53,7 @@ impl Circuit {
 pub trait CircuitImpl {
     fn draw(&self, circuit: &Circuit, ctx: &PaintContext);
 
-    fn create_pins(&self) -> Box<[Arc<RwLock<CircuitPin>>]>;
+    fn create_pins(&self) -> Box<[(Vec2u, Arc<RwLock<CircuitPin>>)]>;
 }
 
 pub trait CircuitPreview: std::fmt::Debug {
@@ -78,7 +74,6 @@ pub struct Circuits {
 }
 
 impl Circuits {
-
     pub fn new() -> Self {
         Self {
             nodes: Default::default(),
@@ -86,7 +81,7 @@ impl Circuits {
         }
     }
 
-    pub fn update(&mut self, ctx: &PaintContext, selected: Option<&Box<dyn CircuitPreview>>) {
+    pub fn update(&mut self, wires: &mut Wires, ctx: &PaintContext, selected: Option<&Box<dyn CircuitPreview>>) {
         ctx.draw_chunks(
             &self.nodes,
             self,
@@ -121,11 +116,11 @@ impl Circuits {
 
         match selected {
             None => return,
-            Some(p) => self.handle_preview(ctx, p),
+            Some(p) => self.handle_preview(wires, ctx, p),
         };
     }
 
-    fn handle_preview(&mut self, ctx: &PaintContext<'_>, preview: &Box<dyn CircuitPreview>) {
+    fn handle_preview(&mut self, wires: &mut Wires, ctx: &PaintContext<'_>, preview: &Box<dyn CircuitPreview>) {
         let mouse_tile_pos = ctx
             .egui_ctx
             .input(|input| input.pointer.interact_pos())
@@ -163,7 +158,7 @@ impl Circuits {
 
             let cid = self.cirtuits.first_free_pos();
             let circ = Circuit::create(cid, place_pos, preview.as_ref());
-            self.cirtuits.set(circ, cid);
+            let circ = self.cirtuits.set(circ, cid).value_ref;
 
             for j in 0..size.y() {
                 for i in 0..size.x() {
@@ -175,6 +170,12 @@ impl Circuits {
                     node.origin_dist = [i, j].into();
                 }
             }
+
+            for pin in circ.info.read().unwrap().pins.iter() {
+                if let Some(wire) = wires.create_intersection(place_pos + pin.0.convert_values(|v| v as i32), None) {
+                    pin.1.write().unwrap().wire = Some(wire.id)
+                }
+            }
         }
     }
 
@@ -184,7 +185,13 @@ impl Circuits {
         let circ = circ.circuit.get()?;
         let circ = self.cirtuits.get(circ)?;
 
-        circ.info.read().unwrap().pins.iter().find(|p| p.read().unwrap().pos == pos).map(|arc| arc.clone())
+        circ.info
+            .read()
+            .unwrap()
+            .pins
+            .iter()
+            .find(|p| p.0 == pos)
+            .map(|p| p.1.clone())
     }
 }
 
@@ -198,13 +205,13 @@ impl Default for Circuits {
 }
 
 pub struct TestCircuitImpl {
-    pin: Arc<RwLock<CircuitPin>>
+    pin: Arc<RwLock<CircuitPin>>,
 }
 
 impl TestCircuitImpl {
     fn new() -> Self {
         Self {
-            pin: Arc::new(RwLock::new(CircuitPin::new(0.into())))
+            pin: Arc::new(RwLock::new(CircuitPin::new())),
         }
     }
 }
@@ -212,31 +219,49 @@ impl TestCircuitImpl {
 impl CircuitImpl for TestCircuitImpl {
     fn draw(&self, circ: &Circuit, ctx: &PaintContext) {
         let font_id = eframe::egui::TextStyle::Monospace.resolve(ctx.ui.style());
-        ctx.paint
-            .rect_filled(ctx.rect, Rounding::none(), Color32::GREEN);
+        ctx.paint.rect_filled(
+            ctx.rect,
+            Rounding::none(),
+            Color32::from_rgba_unmultiplied(0, 255, 0, 100),
+        );
 
-        let wire = self.pin.read().unwrap().wire.map(|v| v as i32).unwrap_or(-1);
+        let wire = self
+            .pin
+            .read()
+            .unwrap()
+            .wire
+            .map(|v| v as i32)
+            .unwrap_or(-1);
 
         let text = format!("{}, {}", circ.id, wire);
 
-        ctx.paint.text(ctx.rect.center(), Align2::CENTER_CENTER, text, font_id, Color32::WHITE);
+        ctx.paint.text(
+            ctx.rect.center(),
+            Align2::CENTER_CENTER,
+            text,
+            font_id,
+            Color32::WHITE,
+        );
     }
 
-    fn create_pins(&self) -> Box<[Arc<RwLock<CircuitPin>>]> {
-        vec![self.pin.clone()].into_boxed_slice()
+    fn create_pins(&self) -> Box<[(Vec2u, Arc<RwLock<CircuitPin>>)]> {
+        vec![([0, 0].into(), self.pin.clone())].into_boxed_slice()
     }
 }
 
 #[derive(Debug)]
 pub struct TestCircuitPreview {
     pub a: usize,
-    pub b: usize
+    pub b: usize,
 }
 
 impl CircuitPreview for TestCircuitPreview {
     fn draw_preview(&self, ctx: &PaintContext) {
-        ctx.paint
-            .rect_filled(ctx.rect, Rounding::none(), Color32::GREEN);
+        ctx.paint.rect_filled(
+            ctx.rect,
+            Rounding::none(),
+            Color32::from_rgba_unmultiplied(0, 255, 0, 100),
+        );
     }
 
     fn size(&self) -> Vec2u {

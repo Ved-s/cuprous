@@ -15,19 +15,23 @@ use eframe::{
 use emath::{vec2, Rect};
 
 use crate::{
-    containers::{Chunks2D, ChunksLookaround, FixedVec},
     circuits::{CircuitPin, Circuits},
+    containers::{Chunks2D, ChunksLookaround, FixedVec},
     vector::{Vec2f, Vec2i, Vector},
     OptionalInt, PaintContext, SizeCalc, TileDrawBounds,
 };
 
 #[derive(Debug, Default)]
 pub struct Wire {
-    id: usize,
-    color: Color32,
-    nodes: Vec<(Vec2i, Option<Arc<RwLock<CircuitPin>>>)>,
+    pub id: usize,
+    pub color: Color32,
+    pub nodes: HashMap<Vec2i, WirePoint>,
 }
 
+#[derive(Debug, Default)]
+pub struct WirePoint {
+    pub pin: Option<Arc<RwLock<CircuitPin>>>,
+}
 pub struct WirePart {
     pub pos: Vec2i,
     pub length: NonZeroU32,
@@ -169,9 +173,9 @@ impl Wires {
         }
 
         if center {
-            self.remove_intersection_at_node(pos, *node, true)
+            self.remove_intersection_at_node(pos, *node, true);
         } else {
-            self.create_intersection_at_node(pos, *node, None)
+            self.create_intersection_at_node(pos, *node, None);
         }
     }
 
@@ -383,17 +387,17 @@ impl Wires {
         }
     }
 
-    fn create_intersection(&mut self, pos: Vec2i, wire: Option<usize>) {
+    pub fn create_intersection(&mut self, pos: Vec2i, wire: Option<usize>) -> Option<&Wire> {
         let node = self.nodes.get(pos.x() as isize, pos.y() as isize);
         let node = match node {
             Some(v) => *v,
-            None => return,
+            None => return None,
         };
         self.create_intersection_at_node(pos, node, wire)
     }
 
     // wire param: if Some(w) will use wire w, if None, will try to figure ot which wire to use (with merging wires)
-    fn create_intersection_at_node(&mut self, pos: Vec2i, node: WireNode, wire: Option<usize>) {
+    pub fn create_intersection_at_node(&mut self, pos: Vec2i, node: WireNode, wire: Option<usize>) -> Option<&Wire> {
         fn fix_pointers(wires: &mut Chunks2D<16, WireNode>, pos: Vec2i, vertical: bool, dist: u32) {
             for int_dist in 1.. {
                 let node = match vertical {
@@ -421,7 +425,7 @@ impl Wires {
         }
 
         if node.wire.is_some() || node.up == 0 && node.left == 0 {
-            return;
+            return node.wire.get().and_then(|w| self.wires.get(w));
         }
 
         let wire_up = self
@@ -457,7 +461,7 @@ impl Wires {
         });
         let wire = match wire {
             Some(w) => w,
-            None => return,
+            None => return None,
         };
 
         if node.up > 0 {
@@ -472,7 +476,8 @@ impl Wires {
 
         node.wire.set(Some(wire));
         let wire = self.wires.get_mut(wire).unwrap();
-        wire.nodes.push((pos, None));
+        wire.nodes.insert(pos, WirePoint { pin: None });
+        Some(wire)
     }
 
     fn remove_intersection(&mut self, pos: Vec2i, split: bool) {
@@ -511,7 +516,14 @@ impl Wires {
                 }
             }
         }
-        if node.wire.is_none() || node.up == 0 && node.left == 0 {
+        if node.wire.is_none()
+            || node.up == 0 && node.left == 0
+            || node.wire.get().is_some_and(|w| {
+                self.wires
+                    .get(w)
+                    .is_some_and(|w| w.nodes.get(&pos).is_some_and(|p| p.pin.is_some()))
+            })
+        {
             return;
         }
 
@@ -531,20 +543,7 @@ impl Wires {
 
         node.wire.set(None);
         let wire = self.wires.get_mut(wire_id).unwrap();
-        if let Some(posi) = wire
-            .nodes
-            .iter()
-            .enumerate()
-            .find(|v| v.1 .0 == pos)
-            .map(|v| {
-                if let Some(arc) = v.1 .1.as_ref() {
-                    arc.write().unwrap().wire = None;
-                }
-                v.0
-            })
-        {
-            wire.nodes.remove(posi);
-        }
+        wire.nodes.remove(&pos);
 
         if split {
             self.split_wires(wire_id)
@@ -656,10 +655,6 @@ impl Wires {
             Some(new_wire),
         );
 
-        for (pos, _) in pins_crossed.iter() {
-            self.create_intersection(*pos, Some(new_wire));
-        }
-
         let mut dist = 0;
 
         for i in 0..=part.length.get() {
@@ -683,23 +678,33 @@ impl Wires {
             let crossed_pin = match pins_crossed.get(&pos) {
                 None => false,
                 Some(pin) => {
+                    let wire_point = self
+                        .wires
+                        .get_mut(new_wire)
+                        .unwrap()
+                        .nodes
+                        .entry(pos)
+                        .or_insert(WirePoint { pin: None });
+                    wire_point.pin = Some(pin.clone());
+
                     pin.write().unwrap().wire = Some(new_wire);
                     true
-                },
+                }
             };
 
-            if node.wire.is_some() {
+            if node.wire.is_some() || crossed_pin {
                 dist = 1
             } else {
                 dist += 1;
             }
-            if (i == 0 || i == part.length.get()) && node.wire.is_none_or(|w| w != new_wire) {
+            if (i == 0 || i == part.length.get() || crossed_pin) && node.wire.is_none_or(|w| w != new_wire) {
                 node.wire.set(Some(new_wire));
-                self.wires
-                    .get_mut(new_wire)
-                    .unwrap()
-                    .nodes
-                    .push((pos, pins_crossed.get(&pos).map(|a| a.clone())));
+                self.wires.get_mut(new_wire).unwrap().nodes.insert(
+                    pos,
+                    WirePoint {
+                        pin: pins_crossed.get(&pos).map(|a| a.clone()),
+                    },
+                );
             }
         }
     }
@@ -820,10 +825,7 @@ impl Wires {
     }
 
     fn merge_wires(&mut self, wire: usize, with: usize) {
-        if !self.wires.exists(wire)
-            || !self.wires.exists(with)
-            || wire == with
-        {
+        if !self.wires.exists(wire) || !self.wires.exists(with) || wire == with {
             return;
         }
 
@@ -833,11 +835,11 @@ impl Wires {
             nodes,
         } = self.wires.remove(with).unwrap();
 
-        self.set_node_wires(nodes.iter().map(|n| &n.0), wire);
+        self.set_node_wires(nodes.keys(), wire);
 
         let wire = &mut self.wires.get_mut(wire).unwrap();
         wire.nodes.extend(nodes.into_iter().map(|c| {
-            if let Some(arc) = c.1.as_ref() {
+            if let Some(arc) = c.1.pin.as_ref() {
                 arc.write().unwrap().wire = Some(wire.id);
             }
             c
@@ -922,17 +924,17 @@ impl Wires {
         let connections: HashMap<_, _> = wire
             .nodes
             .iter()
-            .filter_map(|n| match n.1.as_ref() {
+            .filter_map(|n| match n.1.pin.as_ref() {
                 None => None,
                 Some(arc) => Some((n.0, arc.clone())),
             })
             .collect();
 
-        let mut remaining_nodes: HashSet<_> = wire.nodes.iter().map(|v| v.0).collect();
+        let mut remaining_nodes: HashSet<_> = wire.nodes.keys().map(|v| *v).collect();
         let mut queue = vec![];
 
         while remaining_nodes.len() > 0 {
-            let mut group = vec![];
+            let mut group = HashMap::new();
             let start = *remaining_nodes.iter().next().unwrap();
             queue.push(start);
 
@@ -941,7 +943,7 @@ impl Wires {
                     continue;
                 }
 
-                group.push((pos, connections.get(&pos).and_then(|c| Some(c.clone()))));
+                group.insert(pos, WirePoint { pin: connections.get(&pos).and_then(|c| Some(c.clone())) });
 
                 let (ints, intc) = self.node_neighboring_intersections(pos, Some(id));
                 for inti in 0..intc {
@@ -970,7 +972,7 @@ impl Wires {
                 self.wires.get_mut(id).unwrap()
             } else {
                 let wire = self.create_wire().id;
-                self.set_node_wires(group.iter().map(|n| &n.0), wire);
+                self.set_node_wires(group.keys(), wire);
                 self.wires.get_mut(wire).unwrap()
             };
             wire.nodes = group
