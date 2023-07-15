@@ -16,14 +16,25 @@ use crate::{
     circuits::{CircuitPin, Circuits},
     containers::{Chunks2D, ChunksLookaround, FixedVec},
     vector::{Vec2f, Vec2i, Vector},
-    OptionalInt, PaintContext, SizeCalc,
+    OptionalInt, PaintContext, SizeCalc, State, UpdateTask,
 };
 
 #[derive(Debug, Default)]
 pub struct Wire {
     pub id: usize,
-    pub color: Color32,
     pub nodes: HashMap<Vec2i, WirePoint>,
+}
+
+impl Wire {
+    fn color(&self, state: &State) -> Color32 {
+        let rgb = match state.read_wire(self.id) {
+            crate::WireState::None => [0, 0, 200],
+            crate::WireState::True => [0, 255, 0],
+            crate::WireState::False => [0, 127, 200],
+            crate::WireState::Error => [200, 0, 0],
+        };
+        Color32::from_rgb(rgb[0], rgb[1], rgb[2])
+    }
 }
 
 #[derive(Debug, Default)]
@@ -68,15 +79,21 @@ impl Wires {
         }
     }
 
-    pub fn update(&mut self, tiles: &mut Circuits, ctx: &PaintContext, selected: bool) {
+    pub fn update(
+        &mut self,
+        state: &State,
+        tiles: &mut Circuits,
+        ctx: &PaintContext,
+        selected: bool,
+    ) {
         *self.parts_drawn.write().unwrap() = 0;
 
         ctx.draw_chunks(
             &self.nodes,
-            &self,
+            &(&self, &state),
             |node| node.wire.is_some() || node.up > 0 || node.left > 0,
             |node, pos, ctx, this, lookaround| {
-                this.draw_wires(ctx, node, pos, lookaround);
+                this.0.draw_wires(this.1, ctx, node, pos, lookaround);
             },
         );
 
@@ -110,14 +127,25 @@ impl Wires {
             self.wire_drag_pos = None;
 
             if let Some(part) = drawing_wire {
-                self.place_wire_part(tiles, part);
+                if let Some(wire) = self.place_wire_part(tiles, part) {
+                    if let Some(wire) = self.wires.get(wire) {
+                        state.update_wire(wire);
+                    }
+                }
             }
         }
 
         if let Some(mouse_pos) = mouse_tile_pos_i {
             if interaction.clicked_by(egui::PointerButton::Primary) && self.wire_drag_pos.is_none()
             {
-                self.try_toggle_node_intersection(mouse_pos);
+                if let Some(affected_wires) = self.try_toggle_node_intersection(mouse_pos) {
+                    let mut q = state.queue.lock().unwrap();
+                    for id in affected_wires {
+                        if let Some(wire) = self.wires.get(id) {
+                            state.update_wire(wire);
+                        }
+                    }
+                }
             }
 
             for i in 0..4 {
@@ -137,12 +165,12 @@ impl Wires {
         }
     }
 
-    fn try_toggle_node_intersection(&mut self, pos: Vec2i) {
+    fn try_toggle_node_intersection(&mut self, pos: Vec2i) -> Option<Vec<usize>> {
         let node = self.nodes.get(pos.x() as isize, pos.y() as isize);
 
         let node = match node {
-            None => return,
-            Some(ref n) if n.wire.is_none() && n.left == 0 && n.up == 0 => return,
+            None => return None,
+            Some(ref n) if n.wire.is_none() && n.left == 0 && n.up == 0 => return None,
             Some(v) => v,
         };
 
@@ -167,18 +195,20 @@ impl Wires {
                 });
 
         if up != down || left != right {
-            return;
+            return None;
         }
 
         if center {
-            self.remove_intersection_at_node(pos, *node, true);
+            self.remove_intersection_at_node(pos, *node, true)
         } else {
-            self.create_intersection_at_node(pos, *node, None);
+            self.create_intersection_at_node(pos, *node, None)
+                .map(|w| vec![w.id])
         }
     }
 
     fn draw_wires(
         &self,
+        state: &State,
         ctx: &PaintContext<'_>,
         node: &WireNode,
         pos: Vector<2, i32>,
@@ -243,10 +273,10 @@ impl Wires {
         let wires = self.wire_at_node(pos, node);
         let wire_color_v = wires
             .up()
-            .map_or(Color32::from_rgb(255, 100, 255), |w| w.color);
+            .map_or(Color32::from_rgb(255, 100, 255), |w| w.color(state));
         let wire_color_h = wires
             .left()
-            .map_or(Color32::from_rgb(255, 100, 255), |w| w.color);
+            .map_or(Color32::from_rgb(255, 100, 255), |w| w.color(state));
         let next_node_v = lookaround.get_relative(0, 1);
         let next_node_h = lookaround.get_relative(1, 0);
         draw_wire(
@@ -284,7 +314,7 @@ impl Wires {
                     Wires::draw_wire_intersection(
                         ctx,
                         pos,
-                        wire.color,
+                        wire.color(state),
                         wire.nodes.get(&pos).is_some_and(|p| p.pin.is_some()),
                     )
                 }
@@ -337,12 +367,7 @@ impl Wires {
         *self.parts_drawn.write().unwrap() += 1;
     }
 
-    fn draw_wire_intersection(
-        ctx: &PaintContext,
-        pos: Vec2i,
-        color: Color32,
-        pin: bool,
-    ) {
+    fn draw_wire_intersection(ctx: &PaintContext, pos: Vec2i, color: Color32, pin: bool) {
         let screen = &ctx.screen;
         let thickness = screen.scale * 0.4;
 
@@ -500,17 +525,18 @@ impl Wires {
     }
 
     #[allow(unused)]
-    fn remove_intersection(&mut self, pos: Vec2i, split: bool) {
-        let node = self.nodes.get(pos.x() as isize, pos.y() as isize);
-        let node = match node {
-            Some(v) => *v,
-            None => return,
-        };
-        self.remove_intersection_at_node(pos, node, split)
+    fn remove_intersection(&mut self, pos: Vec2i, split: bool) -> Option<Vec<usize>> {
+        let node = self.nodes.get(pos.x() as isize, pos.y() as isize)?;
+        self.remove_intersection_at_node(pos, *node, split)
     }
 
     // split param: if intersection was of 2 wires, split them
-    fn remove_intersection_at_node(&mut self, pos: Vec2i, node: WireNode, split: bool) {
+    fn remove_intersection_at_node(
+        &mut self,
+        pos: Vec2i,
+        node: WireNode,
+        split: bool,
+    ) -> Option<Vec<usize>> {
         fn fix_pointers(wires: &mut Chunks2D<16, WireNode>, pos: Vec2i, vertical: bool, dist: u32) {
             for int_dist in 1.. {
                 let node = match vertical {
@@ -544,7 +570,7 @@ impl Wires {
                     .is_some_and(|w| w.nodes.get(&pos).is_some_and(|p| p.pin.is_some()))
             })
         {
-            return;
+            return None;
         }
 
         let split = split && node.up > 0 && node.left > 0;
@@ -566,15 +592,13 @@ impl Wires {
         wire.nodes.remove(&pos);
 
         if split {
-            self.split_wires(wire_id)
+            return self.split_wires(wire_id);
         }
+        Some(vec![wire_id])
     }
 
-    fn place_wire_part(&mut self, tiles: &Circuits, part: WirePart) {
-        let part = match self.optimize_part(part) {
-            Some(value) => value,
-            None => return,
-        };
+    fn place_wire_part(&mut self, tiles: &Circuits, part: WirePart) -> Option<usize> {
+        let part = self.optimize_part(part)?;
 
         let pins_crossed = {
             let mut pins_crossed = HashMap::new();
@@ -729,6 +753,8 @@ impl Wires {
                 );
             }
         }
+
+        Some(new_wire)
     }
 
     fn optimize_part(&mut self, part: WirePart) -> Option<WirePart> {
@@ -832,14 +858,8 @@ impl Wires {
     fn create_wire(&mut self) -> &mut Wire {
         let id = self.wires.first_free_pos();
 
-        let mut hash = DefaultHasher::new();
-        hash.write_usize(id);
-        hash.write_u16(61942);
-        let color = hash.finish().to_le_bytes();
-
         let wire = Wire {
             id,
-            color: Color32::from_rgb(color[0], color[1], color[2]),
             ..Default::default()
         };
 
@@ -851,11 +871,7 @@ impl Wires {
             return;
         }
 
-        let Wire {
-            id: _,
-            color: _,
-            nodes,
-        } = self.wires.remove(with).unwrap();
+        let Wire { id: _, nodes } = self.wires.remove(with).unwrap();
 
         self.set_node_wires(nodes.keys(), wire);
 
@@ -936,11 +952,8 @@ impl Wires {
         }
     }
 
-    fn split_wires(&mut self, id: usize) {
-        let wire = match self.wires.get(id) {
-            None => return,
-            Some(v) => v,
-        };
+    fn split_wires(&mut self, id: usize) -> Option<Vec<usize>> {
+        let wire = self.wires.get(id)?;
 
         let mut groups = vec![];
         let connections: HashMap<_, _> = wire
@@ -984,7 +997,7 @@ impl Wires {
         }
 
         if groups.len() <= 1 {
-            return;
+            return None;
         }
 
         let this_wire_idx = groups
@@ -994,11 +1007,14 @@ impl Wires {
             .unwrap()
             .0;
 
+        let mut affected_wires = vec![];
         for (groupid, group) in groups.drain(..).enumerate() {
             let wire = if groupid == this_wire_idx {
+                affected_wires.push(id);
                 self.wires.get_mut(id).unwrap()
             } else {
                 let wire = self.create_wire().id;
+                affected_wires.push(wire);
                 self.set_node_wires(group.keys(), wire);
                 for p in group.values() {
                     if let Some(pin) = &p.pin {
@@ -1009,6 +1025,7 @@ impl Wires {
             };
             wire.nodes = group
         }
+        Some(affected_wires)
     }
 
     fn node_neighboring_intersections(

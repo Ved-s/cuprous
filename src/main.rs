@@ -3,7 +3,11 @@
 #![feature(int_roundings)]
 
 use std::{
-    mem::size_of, ops::Range, rc::Rc, time::Instant,
+    mem::size_of,
+    ops::Range,
+    rc::Rc,
+    sync::{Arc, Mutex, RwLock},
+    time::Instant,
 };
 
 use eframe::{
@@ -16,12 +20,13 @@ mod r#const;
 
 mod vector;
 use vector::{Vec2f, Vec2i, Vector};
+use wires::Wire;
 
 mod containers;
 use crate::containers::*;
 
 mod circuits;
-use circuits::{CircuitPreview, Circuits};
+use circuits::{CircuitPreview, Circuits, PinDirection, Circuit};
 
 mod wires;
 use crate::wires::Wires;
@@ -257,8 +262,10 @@ struct App {
 
     pub pan_zoom: PanAndZoom,
     pub wires: Wires,
-    pub tiles: Circuits,
+    pub circuits: Circuits,
     pub selected: SelectedItem,
+
+    pub state: Arc<State>,
 }
 
 impl eframe::App for App {
@@ -274,6 +281,8 @@ impl eframe::App for App {
             }
         }
         self.last_win_pos = int_info.window_info.position;
+
+        self.state.update(&self.wires, &self.circuits);
 
         if ctx.input(|input| input.key_pressed(Key::F1)) {
             self.selected = match self.selected {
@@ -322,11 +331,13 @@ impl eframe::App for App {
                 };
 
                 self.wires.update(
-                    &mut self.tiles,
+                    &self.state,
+                    &mut self.circuits,
                     &ctx,
                     matches!(self.selected, SelectedItem::Wires),
                 );
-                self.tiles.update(
+                self.circuits.update(
+                    &self.state,
                     &mut self.wires,
                     &ctx,
                     match &self.selected {
@@ -372,9 +383,10 @@ impl App {
         Self {
             pan_zoom: PanAndZoom::new(0.0.into(), 16.0),
             wires: Wires::new(),
-            tiles: Circuits::new(),
+            circuits: Circuits::new(),
             last_win_pos: None,
             selected: SelectedItem::Wires,
+            state: Default::default(),
         }
     }
 
@@ -677,3 +689,146 @@ macro_rules! impl_integer_trait {
 
 impl_integer_trait!(signed i8, i16, i32, i64, i128, isize);
 impl_integer_trait!(unsigned u8, u16, u32, u64, u128, usize);
+
+pub enum UpdateTask {
+    UpdateCircuit { id: usize, pin: Option<usize> },
+    UpdateWireState(usize),
+}
+
+#[derive(Default, Clone, Copy, Eq, PartialEq)]
+pub enum WireState {
+    #[default]
+    None,
+    True,
+    False,
+    Error,
+}
+
+impl WireState {
+    fn combine(&self, state: WireState) -> WireState {
+        match (*self, state) {
+            (WireState::None, other) => other,
+            (other, WireState::None) => other,
+            (WireState::Error, _) => WireState::Error,
+            (_, WireState::Error) => WireState::Error,
+            (WireState::True, WireState::False) => WireState::Error,
+            (WireState::False, WireState::True) => WireState::Error,
+
+            (WireState::True, WireState::True) => WireState::True,
+            (WireState::False, WireState::False) => WireState::True,
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct CircuitState {
+    pub pins: FixedVec<WireState>,
+}
+
+pub struct State {
+    pub wires: Arc<RwLock<FixedVec<Arc<RwLock<WireState>>>>>,
+    pub circuits: Arc<RwLock<FixedVec<Arc<RwLock<CircuitState>>>>>,
+
+    pub queue: Arc<Mutex<RandomQueue<UpdateTask>>>,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            wires: Arc::new(RwLock::new(vec![].into())),
+            circuits: Arc::new(RwLock::new(vec![].into())),
+            queue: Arc::new(Mutex::new(RandomQueue::new())),
+        }
+    }
+}
+
+impl State {
+    fn read_wire(&self, id: usize) -> WireState {
+        self.wires
+            .read()
+            .unwrap()
+            .get(id)
+            .map(|s| *s.read().unwrap())
+            .unwrap_or_default()
+    }
+
+    fn get_wire(&self, id: usize) -> Arc<RwLock<WireState>> {
+        self.wires
+            .write()
+            .unwrap()
+            .get_or_create_mut(id, || Default::default())
+            .clone()
+    }
+
+    fn read_circuit(&self, id: usize) -> Option<Arc<RwLock<CircuitState>>> {
+        self.circuits
+            .read()
+            .unwrap()
+            .get(id)
+            .map(|s| s.clone())
+    }
+
+    fn get_circuit(&self, id: usize) -> Arc<RwLock<CircuitState>> {
+        self.circuits
+            .write()
+            .unwrap()
+            .get_or_create_mut(id, || Default::default())
+            .clone()
+    }
+
+    fn update(&self, wires: &Wires, circuits: &Circuits) {
+        let mut limit = 10;
+        while limit > 0 {
+            limit -= 1;
+            let task = match self.queue.lock().unwrap().dequeue() {
+                None => break,
+                Some(t) => t,
+            };
+
+            match task {
+                UpdateTask::UpdateWireState(wire) => {
+                    if let Some(wire) = wires.wires.get(wire) {
+                        self.update_wire(wire);
+                    }
+                },
+                UpdateTask::UpdateCircuit { id, pin } => {
+                    if let Some(circuit) = circuits.cirtuits.get(id) {
+                        self.update_circuit(circuit, pin);
+                    }
+                },
+            }
+        }
+    }
+
+    fn update_wire(&self, wire: &Wire) {
+        
+        let mut state = WireState::None;
+        for (_, point) in wire.nodes.iter() {
+            if let Some(pin) = &point.pin {
+                let pin = pin.read().unwrap();
+                if let PinDirection::Outside = pin.dir {
+                    state = state.combine(pin.get_state(self))
+                }
+            }
+        }
+
+        let current = self.get_wire(wire.id);
+        if *current.read().unwrap() == state {
+            return;
+        }
+
+        *current.write().unwrap() = state;
+        for (_, point) in wire.nodes.iter() {
+            if let Some(pin) = &point.pin {
+                let pin = pin.read().unwrap();
+                if let PinDirection::Inside = pin.dir {
+                    self.queue.lock().unwrap().enqueue(UpdateTask::UpdateCircuit { id: pin.id.circuit_id, pin: Some(pin.id.id) })
+                }
+            }
+        }
+    }
+
+    fn update_circuit(&self, circuit: &Circuit, pin: Option<usize>) {
+        circuit.imp.write().unwrap().update_signals(self, &mut *self.get_circuit(circuit.id).write().unwrap(), pin)
+    }
+}

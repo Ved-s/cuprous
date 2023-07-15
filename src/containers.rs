@@ -1,8 +1,13 @@
-use std::{mem::MaybeUninit, ops::Range};
+use std::{
+    collections::hash_map::RandomState,
+    hash::{BuildHasher, Hasher},
+    mem::MaybeUninit,
+    ops::Range,
+};
 
 use crate::{vector::Vector, SizeCalc};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FixedVec<T> {
     vec: Vec<Option<T>>,
     first_free: Option<usize>,
@@ -10,7 +15,10 @@ pub struct FixedVec<T> {
 
 impl<T: Default> Default for FixedVec<T> {
     fn default() -> Self {
-        Self { vec: vec![], first_free: None }
+        Self {
+            vec: vec![],
+            first_free: None,
+        }
     }
 }
 
@@ -27,12 +35,42 @@ impl<T> FixedVec<T> {
         }
     }
 
+    pub fn get_nth_existing_index(&self, pos: usize) -> Option<usize> {
+        if pos >= self.vec.len() {
+            return None;
+        }
+
+        let mut n = 0;
+        for i in 0..self.vec.len() {
+            if self.vec[i].is_some() {
+                if n == pos {
+                    return Some(i);
+                }
+                n += 1;
+            }
+        }
+        None
+    }
+
     pub fn get(&self, pos: usize) -> Option<&T> {
         self.vec.get(pos)?.as_ref()
     }
 
+    pub fn get_clone(&self, pos: usize) -> Option<T> where T: Clone {
+        self.vec.get(pos)?.as_ref().map(|v| v.clone())
+    }
+
     pub fn get_mut(&mut self, pos: usize) -> Option<&mut T> {
         self.vec.get_mut(pos)?.as_mut()
+    }
+
+    pub fn get_or_create_mut(&mut self, pos: usize, creator: impl FnOnce() -> T) -> &mut T {
+        if pos >= self.vec.len() {
+            return self.set(creator(), pos).value_ref;
+        }
+
+        let option = &mut self.vec[pos];
+        option.get_or_insert_with(creator)
     }
 
     pub fn remove(&mut self, pos: usize) -> Option<T> {
@@ -362,6 +400,60 @@ impl<const CHUNK_SIZE: usize, T: Default> Chunks2D<CHUNK_SIZE, T> {
 impl<const CHUNK_SIZE: usize, T: SizeCalc + Default> SizeCalc for Chunks2D<CHUNK_SIZE, T> {
     fn calc_size_inner(&self) -> usize {
         self.quarters.calc_size_inner()
+    }
+}
+
+pub struct RandomQueue<T, S: BuildHasher = RandomState> {
+    vec: FixedVec<T>,
+    hasher: <S as BuildHasher>::Hasher,
+    len: usize,
+}
+
+impl<T, S: Default + BuildHasher> Default for RandomQueue<T, S> {
+    fn default() -> Self {
+        Self::with_hasher(&Default::default())
+    }
+}
+
+impl<T> RandomQueue<T> {
+    pub fn new() -> RandomQueue<T, RandomState> {
+        Default::default()
+    }
+}
+
+impl<T, S: BuildHasher> RandomQueue<T, S> {
+    pub fn with_hasher(hash_builder: &S) -> Self {
+        Self {
+            vec: vec![].into(),
+            hasher: hash_builder.build_hasher(),
+            len: 0,
+        }
+    }
+
+    pub fn enqueue(&mut self, value: T) {
+        let pos = self.vec.first_free_pos();
+        self.vec.set(value, pos);
+        self.hasher.write_usize(pos);
+        self.len += 1;
+    }
+
+    pub fn dequeue(&mut self) -> Option<T> {
+        if self.len == 0 {
+            return None;
+        }
+
+        let pos = (self.hasher.finish() % self.len as u64) as usize;
+        let real_pos = match self.vec.get_nth_existing_index(pos) {
+            Some(v) => v,
+            None => unreachable!("Queue length does not match internal vector!"),
+        };
+        let item = match self.vec.remove(real_pos) {
+            Some(v) => v,
+            None => unreachable!(),
+        };
+        self.hasher.write_usize(pos);
+        self.len -= 1;
+        Some(item)
     }
 }
 

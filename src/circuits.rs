@@ -10,7 +10,7 @@ use crate::{
     containers::{Chunks2D, FixedVec},
     vector::{IsZero, Vec2f, Vec2i, Vec2u, Vector},
     wires::Wires,
-    OptionalInt, PaintContext,
+    CircuitState, OptionalInt, PaintContext, State, WireState, UpdateTask,
 };
 
 pub struct CircuitInfo {
@@ -18,8 +18,8 @@ pub struct CircuitInfo {
     pub pins: Box<[CircuitPinInfo]>,
 }
 
-#[derive(Debug, Clone)]
-enum PinDirection {
+#[derive(Debug, Clone, Copy)]
+pub enum PinDirection {
     Inside,
     Outside,
 }
@@ -36,6 +36,55 @@ impl CircuitPinId {
     }
 }
 
+#[derive(Debug)]
+pub struct CircuitPin {
+    pub id: CircuitPinId,
+    pub wire: Option<usize>,
+    pub dir: PinDirection,
+}
+
+impl CircuitPin {
+    pub fn get_state(&self, state: &State) -> WireState {
+        match self.dir {
+            PinDirection::Inside => self
+                .wire
+                .map(|wire| state.read_wire(wire))
+                .unwrap_or_default(),
+            PinDirection::Outside => state
+                .read_circuit(self.id.circuit_id)
+                .map(|cs| {
+                    cs.read()
+                        .unwrap()
+                        .pins
+                        .get(self.id.id)
+                        .map(|s| *s)
+                        .unwrap_or_default()
+                })
+                .unwrap_or_default(),
+        }
+    }
+
+    pub fn set_input(&self, state: &State, value: WireState) {
+        let circuit = state.get_circuit(self.id.circuit_id);
+        let mut circuit = circuit.write().unwrap();
+
+        let current = circuit.pins.get_clone(self.id.id).unwrap_or_default();
+        if current == value {
+            return;
+        }
+
+        circuit.pins.set(value, self.id.id);
+        state
+            .queue
+            .lock()
+            .unwrap()
+            .enqueue(crate::UpdateTask::UpdateCircuit {
+                id: self.id.circuit_id,
+                pin: Some(self.id.id),
+            });
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CircuitPinInfo {
     pos: Vec2u,
@@ -43,10 +92,31 @@ pub struct CircuitPinInfo {
     pin: Arc<RwLock<CircuitPin>>,
 }
 
-#[derive(Debug)]
-pub struct CircuitPin {
-    pub id: CircuitPinId,
-    pub wire: Option<usize>,
+impl CircuitPinInfo {
+    fn get_input(&self, state: &CircuitState) -> WireState {
+        state
+            .pins
+            .get_clone(self.pin.read().unwrap().id.id)
+            .unwrap_or_default()
+    }
+
+    fn set_output(&self, state: &State, my_state: &mut CircuitState, value: WireState) {
+        let CircuitPin {
+            id: CircuitPinId { circuit_id: _, id },
+            wire,
+            dir: _,
+        } = *self.pin.read().unwrap();
+
+        let current = my_state.pins.get_clone(id).unwrap_or_default();
+        if current == value {
+            return;
+        }
+
+        my_state.pins.set(value, id);
+        if let Some(wire) = wire {
+            state.queue.lock().unwrap().enqueue(UpdateTask::UpdateWireState(wire))
+        }
+    }
 }
 
 impl CircuitPinInfo {
@@ -56,6 +126,7 @@ impl CircuitPinInfo {
             dir,
             pin: Arc::new(RwLock::new(CircuitPin {
                 id: Default::default(),
+                dir,
                 wire: None,
             })),
         }
@@ -66,7 +137,7 @@ pub struct Circuit {
     pub id: usize,
     pub pos: Vec2i,
     pub info: RwLock<CircuitInfo>,
-    pub imp: Box<dyn CircuitImpl>,
+    pub imp: Arc<RwLock<Box<dyn CircuitImpl>>>,
 }
 
 impl Circuit {
@@ -84,7 +155,7 @@ impl Circuit {
                 size: preview.size(),
                 pins,
             }),
-            imp,
+            imp: Arc::new(RwLock::new(imp)),
         }
     }
 }
@@ -93,6 +164,8 @@ pub trait CircuitImpl {
     fn draw(&self, circuit: &Circuit, ctx: &PaintContext);
 
     fn create_pins(&self) -> Box<[CircuitPinInfo]>;
+
+    fn update_signals(&mut self, state: &State, my_state: &mut CircuitState, changed_pin: Option<usize>);
 }
 
 pub trait CircuitPreview: std::fmt::Debug {
@@ -122,6 +195,7 @@ impl Circuits {
 
     pub fn update(
         &mut self,
+        state: &State,
         wires: &mut Wires,
         ctx: &PaintContext,
         selected: Option<&Box<dyn CircuitPreview>>,
@@ -154,18 +228,19 @@ impl Circuits {
                 let screen_size = circ_info.size.convert_values(|v| v as f32) * ctx.screen.scale;
                 let rect = Rect::from_min_size(screen_pos.into(), screen_size.into());
                 let circ_ctx = ctx.with_rect(rect);
-                circuit.imp.draw(&circuit, &circ_ctx);
+                circuit.imp.read().unwrap().draw(&circuit, &circ_ctx);
             },
         );
 
         match selected {
             None => return,
-            Some(p) => self.handle_preview(wires, ctx, p),
+            Some(p) => self.handle_preview(state, wires, ctx, p),
         };
     }
 
     fn handle_preview(
         &mut self,
+        state: &State,
         wires: &mut Wires,
         ctx: &PaintContext<'_>,
         preview: &Box<dyn CircuitPreview>,
@@ -222,15 +297,15 @@ impl Circuits {
 
             for pin in circ.info.read().unwrap().pins.iter() {
                 let pos = place_pos + pin.pos.convert_values(|v| v as i32);
-                if let Some(wire) = wires
-                    .create_intersection(pos, None)
-                {
+                if let Some(wire) = wires.create_intersection(pos, None) {
                     pin.pin.write().unwrap().wire = Some(wire.id);
                     if let Some(p) = wire.nodes.get_mut(&pos) {
                         p.pin = Some(pin.pin.clone());
                     }
                 }
             }
+
+            state.update_circuit(circ, None);
         }
     }
 
@@ -266,7 +341,7 @@ pub struct TestCircuitImpl {
 impl TestCircuitImpl {
     fn new() -> Self {
         Self {
-            pin: CircuitPinInfo::new([0, 0], PinDirection::Inside),
+            pin: CircuitPinInfo::new([0, 0], PinDirection::Outside),
         }
     }
 }
@@ -302,6 +377,10 @@ impl CircuitImpl for TestCircuitImpl {
 
     fn create_pins(&self) -> Box<[CircuitPinInfo]> {
         vec![self.pin.clone()].into_boxed_slice()
+    }
+
+    fn update_signals(&mut self, state: &State, my_state: &mut CircuitState, changed_pin: Option<usize>) {
+        self.pin.set_output(state, my_state, WireState::True);
     }
 }
 
