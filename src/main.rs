@@ -705,7 +705,7 @@ pub enum WireState {
 }
 
 impl WireState {
-    fn combine(&self, state: WireState) -> WireState {
+    pub fn combine(&self, state: WireState) -> WireState {
         match (*self, state) {
             (WireState::None, other) => other,
             (other, WireState::None) => other,
@@ -717,6 +717,16 @@ impl WireState {
             (WireState::True, WireState::True) => WireState::True,
             (WireState::False, WireState::False) => WireState::True,
         }
+    }
+
+    pub fn color(&self) -> Color32 {
+        let rgb = match self {
+            Self::None => [0, 0, 200],
+            Self::True => [0, 255, 0],
+            Self::False => [0, 127, 200],
+            Self::Error => [200, 0, 0],
+        };
+        Color32::from_rgb(rgb[0], rgb[1], rgb[2])
     }
 }
 

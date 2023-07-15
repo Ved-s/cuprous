@@ -1,7 +1,6 @@
 use std::{
-    collections::{hash_map::DefaultHasher, HashMap, HashSet},
+    collections::{HashMap, HashSet},
     f32::consts::TAU,
-    hash::Hasher,
     num::NonZeroU32,
     sync::{Arc, RwLock},
 };
@@ -16,7 +15,7 @@ use crate::{
     circuits::{CircuitPin, Circuits},
     containers::{Chunks2D, ChunksLookaround, FixedVec},
     vector::{Vec2f, Vec2i, Vector},
-    OptionalInt, PaintContext, SizeCalc, State, UpdateTask,
+    OptionalInt, PaintContext, SizeCalc, State,
 };
 
 #[derive(Debug, Default)]
@@ -27,13 +26,7 @@ pub struct Wire {
 
 impl Wire {
     fn color(&self, state: &State) -> Color32 {
-        let rgb = match state.read_wire(self.id) {
-            crate::WireState::None => [0, 0, 200],
-            crate::WireState::True => [0, 255, 0],
-            crate::WireState::False => [0, 127, 200],
-            crate::WireState::Error => [200, 0, 0],
-        };
-        Color32::from_rgb(rgb[0], rgb[1], rgb[2])
+        state.read_wire(self.id).color()
     }
 }
 
@@ -139,7 +132,6 @@ impl Wires {
             if interaction.clicked_by(egui::PointerButton::Primary) && self.wire_drag_pos.is_none()
             {
                 if let Some(affected_wires) = self.try_toggle_node_intersection(mouse_pos) {
-                    let mut q = state.queue.lock().unwrap();
                     for id in affected_wires {
                         if let Some(wire) = self.wires.get(id) {
                             state.update_wire(wire);

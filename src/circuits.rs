@@ -10,7 +10,7 @@ use crate::{
     containers::{Chunks2D, FixedVec},
     vector::{IsZero, Vec2f, Vec2i, Vec2u, Vector},
     wires::Wires,
-    CircuitState, OptionalInt, PaintContext, State, WireState, UpdateTask,
+    CircuitState, OptionalInt, PaintContext, State, UpdateTask, WireState,
 };
 
 pub struct CircuitInfo {
@@ -114,7 +114,11 @@ impl CircuitPinInfo {
 
         my_state.pins.set(value, id);
         if let Some(wire) = wire {
-            state.queue.lock().unwrap().enqueue(UpdateTask::UpdateWireState(wire))
+            state
+                .queue
+                .lock()
+                .unwrap()
+                .enqueue(UpdateTask::UpdateWireState(wire))
         }
     }
 }
@@ -161,11 +165,16 @@ impl Circuit {
 }
 
 pub trait CircuitImpl {
-    fn draw(&self, circuit: &Circuit, ctx: &PaintContext);
+    fn draw(&self, state: &State, circuit: &Circuit, ctx: &PaintContext);
 
     fn create_pins(&self) -> Box<[CircuitPinInfo]>;
 
-    fn update_signals(&mut self, state: &State, my_state: &mut CircuitState, changed_pin: Option<usize>);
+    fn update_signals(
+        &mut self,
+        state: &State,
+        my_state: &mut CircuitState,
+        changed_pin: Option<usize>,
+    );
 }
 
 pub trait CircuitPreview: std::fmt::Debug {
@@ -228,7 +237,7 @@ impl Circuits {
                 let screen_size = circ_info.size.convert_values(|v| v as f32) * ctx.screen.scale;
                 let rect = Rect::from_min_size(screen_pos.into(), screen_size.into());
                 let circ_ctx = ctx.with_rect(rect);
-                circuit.imp.read().unwrap().draw(&circuit, &circ_ctx);
+                circuit.imp.read().unwrap().draw(state, &circuit, &circ_ctx);
             },
         );
 
@@ -347,39 +356,69 @@ impl TestCircuitImpl {
 }
 
 impl CircuitImpl for TestCircuitImpl {
-    fn draw(&self, circ: &Circuit, ctx: &PaintContext) {
+    fn draw(&self, state: &State, circ: &Circuit, ctx: &PaintContext) {
+
+        for pin in circ.info.read().unwrap().pins.iter() {
+            let pos = circ.pos + pin.pos.convert_values(|v| v as i32); 
+            let pin = pin.pin.read().unwrap();
+            if pin.wire.is_some() {
+                continue;
+            }
+            let color = pin.get_state(state).color();
+            let pos = ctx.screen.world_to_screen_tile(pos) + ctx.screen.scale / 2.0;
+            ctx.paint.circle_filled(pos.into(), ctx.screen.scale * 0.1, color);
+        }
+
         let font_id = eframe::egui::TextStyle::Monospace.resolve(ctx.ui.style());
+
+        let rect = {
+            let mut r = ctx.rect;
+            *r.left_mut() += ctx.screen.scale / 2.0;
+            *r.right_mut() -= ctx.screen.scale / 2.0;
+            r
+        };
         ctx.paint.rect_filled(
-            ctx.rect,
+            rect,
             Rounding::none(),
-            Color32::from_rgba_unmultiplied(0, 255, 0, 100),
+            Color32::from_gray(100),
         );
 
-        let wire = self
-            .pin
-            .pin
-            .read()
-            .unwrap()
-            .wire
-            .map(|v| v as i32)
-            .unwrap_or(-1);
-
-        let text = format!("{}, {}", circ.id, wire);
+        let wire = self.pin.pin.read().unwrap().wire.map(|v| v as i32);
 
         ctx.paint.text(
-            ctx.rect.center(),
-            Align2::CENTER_CENTER,
-            text,
-            font_id,
+            rect.center_bottom(),
+            Align2::CENTER_BOTTOM,
+            circ.id.to_string(),
+            font_id.clone(),
             Color32::WHITE,
         );
+
+        if let Some(wire) = wire {
+
+            let pos = circ.pos + self.pin.pos.convert_values(|v| v as i32); 
+            let pos = ctx.screen.world_to_screen_tile(pos) + ctx.screen.scale / 2.0;
+            let pos = pos + [ctx.screen.scale / 4.0, 0.0];
+
+            ctx.paint.text(
+                pos.into(),
+                Align2::LEFT_CENTER,
+                wire.to_string(),
+                font_id,
+                Color32::WHITE,
+            );
+        }
     }
 
     fn create_pins(&self) -> Box<[CircuitPinInfo]> {
         vec![self.pin.clone()].into_boxed_slice()
     }
 
-    fn update_signals(&mut self, state: &State, my_state: &mut CircuitState, changed_pin: Option<usize>) {
+    fn update_signals(
+        &mut self,
+        state: &State,
+        my_state: &mut CircuitState,
+        changed_pin: Option<usize>,
+    ) {
         self.pin.set_output(state, my_state, WireState::True);
     }
 }
