@@ -47,7 +47,7 @@ impl<const SIZE: usize, T: VectorValue> Vector<SIZE, T> {
     }
 
     pub fn with<const INDEX: usize>(&self, value: T) -> Self where Bool<{SIZE > INDEX}>: True {
-        let mut c = self.clone();
+        let mut c = *self;
         c.0[INDEX] = value;
         c
     }
@@ -105,7 +105,7 @@ macro_rules! impl_vec_component {
                 }
 
                 #[inline]
-                pub fn [< $name _mut >]<'a>(&'a mut self) -> &'a mut T {
+                pub fn [< $name _mut >](&mut self) -> &mut T {
                     &mut self.0[$index]
                 }
             }
@@ -199,13 +199,13 @@ impl<const SIZE: usize, T: VectorValue> From<T> for Vector<SIZE, T> {
 
 impl<const SIZE: usize, T: VectorValue> From<[T; SIZE]> for Vector<SIZE, T> {
     fn from(value: [T; SIZE]) -> Self {
-        Self(value.clone())
+        Self(value)
     }
 }
 
-impl<const SIZE: usize, T: VectorValue> Into<[T; SIZE]> for Vector<SIZE, T> {
-    fn into(self) -> [T; SIZE] {
-        self.0
+impl<const SIZE: usize, T: VectorValue> From<Vector<SIZE, T>> for [T; SIZE] {
+    fn from(val: Vector<SIZE, T>) -> Self {
+        val.0
     }
 }
 
@@ -245,15 +245,15 @@ impl Vector<2, f32> {
     }
 }
 
-impl Into<emath::Pos2> for Vec2f {
-    fn into(self) -> emath::Pos2 {
-        emath::pos2(self.x(), self.y())
+impl From<Vec2f> for emath::Pos2 {
+    fn from(val: Vec2f) -> Self {
+        emath::pos2(val.x(), val.y())
     }
 }
 
-impl Into<emath::Vec2> for Vec2f {
-    fn into(self) -> emath::Vec2 {
-        emath::vec2(self.x(), self.y())
+impl From<Vec2f> for emath::Vec2 {
+    fn from(val: Vec2f) -> Self {
+        emath::vec2(val.x(), val.y())
     }
 }
 

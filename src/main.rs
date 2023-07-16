@@ -345,7 +345,7 @@ impl eframe::App for App {
                     &ctx,
                     match &self.selected {
                         SelectedItem::Wires => None,
-                        SelectedItem::Circuit(p) => Some(p),
+                        SelectedItem::Circuit(p) => Some(p.as_ref()),
                     },
                 );
 

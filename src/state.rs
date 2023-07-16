@@ -1,6 +1,5 @@
 use std::{
     any::Any,
-    collections::HashMap,
     sync::{Arc, Mutex, RwLock},
     time::{Duration, Instant},
 };
@@ -75,10 +74,10 @@ impl CircuitState {
         self.internal.as_ref()?.downcast_ref()
     }
 
-    pub fn get_internal_mut<'a, T: InternalCircuitState>(&'a mut self) -> &'a mut T {
-        let b = self.internal.get_or_insert_with(|| Box::new(T::default()));
+    pub fn get_internal_mut<T: InternalCircuitState>(&mut self) -> &mut T {
+        let b = self.internal.get_or_insert_with(|| Box::<T>::default());
         if !b.is::<T>() {
-            *b = Box::new(T::default());
+            *b = Box::<T>::default();
         }
 
         b.downcast_mut().expect("unreachable")
@@ -118,19 +117,19 @@ impl State {
         self.wires
             .write()
             .unwrap()
-            .get_or_create_mut(id, || Default::default())
+            .get_or_create_mut(id, Default::default)
             .clone()
     }
 
     pub fn read_circuit(&self, id: usize) -> Option<Arc<RwLock<CircuitState>>> {
-        self.circuits.read().unwrap().get(id).map(|s| s.clone())
+        self.circuits.read().unwrap().get(id).cloned()
     }
 
     pub fn get_circuit(&self, id: usize) -> Arc<RwLock<CircuitState>> {
         self.circuits
             .write()
             .unwrap()
-            .get_or_create_mut(id, || Default::default())
+            .get_or_create_mut(id, Default::default)
             .clone()
     }
 
@@ -140,7 +139,7 @@ impl State {
         match index {
             Some(v) => v.1 = Instant::now() + dur,
             None => {
-                let i = updates.len();
+                let _i = updates.len();
                 updates.push((id, Instant::now() + dur))
             }
         }

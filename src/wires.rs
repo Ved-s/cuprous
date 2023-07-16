@@ -945,16 +945,13 @@ impl Wires {
         let connections: HashMap<_, _> = wire
             .nodes
             .iter()
-            .filter_map(|n| match n.1.pin.as_ref() {
-                None => None,
-                Some(arc) => Some((n.0, arc.clone())),
-            })
+            .filter_map(|n| n.1.pin.as_ref().map(|arc| (n.0, arc.clone())))
             .collect();
 
-        let mut remaining_nodes: HashSet<_> = wire.nodes.keys().map(|v| *v).collect();
+        let mut remaining_nodes: HashSet<_> = wire.nodes.keys().copied().collect();
         let mut queue = vec![];
 
-        while remaining_nodes.len() > 0 {
+        while !remaining_nodes.is_empty() {
             let mut group = HashMap::new();
             let start = *remaining_nodes.iter().next().unwrap();
             queue.push(start);
@@ -967,17 +964,17 @@ impl Wires {
                 group.insert(
                     pos,
                     WirePoint {
-                        pin: connections.get(&pos).and_then(|c| Some(c.clone())),
+                        pin: connections.get(&pos).cloned(),
                     },
                 );
 
                 let (ints, intc) = self.node_neighboring_intersections(pos, Some(id));
-                for inti in 0..intc {
+                (0..intc).for_each(|inti| {
                     let int = ints[inti];
                     if remaining_nodes.contains(&int) {
                         queue.push(int);
                     }
-                }
+                });
             }
             groups.push(group);
         }

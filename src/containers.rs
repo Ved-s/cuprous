@@ -1,7 +1,6 @@
 use std::{
     collections::hash_map::RandomState,
     hash::{BuildHasher, Hasher},
-    mem::MaybeUninit,
     ops::Range,
 };
 
@@ -57,7 +56,7 @@ impl<T> FixedVec<T> {
     }
 
     pub fn get_clone(&self, pos: usize) -> Option<T> where T: Clone {
-        self.vec.get(pos)?.as_ref().map(|v| v.clone())
+        self.vec.get(pos)?.as_ref().cloned()
     }
 
     pub fn get_mut(&mut self, pos: usize) -> Option<&mut T> {
@@ -91,7 +90,7 @@ impl<T> FixedVec<T> {
 
         if pos == self.vec.len() - 1 {
             self.vec.remove(pos);
-            while self.vec.len() > 0 && self.vec[self.vec.len() - 1].is_none() {
+            while !self.vec.is_empty() && self.vec[self.vec.len() - 1].is_none() {
                 self.vec.remove(self.vec.len() - 1);
             }
         }
@@ -103,7 +102,7 @@ impl<T> FixedVec<T> {
         self.vec.get(pos).is_some_and(|v| v.is_some())
     }
 
-    pub fn set<'a>(&'a mut self, value: T, into: usize) -> VecSetResult<'a, T> {
+    pub fn set(&mut self, value: T, into: usize) -> VecSetResult<'_, T> {
         if into >= self.vec.len() {
             if self.vec.len() != into && self.first_free.is_none() {
                 self.first_free = Some(self.vec.len())
@@ -129,7 +128,7 @@ impl<T> FixedVec<T> {
 
         return VecSetResult {
             value_ref: self.vec[into].as_mut().unwrap(),
-            prev: prev,
+            prev,
         };
     }
 
@@ -140,7 +139,7 @@ impl<T> FixedVec<T> {
         }
     }
 
-    pub fn iter<'a>(&'a self) -> FixedVecIterator<'a, T> {
+    pub fn iter(&self) -> FixedVecIterator<'_, T> {
         FixedVecIterator {
             vec: &self.vec,
             pos: 0,
@@ -268,7 +267,7 @@ impl<const CHUNK_SIZE: usize, T: Default> Chunks2D<CHUNK_SIZE, T> {
         ((x, y), quarter)
     }
 
-    pub fn get_chunk<'a>(&'a self, x: isize, y: isize) -> Option<&'a Chunk<CHUNK_SIZE, T>> {
+    pub fn get_chunk(&self, x: isize, y: isize) -> Option<&Chunk<CHUNK_SIZE, T>> {
         let ((qx, qy), qid) = Self::to_quarter_id_pos(x, y);
         let quarter = &self.quarters[qid];
         let row = quarter.get(qy)?;
@@ -276,11 +275,11 @@ impl<const CHUNK_SIZE: usize, T: Default> Chunks2D<CHUNK_SIZE, T> {
             .and_then(|row| row.get(qx)?.as_ref().map(|b| b.as_ref()))
     }
 
-    pub fn get_chunk_mut<'a>(
-        &'a mut self,
+    pub fn get_chunk_mut(
+        &mut self,
         x: isize,
         y: isize,
-    ) -> Option<&'a mut Chunk<CHUNK_SIZE, T>> {
+    ) -> Option<&mut Chunk<CHUNK_SIZE, T>> {
         let ((qx, qy), qid) = Self::to_quarter_id_pos(x, y);
         let quarter = &mut self.quarters[qid];
         let row = quarter.get_mut(qy)?;

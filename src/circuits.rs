@@ -1,6 +1,6 @@
 use std::{
     collections::HashSet,
-    sync::{Arc, RwLock, RwLockReadGuard},
+    sync::{Arc, RwLock},
     time::Duration,
 };
 
@@ -61,8 +61,7 @@ impl CircuitPin {
                     cs.read()
                         .unwrap()
                         .pins
-                        .get(self.id.id)
-                        .map(|s| *s)
+                        .get(self.id.id).copied()
                         .unwrap_or_default()
                 })
                 .unwrap_or_default(),
@@ -275,7 +274,7 @@ impl Circuits {
         state: &State,
         wires: &mut Wires,
         ctx: &PaintContext,
-        selected: Option<&Box<dyn CircuitPreview>>,
+        selected: Option<&dyn CircuitPreview>,
     ) {
         ctx.draw_chunks(
             &self.nodes,
@@ -313,9 +312,9 @@ impl Circuits {
         );
 
         match selected {
-            None => return,
+            None => (),
             Some(p) => self.handle_preview(state, wires, ctx, p),
-        };
+        }
     }
 
     fn handle_preview(
@@ -323,7 +322,7 @@ impl Circuits {
         state: &State,
         wires: &mut Wires,
         ctx: &PaintContext<'_>,
-        preview: &Box<dyn CircuitPreview>,
+        preview: &dyn CircuitPreview,
     ) {
         let mouse_tile_pos = ctx
             .egui_ctx
@@ -361,7 +360,7 @@ impl Circuits {
             }
 
             let cid = self.cirtuits.first_free_pos();
-            let circ = Circuit::create(cid, place_pos, preview.as_ref());
+            let circ = Circuit::create(cid, place_pos, preview);
             let circ = self.cirtuits.set(circ, cid).value_ref;
 
             for j in 0..size.y() {
