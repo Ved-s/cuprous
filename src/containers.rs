@@ -430,6 +430,8 @@ impl<T, S: BuildHasher> RandomQueue<T, S> {
         self.len += 1;
     }
 
+
+    // TODO: Queue length (1) does not match internal vector (0)! when connecting all test circuit pins
     pub fn dequeue(&mut self) -> Option<T> {
         if self.len == 0 {
             return None;
@@ -438,7 +440,7 @@ impl<T, S: BuildHasher> RandomQueue<T, S> {
         let pos = (self.hasher.finish() % self.len as u64) as usize;
         let real_pos = match self.vec.get_nth_existing_index(pos) {
             Some(v) => v,
-            None => unreachable!("Queue length does not match internal vector!"),
+            None => unreachable!("Queue length ({}) does not match internal vector ({})!", self.len, self.vec.iter().count()),
         };
         let item = match self.vec.remove(real_pos) {
             Some(v) => v,

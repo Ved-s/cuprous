@@ -66,6 +66,7 @@ pub trait InternalCircuitState: Any + Default {}
 #[derive(Default)]
 pub struct CircuitState {
     pub pins: FixedVec<WireState>,
+    pub pin_dirs: FixedVec<PinDirection>,
     pub internal: Option<Box<dyn Any>>,
 }
 
@@ -149,7 +150,10 @@ impl State {
         let mut limit = 10;
         while limit > 0 {
             limit -= 1;
-            if let Some(task) = self.queue.lock().unwrap().dequeue() {
+
+            let queue_item = { self.queue.lock().unwrap().dequeue() };
+
+            if let Some(task) = queue_item {
                 match task {
                     UpdateTask::UpdateWireState(wire) => {
                         if let Some(wire) = wires.wires.get(wire) {
@@ -202,7 +206,7 @@ impl State {
         for (_, point) in wire.nodes.iter() {
             if let Some(pin) = &point.pin {
                 let pin = pin.read().unwrap();
-                if let PinDirection::Outside = pin.dir {
+                if let PinDirection::Outside = pin.direction(self) {
                     state = state.combine(pin.get_state(self))
                 }
             }
@@ -217,14 +221,8 @@ impl State {
         for (_, point) in wire.nodes.iter() {
             if let Some(pin) = &point.pin {
                 let pin = pin.read().unwrap();
-                if let PinDirection::Inside = pin.dir {
-                    self.queue
-                        .lock()
-                        .unwrap()
-                        .enqueue(UpdateTask::UpdateCircuitSignals {
-                            id: pin.id.circuit_id,
-                            pin: Some(pin.id.id),
-                        })
+                if let PinDirection::Inside = pin.direction(self) {
+                    pin.set_input(self, state)
                 }
             }
         }

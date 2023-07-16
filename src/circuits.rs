@@ -24,8 +24,17 @@ pub struct CircuitInfo {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub enum InternalPinDirection {
+    StateDependent { default: PinDirection },
+    Inside,
+    Outside,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum PinDirection {
     Inside,
+
+    #[default]
     Outside,
 }
 
@@ -45,27 +54,40 @@ impl CircuitPinId {
 pub struct CircuitPin {
     pub id: CircuitPinId,
     pub wire: Option<usize>,
-    pub dir: PinDirection,
+    dir: InternalPinDirection,
 }
 
 impl CircuitPin {
-    pub fn get_state(&self, state: &State) -> WireState {
+    pub fn direction(&self, state: &State) -> PinDirection {
         match self.dir {
-            PinDirection::Inside => self
-                .wire
-                .map(|wire| state.read_wire(wire))
-                .unwrap_or_default(),
-            PinDirection::Outside => state
+            InternalPinDirection::Inside => PinDirection::Inside,
+            InternalPinDirection::Outside => PinDirection::Outside,
+            InternalPinDirection::StateDependent { default } => state
                 .read_circuit(self.id.circuit_id)
                 .map(|cs| {
                     cs.read()
                         .unwrap()
-                        .pins
-                        .get(self.id.id).copied()
-                        .unwrap_or_default()
+                        .pin_dirs
+                        .get(self.id.id)
+                        .cloned()
+                        .unwrap_or(default)
                 })
-                .unwrap_or_default(),
+                .unwrap_or(default),
         }
+    }
+
+    pub fn get_state(&self, state: &State) -> WireState {
+        state
+            .read_circuit(self.id.circuit_id)
+            .map(|cs| {
+                cs.read()
+                    .unwrap()
+                    .pins
+                    .get(self.id.id)
+                    .copied()
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default()
     }
 
     pub fn set_input(&self, state: &State, value: WireState) {
@@ -92,15 +114,20 @@ impl CircuitPin {
 #[derive(Debug, Clone)]
 pub struct CircuitPinInfo {
     pos: Vec2u,
-    dir: PinDirection,
     pin: Arc<RwLock<CircuitPin>>,
 }
 
 impl CircuitPinInfo {
-    fn get_input(&self, state: &CircuitState) -> WireState {
-        state
-            .pins
-            .get_clone(self.pin.read().unwrap().id.id)
+    fn get_input(&self, state_ctx: &CircuitStateContext) -> WireState {
+        state_ctx
+            .read_circuit_state()
+            .map(|cs| {
+                cs.read()
+                    .unwrap()
+                    .pins
+                    .get_clone(self.pin.read().unwrap().id.id)
+                    .unwrap_or_default()
+            })
             .unwrap_or_default()
     }
 
@@ -134,13 +161,51 @@ impl CircuitPinInfo {
                 .enqueue(UpdateTask::UpdateWireState(wire))
         }
     }
+
+    fn set_direction(&self, state_ctx: &CircuitStateContext, dir: PinDirection) {
+        let (pin_id, wire) = {
+            let pin = self.pin.read().unwrap();
+            (pin.id, pin.wire)
+        };
+        {
+            let state = state_ctx.get_circuit_state();
+            let mut state = state.write().unwrap();
+
+            if state.pin_dirs.get(pin_id.id).is_some_and(|d| *d == dir) {
+                return;
+            }
+
+            state.pin_dirs.set(dir, pin_id.id);
+        }
+
+        match dir {
+            PinDirection::Inside => match wire {
+                Some(wire) => state_ctx
+                    .global_state
+                    .queue
+                    .lock()
+                    .unwrap()
+                    .enqueue(UpdateTask::UpdateWireState(wire)),
+                None => self
+                    .pin
+                    .read()
+                    .unwrap()
+                    .set_input(state_ctx.global_state, Default::default()),
+            },
+            PinDirection::Outside => state_ctx.global_state.queue.lock().unwrap().enqueue(
+                UpdateTask::UpdateCircuitSignals {
+                    id: pin_id.circuit_id,
+                    pin: Some(pin_id.id),
+                },
+            ),
+        }
+    }
 }
 
 impl CircuitPinInfo {
-    fn new(pos: impl Into<Vec2u>, dir: PinDirection) -> Self {
+    fn new(pos: impl Into<Vec2u>, dir: InternalPinDirection) -> Self {
         Self {
             pos: pos.into(),
-            dir,
             pin: Arc::new(RwLock::new(CircuitPin {
                 id: Default::default(),
                 dir,
@@ -385,10 +450,7 @@ impl Circuits {
             }
 
             let state_ctx = CircuitStateContext::new(state, circ);
-            state.update_circuit_signals(
-                &state_ctx,
-                None,
-            );
+            state.update_circuit_signals(&state_ctx, None);
 
             if let Some(duration) = circ.imp.read().unwrap().update_interval(&state_ctx) {
                 self.updates.insert(cid);
@@ -426,18 +488,28 @@ impl Default for Circuits {
 #[derive(Default)]
 pub struct TestCircuitState {
     state: bool,
+    dir_out: bool,
 }
 
 impl InternalCircuitState for TestCircuitState {}
 
 pub struct TestCircuitImpl {
-    pin: CircuitPinInfo,
+    clock_pin: CircuitPinInfo,
+    dir_pin: CircuitPinInfo,
+    io_pin: CircuitPinInfo,
 }
 
 impl TestCircuitImpl {
     fn new() -> Self {
         Self {
-            pin: CircuitPinInfo::new([0, 0], PinDirection::Outside),
+            clock_pin: CircuitPinInfo::new([0, 0], InternalPinDirection::Outside),
+            dir_pin: CircuitPinInfo::new([0, 1], InternalPinDirection::Inside),
+            io_pin: CircuitPinInfo::new(
+                [1, 1],
+                InternalPinDirection::StateDependent {
+                    default: PinDirection::Inside,
+                },
+            ),
         }
     }
 }
@@ -469,7 +541,7 @@ impl CircuitImpl for TestCircuitImpl {
             .paint
             .rect_filled(rect, Rounding::none(), Color32::from_gray(100));
 
-        let wire = self.pin.pin.read().unwrap().wire.map(|v| v as i32);
+        let wire = self.clock_pin.pin.read().unwrap().wire.map(|v| v as i32);
 
         paint_ctx.paint.text(
             rect.center_bottom(),
@@ -480,7 +552,7 @@ impl CircuitImpl for TestCircuitImpl {
         );
 
         if let Some(wire) = wire {
-            let pos = state_ctx.circuit.pos + self.pin.pos.convert_values(|v| v as i32);
+            let pos = state_ctx.circuit.pos + self.clock_pin.pos.convert_values(|v| v as i32);
             let pos = paint_ctx.screen.world_to_screen_tile(pos) + paint_ctx.screen.scale / 2.0;
             let pos = pos + [paint_ctx.screen.scale / 4.0, 0.0];
 
@@ -495,17 +567,52 @@ impl CircuitImpl for TestCircuitImpl {
     }
 
     fn create_pins(&self) -> Box<[CircuitPinInfo]> {
-        vec![self.pin.clone()].into_boxed_slice()
+        vec![
+            self.clock_pin.clone(),
+            self.dir_pin.clone(),
+            self.io_pin.clone(),
+        ]
+        .into_boxed_slice()
     }
 
-    fn update_signals(&mut self, state_ctx: &CircuitStateContext, _: Option<usize>) {
-        self.pin.set_output(
-            state_ctx,
-            state_ctx
-                .read_circuit_internal_state::<TestCircuitState, _>(|s| s.state)
-                .unwrap_or_default()
-                .into(),
-        );
+    fn update_signals(&mut self, state_ctx: &CircuitStateContext, pin: Option<usize>) {
+        match pin {
+            Some(1) => {
+                let new_dir_out = matches!(self.dir_pin.get_input(state_ctx), WireState::True);
+                let dir = state_ctx.write_circuit_internal_state::<TestCircuitState, _>(|cs| {
+                    if cs.dir_out == new_dir_out {
+                        None
+                    } else {
+                        cs.dir_out = new_dir_out;
+                        Some(if new_dir_out {
+                            PinDirection::Outside
+                        } else {
+                            PinDirection::Inside
+                        })
+                    }
+                });
+                if let Some(dir) = dir {
+                    self.io_pin.set_direction(state_ctx, dir);
+                }
+            },
+            Some(2) => {
+                let dir_out = state_ctx.read_circuit_internal_state::<TestCircuitState, _>(|cs| cs.dir_out);
+                if dir_out == Some(true) {
+                    self.io_pin.set_output(state_ctx, WireState::True);
+                }
+            }
+            None => {
+                self.clock_pin.set_output(
+                    state_ctx,
+                    state_ctx
+                        .read_circuit_internal_state::<TestCircuitState, _>(|s| s.state)
+                        .unwrap_or_default()
+                        .into(),
+                );
+            }
+
+            _ => {}
+        }
     }
 
     fn update(&mut self, state_ctx: &CircuitStateContext) {
@@ -514,7 +621,7 @@ impl CircuitImpl for TestCircuitImpl {
             s.state
         });
 
-        self.pin.set_output(state_ctx, new_state.into());
+        self.clock_pin.set_output(state_ctx, new_state.into());
     }
 
     fn update_interval(&self, state_ctx: &CircuitStateContext) -> Option<Duration> {
