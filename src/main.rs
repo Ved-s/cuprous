@@ -6,7 +6,7 @@ use std::{
     mem::size_of,
     ops::Range,
     rc::Rc,
-    sync::{Arc, Mutex, RwLock},
+    sync::Arc,
     time::Instant,
 };
 
@@ -20,16 +20,18 @@ mod r#const;
 
 mod vector;
 use vector::{Vec2f, Vec2i, Vector};
-use wires::Wire;
 
 mod containers;
 use crate::containers::*;
 
 mod circuits;
-use circuits::{CircuitPreview, Circuits, PinDirection, Circuit};
+use circuits::{CircuitPreview, Circuits};
 
 mod wires;
 use crate::wires::Wires;
+
+mod state;
+use state::State;
 
 fn main() {
     eframe::run_native(
@@ -280,6 +282,7 @@ impl eframe::App for App {
                 }
             }
         }
+        ctx.request_repaint();
         self.last_win_pos = int_info.window_info.position;
 
         self.state.update(&self.wires, &self.circuits);
@@ -689,156 +692,3 @@ macro_rules! impl_integer_trait {
 
 impl_integer_trait!(signed i8, i16, i32, i64, i128, isize);
 impl_integer_trait!(unsigned u8, u16, u32, u64, u128, usize);
-
-pub enum UpdateTask {
-    UpdateCircuit { id: usize, pin: Option<usize> },
-    UpdateWireState(usize),
-}
-
-#[derive(Default, Clone, Copy, Eq, PartialEq)]
-pub enum WireState {
-    #[default]
-    None,
-    True,
-    False,
-    Error,
-}
-
-impl WireState {
-    pub fn combine(&self, state: WireState) -> WireState {
-        match (*self, state) {
-            (WireState::None, other) => other,
-            (other, WireState::None) => other,
-            (WireState::Error, _) => WireState::Error,
-            (_, WireState::Error) => WireState::Error,
-            (WireState::True, WireState::False) => WireState::Error,
-            (WireState::False, WireState::True) => WireState::Error,
-
-            (WireState::True, WireState::True) => WireState::True,
-            (WireState::False, WireState::False) => WireState::True,
-        }
-    }
-
-    pub fn color(&self) -> Color32 {
-        let rgb = match self {
-            Self::None => [0, 0, 200],
-            Self::True => [0, 255, 0],
-            Self::False => [0, 127, 200],
-            Self::Error => [200, 0, 0],
-        };
-        Color32::from_rgb(rgb[0], rgb[1], rgb[2])
-    }
-}
-
-#[derive(Default)]
-pub struct CircuitState {
-    pub pins: FixedVec<WireState>,
-}
-
-pub struct State {
-    pub wires: Arc<RwLock<FixedVec<Arc<RwLock<WireState>>>>>,
-    pub circuits: Arc<RwLock<FixedVec<Arc<RwLock<CircuitState>>>>>,
-
-    pub queue: Arc<Mutex<RandomQueue<UpdateTask>>>,
-}
-
-impl Default for State {
-    fn default() -> Self {
-        Self {
-            wires: Arc::new(RwLock::new(vec![].into())),
-            circuits: Arc::new(RwLock::new(vec![].into())),
-            queue: Arc::new(Mutex::new(RandomQueue::new())),
-        }
-    }
-}
-
-impl State {
-    fn read_wire(&self, id: usize) -> WireState {
-        self.wires
-            .read()
-            .unwrap()
-            .get(id)
-            .map(|s| *s.read().unwrap())
-            .unwrap_or_default()
-    }
-
-    fn get_wire(&self, id: usize) -> Arc<RwLock<WireState>> {
-        self.wires
-            .write()
-            .unwrap()
-            .get_or_create_mut(id, || Default::default())
-            .clone()
-    }
-
-    fn read_circuit(&self, id: usize) -> Option<Arc<RwLock<CircuitState>>> {
-        self.circuits
-            .read()
-            .unwrap()
-            .get(id)
-            .map(|s| s.clone())
-    }
-
-    fn get_circuit(&self, id: usize) -> Arc<RwLock<CircuitState>> {
-        self.circuits
-            .write()
-            .unwrap()
-            .get_or_create_mut(id, || Default::default())
-            .clone()
-    }
-
-    fn update(&self, wires: &Wires, circuits: &Circuits) {
-        let mut limit = 10;
-        while limit > 0 {
-            limit -= 1;
-            let task = match self.queue.lock().unwrap().dequeue() {
-                None => break,
-                Some(t) => t,
-            };
-
-            match task {
-                UpdateTask::UpdateWireState(wire) => {
-                    if let Some(wire) = wires.wires.get(wire) {
-                        self.update_wire(wire);
-                    }
-                },
-                UpdateTask::UpdateCircuit { id, pin } => {
-                    if let Some(circuit) = circuits.cirtuits.get(id) {
-                        self.update_circuit(circuit, pin);
-                    }
-                },
-            }
-        }
-    }
-
-    fn update_wire(&self, wire: &Wire) {
-        
-        let mut state = WireState::None;
-        for (_, point) in wire.nodes.iter() {
-            if let Some(pin) = &point.pin {
-                let pin = pin.read().unwrap();
-                if let PinDirection::Outside = pin.dir {
-                    state = state.combine(pin.get_state(self))
-                }
-            }
-        }
-
-        let current = self.get_wire(wire.id);
-        if *current.read().unwrap() == state {
-            return;
-        }
-
-        *current.write().unwrap() = state;
-        for (_, point) in wire.nodes.iter() {
-            if let Some(pin) = &point.pin {
-                let pin = pin.read().unwrap();
-                if let PinDirection::Inside = pin.dir {
-                    self.queue.lock().unwrap().enqueue(UpdateTask::UpdateCircuit { id: pin.id.circuit_id, pin: Some(pin.id.id) })
-                }
-            }
-        }
-    }
-
-    fn update_circuit(&self, circuit: &Circuit, pin: Option<usize>) {
-        circuit.imp.write().unwrap().update_signals(self, &mut *self.get_circuit(circuit.id).write().unwrap(), pin)
-    }
-}
