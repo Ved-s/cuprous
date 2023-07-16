@@ -5,7 +5,6 @@
 use std::{
     mem::size_of,
     ops::Range,
-    rc::Rc,
     sync::Arc,
     time::Instant,
 };
@@ -58,17 +57,18 @@ struct TileDrawBounds {
     pub chunks_br: Vec2i,
 }
 
+#[allow(clippy::redundant_allocation)]
 pub struct PaintContext<'a> {
     screen: Screen,
     paint: &'a egui::Painter,
     rect: Rect,
     bounds: TileDrawBounds,
-    ui: Rc<&'a mut Ui>,
+    ui: Arc<&'a mut Ui>,
     egui_ctx: &'a Context,
 }
 
 impl PaintContext<'_> {
-    fn with_rect<'a>(&'a self, rect: Rect) -> PaintContext<'a> {
+    fn with_rect(&self, rect: Rect) -> PaintContext<'_> {
         Self {
             rect,
             ui: self.ui.clone(),
@@ -218,7 +218,7 @@ impl PanAndZoom {
         Self { pos, scale }
     }
 
-    pub fn to_screen(&self, offset: Vec2f) -> Screen {
+    pub fn to_screen(self, offset: Vec2f) -> Screen {
         Screen {
             offset,
             pos: self.pos,
@@ -329,7 +329,7 @@ impl eframe::App for App {
                     paint: &paint,
                     rect,
                     bounds,
-                    ui: Rc::new(ui),
+                    ui: Arc::new(ui),
                     egui_ctx: ctx,
                 };
 
@@ -345,7 +345,7 @@ impl eframe::App for App {
                     &ctx,
                     match &self.selected {
                         SelectedItem::Wires => None,
-                        SelectedItem::Circuit(p) => Some(&p),
+                        SelectedItem::Circuit(p) => Some(p),
                     },
                 );
 
@@ -549,7 +549,7 @@ impl<T: SizeCalc> SizeCalc for &[T] {
     fn calc_size_inner(&self) -> usize {
         self.iter()
             .map(|i| i.calc_size_outer())
-            .fold(0, |a, b| a + b)
+            .sum()
     }
 }
 
@@ -557,7 +557,7 @@ impl<T: SizeCalc> SizeCalc for Vec<T> {
     fn calc_size_inner(&self) -> usize {
         self.iter()
             .map(|i| i.calc_size_outer())
-            .fold(0, |a, b| a + b)
+            .sum()
     }
 }
 
@@ -565,7 +565,7 @@ impl<const SIZE: usize, T: SizeCalc> SizeCalc for [T; SIZE] {
     fn calc_size_inner(&self) -> usize {
         self.iter()
             .map(|i| i.calc_size_inner())
-            .fold(0, |a, b| a + b)
+            .sum()
     }
 }
 

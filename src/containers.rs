@@ -320,13 +320,7 @@ impl<const CHUNK_SIZE: usize, T: Default> Chunks2D<CHUNK_SIZE, T> {
         let chunk = &mut row[qx];
 
         if chunk.is_none() {
-            let mut arr: Chunk<CHUNK_SIZE, T> = unsafe { MaybeUninit::uninit().assume_init() };
-            for i in 0..CHUNK_SIZE {
-                let col = &mut arr[i];
-                for j in 0..CHUNK_SIZE {
-                    col[j] = T::default();
-                }
-            }
+            let arr = std::array::from_fn(|_| std::array::from_fn(|_| T::default()));
             *chunk = Some(Box::new(arr));
         }
 
