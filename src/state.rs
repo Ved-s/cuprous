@@ -159,7 +159,8 @@ impl State {
                     }
                     UpdateTask::UpdateCircuitSignals { id, pin } => {
                         if let Some(circuit) = circuits.cirtuits.get(id) {
-                            self.update_circuit_signals(circuit, &mut self.get_circuit(circuit.id).write().unwrap(), pin);
+                            let state_ctx = CircuitStateContext::new(self, circuit);
+                            self.update_circuit_signals(&state_ctx, pin);
                         }
                     }
                 }
@@ -173,11 +174,10 @@ impl State {
                 let remove = if let Some(circ) = circuits.cirtuits.get(entry.0) {
                     let mut imp = circ.imp.write().unwrap();
 
-                    let state = self.get_circuit(circ.id);
-                    let mut state = state.write().unwrap();
+                    let state = CircuitStateContext::new(self, circ);
 
-                    imp.update(self, &mut state);
-                    match imp.update_interval(self, &state) {
+                    imp.update(&state);
+                    match imp.update_interval(&state) {
                         Some(d) => {
                             entry.1 = now + d;
                             None
@@ -231,10 +231,9 @@ impl State {
         }
     }
 
-    pub fn update_circuit_signals(&self, circuit: &Circuit, state: &mut CircuitState, pin: Option<usize>) {
-        circuit.imp.write().unwrap().update_signals(
-            self,
-            state,
+    pub fn update_circuit_signals(&self, state_ctx: &CircuitStateContext, pin: Option<usize>) {
+        state_ctx.circuit.imp.write().unwrap().update_signals(
+            state_ctx,
             pin,
         )
     }

@@ -1,7 +1,7 @@
 use std::{
-    collections::{HashMap, HashSet},
-    sync::{Arc, RwLock},
-    time::{Duration, Instant},
+    collections::HashSet,
+    sync::{Arc, RwLock, RwLockReadGuard},
+    time::Duration,
 };
 
 use eframe::{
@@ -105,21 +105,30 @@ impl CircuitPinInfo {
             .unwrap_or_default()
     }
 
-    fn set_output(&self, state: &State, my_state: &mut CircuitState, value: WireState) {
+    fn set_output(&self, state_ctx: &CircuitStateContext, value: WireState) {
         let CircuitPin {
             id: CircuitPinId { circuit_id: _, id },
             wire,
             dir: _,
         } = *self.pin.read().unwrap();
 
-        let current = my_state.pins.get_clone(id).unwrap_or_default();
+        let current = state_ctx
+            .read_circuit_state()
+            .map(|arc| arc.read().unwrap().pins.get_clone(id).unwrap_or_default())
+            .unwrap_or_default();
         if current == value {
             return;
         }
 
-        my_state.pins.set(value, id);
+        state_ctx
+            .get_circuit_state()
+            .write()
+            .unwrap()
+            .pins
+            .set(value, id);
         if let Some(wire) = wire {
-            state
+            state_ctx
+                .global_state
                 .queue
                 .lock()
                 .unwrap()
@@ -169,22 +178,66 @@ impl Circuit {
     }
 }
 
+pub struct CircuitStateContext<'a> {
+    pub global_state: &'a State,
+    pub circuit: &'a Circuit,
+}
+
+impl<'a> CircuitStateContext<'a> {
+    pub fn new(state: &'a State, circuit: &'a Circuit) -> Self {
+        Self {
+            global_state: state,
+            circuit,
+        }
+    }
+
+    pub fn read_circuit_state(&self) -> Option<Arc<RwLock<CircuitState>>> {
+        self.global_state.read_circuit(self.circuit.id)
+    }
+
+    pub fn get_circuit_state(&self) -> Arc<RwLock<CircuitState>> {
+        self.global_state.get_circuit(self.circuit.id)
+    }
+
+    pub fn read_circuit_internal_state<T: InternalCircuitState, R>(
+        &self,
+        reader: impl FnOnce(&T) -> R,
+    ) -> Option<R> {
+        Some(reader(
+            self.global_state
+                .read_circuit(self.circuit.id)?
+                .read()
+                .unwrap()
+                .get_internal()?,
+        ))
+    }
+
+    pub fn write_circuit_internal_state<T: InternalCircuitState, R>(
+        &self,
+        writer: impl FnOnce(&mut T) -> R,
+    ) -> R {
+        writer(
+            self.global_state
+                .get_circuit(self.circuit.id)
+                .write()
+                .unwrap()
+                .get_internal_mut(),
+        )
+    }
+}
+
 pub trait CircuitImpl {
-    fn draw(&self, state: &State,  my_state: &CircuitState, circuit: &Circuit, ctx: &PaintContext);
+    fn draw(&self, state_ctx: &CircuitStateContext, paint_ctx: &PaintContext);
 
     fn create_pins(&self) -> Box<[CircuitPinInfo]>;
 
-    fn update_signals(
-        &mut self,
-        state: &State,
-        my_state: &mut CircuitState,
-        changed_pin: Option<usize>,
-    );
+    fn update_signals(&mut self, state_ctx: &CircuitStateContext, changed_pin: Option<usize>);
 
-    fn update(&mut self, state: &State, my_state: &mut CircuitState);
+    fn update(&mut self, state_ctx: &CircuitStateContext);
 
     /// Warning! Must always return either [`Some`] or [`None`] (same type)
-    fn update_interval(&self, state: &State, my_state: &CircuitState) -> Option<Duration> {
+    #[allow(unused_variables)]
+    fn update_interval(&self, state_ctx: &CircuitStateContext) -> Option<Duration> {
         None
     }
 }
@@ -253,9 +306,9 @@ impl Circuits {
                 let rect = Rect::from_min_size(screen_pos.into(), screen_size.into());
                 let circ_ctx = ctx.with_rect(rect);
 
-                let circ_state = state.get_circuit(circ_id);
-                let circ_state = circ_state.read().unwrap();
-                circuit.imp.read().unwrap().draw(state, &circ_state, &circuit, &circ_ctx);
+                let state_ctx = CircuitStateContext::new(state, circuit);
+
+                circuit.imp.read().unwrap().draw(&state_ctx, &circ_ctx);
             },
         );
 
@@ -332,11 +385,13 @@ impl Circuits {
                 }
             }
 
-            let circ_state = state.get_circuit(cid);
-            let mut circ_state = circ_state.write().unwrap();
-            state.update_circuit_signals(circ, &mut circ_state, None);
+            let state_ctx = CircuitStateContext::new(state, circ);
+            state.update_circuit_signals(
+                &state_ctx,
+                None,
+            );
 
-            if let Some(duration) = circ.imp.read().unwrap().update_interval(state, &circ_state) {
+            if let Some(duration) = circ.imp.read().unwrap().update_interval(&state_ctx) {
                 self.updates.insert(cid);
                 state.update_circuit_interval(cid, duration);
             }
@@ -389,46 +444,48 @@ impl TestCircuitImpl {
 }
 
 impl CircuitImpl for TestCircuitImpl {
-    fn draw(&self, state: &State, my_state: &CircuitState, circ: &Circuit, ctx: &PaintContext) {
-        for pin in circ.info.read().unwrap().pins.iter() {
-            let pos = circ.pos + pin.pos.convert_values(|v| v as i32);
+    fn draw(&self, state_ctx: &CircuitStateContext, paint_ctx: &PaintContext) {
+        for pin in state_ctx.circuit.info.read().unwrap().pins.iter() {
+            let pos = state_ctx.circuit.pos + pin.pos.convert_values(|v| v as i32);
             let pin = pin.pin.read().unwrap();
             if pin.wire.is_some() {
                 continue;
             }
-            let color = pin.get_state(state).color();
-            let pos = ctx.screen.world_to_screen_tile(pos) + ctx.screen.scale / 2.0;
-            ctx.paint
-                .circle_filled(pos.into(), ctx.screen.scale * 0.1, color);
+            let color = pin.get_state(state_ctx.global_state).color();
+            let pos = paint_ctx.screen.world_to_screen_tile(pos) + paint_ctx.screen.scale / 2.0;
+            paint_ctx
+                .paint
+                .circle_filled(pos.into(), paint_ctx.screen.scale * 0.1, color);
         }
 
-        let font_id = eframe::egui::TextStyle::Monospace.resolve(ctx.ui.style());
+        let font_id = eframe::egui::TextStyle::Monospace.resolve(paint_ctx.ui.style());
 
         let rect = {
-            let mut r = ctx.rect;
-            *r.left_mut() += ctx.screen.scale / 2.0;
-            *r.right_mut() -= ctx.screen.scale / 2.0;
+            let mut r = paint_ctx.rect;
+            *r.left_mut() += paint_ctx.screen.scale / 2.0;
+            *r.right_mut() -= paint_ctx.screen.scale / 2.0;
             r
         };
-        ctx.paint
+        paint_ctx
+            .paint
             .rect_filled(rect, Rounding::none(), Color32::from_gray(100));
 
         let wire = self.pin.pin.read().unwrap().wire.map(|v| v as i32);
 
-        ctx.paint.text(
+        paint_ctx.paint.text(
             rect.center_bottom(),
             Align2::CENTER_BOTTOM,
-            circ.id.to_string(),
+            state_ctx.circuit.id.to_string(),
             font_id.clone(),
             Color32::WHITE,
         );
 
         if let Some(wire) = wire {
-            let pos = circ.pos + self.pin.pos.convert_values(|v| v as i32);
-            let pos = ctx.screen.world_to_screen_tile(pos) + ctx.screen.scale / 2.0;
-            let pos = pos + [ctx.screen.scale / 4.0, 0.0];
+            let pos = state_ctx.circuit.pos + self.pin.pos.convert_values(|v| v as i32);
+            let pos = paint_ctx.screen.world_to_screen_tile(pos) + paint_ctx.screen.scale / 2.0;
+            let pos = pos + [paint_ctx.screen.scale / 4.0, 0.0];
 
-            ctx.paint.text(
+            paint_ctx.paint.text(
                 pos.into(),
                 Align2::LEFT_CENTER,
                 wire.to_string(),
@@ -442,33 +499,30 @@ impl CircuitImpl for TestCircuitImpl {
         vec![self.pin.clone()].into_boxed_slice()
     }
 
-    fn update_signals(
-        &mut self,
-        state: &State,
-        my_state: &mut CircuitState,
-        changed_pin: Option<usize>,
-    ) {
+    fn update_signals(&mut self, state_ctx: &CircuitStateContext, _: Option<usize>) {
         self.pin.set_output(
-            state,
-            my_state,
-            my_state
-                .get_internal::<TestCircuitState>()
-                .map(|s| s.state)
+            state_ctx,
+            state_ctx
+                .read_circuit_internal_state::<TestCircuitState, _>(|s| s.state)
                 .unwrap_or_default()
                 .into(),
         );
     }
 
-    fn update(&mut self, state: &State, my_state: &mut CircuitState) {
-        let test_state = my_state.get_internal_mut::<TestCircuitState>();
-        test_state.state = !test_state.state;
-        let output = test_state.state;
+    fn update(&mut self, state_ctx: &CircuitStateContext) {
+        let new_state = state_ctx.write_circuit_internal_state::<TestCircuitState, _>(|s| {
+            s.state = !s.state;
+            s.state
+        });
 
-        self.pin.set_output(state, my_state, output.into());
+        self.pin.set_output(state_ctx, new_state.into());
     }
-    
-    fn update_interval(&self, state: &State, my_state: &CircuitState) -> Option<Duration> {
-        match my_state.get_internal::<TestCircuitState>().is_some_and(|b| b.state) {
+
+    fn update_interval(&self, state_ctx: &CircuitStateContext) -> Option<Duration> {
+        match state_ctx
+            .read_circuit_internal_state::<TestCircuitState, _>(|s| s.state)
+            .unwrap_or_default()
+        {
             true => Some(Duration::from_millis(200)),
             false => Some(Duration::from_secs(1)),
         }
