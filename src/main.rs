@@ -5,10 +5,11 @@
 use std::{
     mem::size_of,
     ops::Range,
-    sync::Arc,
+    sync::{Arc, RwLock},
     time::Instant,
 };
 
+use board::{ActiveCircuitBoard, SelectedBoardItem, CircuitBoard};
 use eframe::{
     egui::{self, Context, Frame, Key, Margin, Sense, TextStyle, Ui},
     epaint::{Color32, Stroke},
@@ -24,13 +25,14 @@ mod containers;
 use crate::containers::*;
 
 mod circuits;
-use circuits::{CircuitPreview, Circuits};
+use circuits::CircuitPreview;
 
 mod wires;
-use crate::wires::Wires;
 
 mod state;
 use state::State;
+
+mod board;
 
 fn main() {
     eframe::run_native(
@@ -263,11 +265,8 @@ struct App {
     last_win_pos: Option<Pos2>,
 
     pub pan_zoom: PanAndZoom,
-    pub wires: Wires,
-    pub circuits: Circuits,
+    pub board: ActiveCircuitBoard,
     pub selected: SelectedItem,
-
-    pub state: Arc<State>,
 }
 
 impl eframe::App for App {
@@ -285,7 +284,7 @@ impl eframe::App for App {
         ctx.request_repaint();
         self.last_win_pos = int_info.window_info.position;
 
-        self.state.update(&self.wires, &self.circuits);
+        self.board.state.update(&self.board.board.read().unwrap());
 
         if ctx.input(|input| input.key_pressed(Key::F1)) {
             self.selected = match self.selected {
@@ -333,19 +332,11 @@ impl eframe::App for App {
                     egui_ctx: ctx,
                 };
 
-                self.wires.update(
-                    &self.state,
-                    &mut self.circuits,
-                    &ctx,
-                    matches!(self.selected, SelectedItem::Wires),
-                );
-                self.circuits.update(
-                    &self.state,
-                    &mut self.wires,
+                self.board.update(
                     &ctx,
                     match &self.selected {
-                        SelectedItem::Wires => None,
-                        SelectedItem::Circuit(p) => Some(p.as_ref()),
+                        SelectedItem::Wires => SelectedBoardItem::Wire,
+                        SelectedItem::Circuit(p) => SelectedBoardItem::Circuit(p.as_ref()),
                     },
                 );
 
@@ -358,10 +349,7 @@ impl eframe::App for App {
                         r#"Pos: {}
 Tile draw bounds: {} - {}
 Chunk draw bounds: {} - {}
-Wires drawn: {}
 Time: {:.4} ms
-Sizes: 
-  wires.nodes: {},
 Selected: {:?}
 "#,
                         self.pan_zoom.pos,
@@ -369,9 +357,7 @@ Selected: {:?}
                         bounds.tiles_br,
                         bounds.chunks_tl,
                         bounds.chunks_br,
-                        *self.wires.parts_drawn.read().unwrap(),
                         update_time.as_secs_f64() * 1000.0,
-                        format_size(self.wires.nodes.calc_size_outer()),
                         self.selected
                     ),
                     font_id,
@@ -383,13 +369,16 @@ Selected: {:?}
 
 impl App {
     fn new() -> Self {
+
+        let board = CircuitBoard::new();
+        let state_id = board.states.create_state().0;
+        let board = Arc::new(RwLock::new(board));
+
         Self {
             pan_zoom: PanAndZoom::new(0.0.into(), 16.0),
-            wires: Wires::new(),
-            circuits: Circuits::new(),
             last_win_pos: None,
             selected: SelectedItem::Wires,
-            state: Default::default(),
+            board: ActiveCircuitBoard::new(board, state_id).unwrap()
         }
     }
 
@@ -623,7 +612,7 @@ impl<T: Ord + Copy> Intersect for Range<T> {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct OptionalInt<T: Integer>(T);
+pub struct OptionalInt<T: Integer>(T);
 
 impl<T: Integer> Default for OptionalInt<T> {
     fn default() -> Self {

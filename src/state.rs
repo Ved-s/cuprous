@@ -9,7 +9,7 @@ use eframe::epaint::Color32;
 use crate::{
     circuits::*,
     containers::{FixedVec, RandomQueue},
-    wires::*,
+    wires::*, board::CircuitBoard,
 };
 
 pub enum UpdateTask {
@@ -85,6 +85,50 @@ impl CircuitState {
     }
 }
 
+#[derive(Clone)]
+pub struct StateCollection {
+    states: Arc<RwLock<FixedVec<Arc<State>>>>,
+}
+
+impl StateCollection {
+
+    pub fn new() -> Self {
+        Self {
+            states: Default::default(),
+        }
+    }
+
+    pub fn create_state(&self) -> (usize, Arc<State>) {
+        let mut vec = self.states.write().unwrap();
+        let id = vec.first_free_pos();
+        let state = Arc::<State>::default();
+        vec.set(state.clone(), id);
+        (id, state)
+    }
+
+    pub fn update_wire(&self, wire: &Wire) {
+        for state in self.states.read().unwrap().iter() {
+            state.update_wire(wire);
+        }
+    }
+
+    pub fn update_circuit_signals(&self, circuit: &Circuit, pin: Option<usize>) {
+        for state in self.states.read().unwrap().iter() {
+            state.update_circuit_signals(circuit, pin);
+        }
+    }
+
+    pub fn update_circuit_interval(&self, id: usize, dur: Duration) {
+        for state in self.states.read().unwrap().iter() {
+            state.update_circuit_interval(id, dur);
+        }
+    }
+
+    pub fn get(&self, state: usize) -> Option<Arc<State>> {
+        self.states.read().unwrap().get(state).cloned()
+    }
+}
+
 pub struct State {
     pub wires: Arc<RwLock<FixedVec<Arc<RwLock<WireState>>>>>,
     pub circuits: Arc<RwLock<FixedVec<Arc<RwLock<CircuitState>>>>>,
@@ -146,7 +190,7 @@ impl State {
         }
     }
 
-    pub fn update(&self, wires: &Wires, circuits: &Circuits) {
+    pub fn update(&self, board: &CircuitBoard) {
         let mut limit = 10;
         while limit > 0 {
             limit -= 1;
@@ -156,14 +200,13 @@ impl State {
             if let Some(task) = queue_item {
                 match task {
                     UpdateTask::UpdateWireState(wire) => {
-                        if let Some(wire) = wires.wires.get(wire) {
+                        if let Some(wire) = board.wires.get(wire) {
                             self.update_wire(wire);
                         }
                     }
                     UpdateTask::UpdateCircuitSignals { id, pin } => {
-                        if let Some(circuit) = circuits.cirtuits.get(id) {
-                            let state_ctx = CircuitStateContext::new(self, circuit);
-                            self.update_circuit_signals(&state_ctx, pin);
+                        if let Some(circuit) = board.circuits.get(id) {
+                            self.update_circuit_signals(circuit, pin);
                         }
                     }
                 }
@@ -174,7 +217,7 @@ impl State {
             let now = Instant::now();
             let next = updates.iter_mut().enumerate().find(|(_, i)| i.1 <= now);
             if let Some((i, entry)) = next {
-                let remove = if let Some(circ) = circuits.cirtuits.get(entry.0) {
+                let remove = if let Some(circ) = board.circuits.get(entry.0) {
                     let mut imp = circ.imp.write().unwrap();
 
                     let state = CircuitStateContext::new(self, circ);
@@ -203,7 +246,7 @@ impl State {
 
     pub fn update_wire(&self, wire: &Wire) {
         let mut state = WireState::None;
-        for (_, point) in wire.nodes.iter() {
+        for (_, point) in wire.points.iter() {
             if let Some(pin) = &point.pin {
                 let pin = pin.read().unwrap();
                 if let PinDirection::Outside = pin.direction(self) {
@@ -218,7 +261,7 @@ impl State {
         }
 
         *current.write().unwrap() = state;
-        for (_, point) in wire.nodes.iter() {
+        for (_, point) in wire.points.iter() {
             if let Some(pin) = &point.pin {
                 let pin = pin.read().unwrap();
                 if let PinDirection::Inside = pin.direction(self) {
@@ -228,9 +271,9 @@ impl State {
         }
     }
 
-    pub fn update_circuit_signals(&self, state_ctx: &CircuitStateContext, pin: Option<usize>) {
-        state_ctx.circuit.imp.write().unwrap().update_signals(
-            state_ctx,
+    pub fn update_circuit_signals(&self, circuit: &Circuit, pin: Option<usize>) {
+        circuit.imp.write().unwrap().update_signals(
+            &CircuitStateContext::new(self, circuit),
             pin,
         )
     }

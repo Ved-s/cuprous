@@ -145,6 +145,10 @@ impl<T> FixedVec<T> {
             pos: 0,
         }
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.vec.is_empty()
+    }
 }
 
 impl<T> From<Vec<T>> for FixedVec<T> {
@@ -399,7 +403,6 @@ impl<const CHUNK_SIZE: usize, T: SizeCalc + Default> SizeCalc for Chunks2D<CHUNK
 pub struct RandomQueue<T, S: BuildHasher = RandomState> {
     vec: FixedVec<T>,
     hasher: <S as BuildHasher>::Hasher,
-    len: usize,
 }
 
 impl<T, S: Default + BuildHasher> Default for RandomQueue<T, S> {
@@ -419,7 +422,6 @@ impl<T, S: BuildHasher> RandomQueue<T, S> {
         Self {
             vec: vec![].into(),
             hasher: hash_builder.build_hasher(),
-            len: 0,
         }
     }
 
@@ -427,27 +429,26 @@ impl<T, S: BuildHasher> RandomQueue<T, S> {
         let pos = self.vec.first_free_pos();
         self.vec.set(value, pos);
         self.hasher.write_usize(pos);
-        self.len += 1;
     }
 
-
-    // TODO: Queue length (1) does not match internal vector (0)! when connecting all test circuit pins
     pub fn dequeue(&mut self) -> Option<T> {
-        if self.len == 0 {
+        if self.vec.is_empty() {
             return None;
         }
 
-        let pos = (self.hasher.finish() % self.len as u64) as usize;
+        let len = self.vec.iter().count();
+        assert_ne!(len, 0, "FixedVec::is_empty() is false with zero length");
+
+        let pos = (self.hasher.finish() % len as u64) as usize;
         let real_pos = match self.vec.get_nth_existing_index(pos) {
             Some(v) => v,
-            None => unreachable!("Queue length ({}) does not match internal vector ({})!", self.len, self.vec.iter().count()),
+            None => unreachable!("Queue length ({}) does not match internal vector ({})!", len, self.vec.iter().count()),
         };
         let item = match self.vec.remove(real_pos) {
             Some(v) => v,
             None => unreachable!(),
         };
         self.hasher.write_usize(pos);
-        self.len -= 1;
         Some(item)
     }
 }
