@@ -1,16 +1,13 @@
-use std::{
-    sync::{Arc, RwLock},
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
 use eframe::epaint::{Color32, Rounding};
 use emath::Align2;
 
 use crate::{
     board::CircuitBoard,
-    state::{CircuitState, InternalCircuitState, State, StateCollection, UpdateTask, WireState},
+    state::{CircuitState, InternalCircuitState, State, UpdateTask, WireState},
     vector::{Vec2i, Vec2u, Vector},
-    OptionalInt, PaintContext,
+    OptionalInt, PaintContext, RwLock,
 };
 
 pub struct CircuitInfo {
@@ -95,14 +92,7 @@ impl CircuitPin {
         }
 
         circuit.pins.set(value, self.id.id);
-        state
-            .queue
-            .lock()
-            .unwrap()
-            .enqueue(UpdateTask::UpdateCircuitSignals {
-                id: self.id.circuit_id,
-                pin: Some(self.id.id),
-            });
+        state.update_circuit_signals(self.id.circuit_id, Some(self.id.id));
     }
 
     pub fn connected_wire(&self) -> Option<usize> {
@@ -120,14 +110,10 @@ impl CircuitPin {
 
         if let Some(board) = board {
             if let Some(prev) = prev {
-                if let Some(prev) = board.wires.get(prev) {
-                    board.states.update_wire(prev);
-                }
+                board.states.update_wire(prev);
             }
             if let Some(wire) = wire {
-                if let Some(wire) = board.wires.get(wire) {
-                    board.states.update_wire(wire);
-                }
+                board.states.update_wire(wire);
             }
         }
     }
@@ -175,12 +161,7 @@ impl CircuitPinInfo {
             .pins
             .set(value, id);
         if let Some(wire) = wire {
-            state_ctx
-                .global_state
-                .queue
-                .lock()
-                .unwrap()
-                .enqueue(UpdateTask::UpdateWireState(wire))
+            state_ctx.global_state.update_wire(wire)
         }
     }
 
@@ -203,23 +184,14 @@ impl CircuitPinInfo {
         match dir {
             PinDirection::Inside => match wire {
                 Some(wire) => state_ctx
-                    .global_state
-                    .queue
-                    .lock()
-                    .unwrap()
-                    .enqueue(UpdateTask::UpdateWireState(wire)),
+                    .global_state.update_wire(wire),
                 None => self
                     .pin
                     .read()
                     .unwrap()
                     .set_input(state_ctx.global_state, Default::default()),
             },
-            PinDirection::Outside => state_ctx.global_state.queue.lock().unwrap().enqueue(
-                UpdateTask::UpdateCircuitSignals {
-                    id: pin_id.circuit_id,
-                    pin: Some(pin_id.id),
-                },
-            ),
+            PinDirection::Outside => state_ctx.global_state.update_circuit_signals(pin_id.circuit_id, Some(pin_id.id)),
         }
     }
 }
@@ -341,7 +313,7 @@ pub struct CircuitNode {
 #[derive(Default)]
 pub struct TestCircuitState {
     state: bool,
-    dir_out: bool,
+    dir_in: bool,
 }
 
 impl InternalCircuitState for TestCircuitState {}
@@ -360,7 +332,7 @@ impl TestCircuitImpl {
             io_pin: CircuitPinInfo::new(
                 [1, 1],
                 InternalPinDirection::StateDependent {
-                    default: PinDirection::Inside,
+                    default: PinDirection::Outside,
                 },
             ),
         }
@@ -431,16 +403,16 @@ impl CircuitImpl for TestCircuitImpl {
     fn update_signals(&mut self, state_ctx: &CircuitStateContext, pin: Option<usize>) {
         match pin {
             Some(1) => {
-                let new_dir_out = matches!(self.dir_pin.get_input(state_ctx), WireState::True);
+                let new_dir_in = matches!(self.dir_pin.get_input(state_ctx), WireState::True);
                 let dir = state_ctx.write_circuit_internal_state::<TestCircuitState, _>(|cs| {
-                    if cs.dir_out == new_dir_out {
+                    if cs.dir_in == new_dir_in {
                         None
                     } else {
-                        cs.dir_out = new_dir_out;
-                        Some(if new_dir_out {
-                            PinDirection::Outside
-                        } else {
+                        cs.dir_in = new_dir_in;
+                        Some(if new_dir_in {
                             PinDirection::Inside
+                        } else {
+                            PinDirection::Outside
                         })
                     }
                 });
@@ -448,24 +420,24 @@ impl CircuitImpl for TestCircuitImpl {
                     self.io_pin.set_direction(state_ctx, dir);
                 }
             }
-            Some(2) => {
-                let dir_out =
-                    state_ctx.read_circuit_internal_state::<TestCircuitState, _>(|cs| cs.dir_out);
-                if dir_out == Some(true) {
+            None | Some(2) => {
+                let dir_in =
+                    state_ctx.read_circuit_internal_state::<TestCircuitState, _>(|cs| cs.dir_in);
+                if !dir_in.is_some_and(|i| i) {
                     self.io_pin.set_output(state_ctx, WireState::True);
                 }
             }
-            None => {
-                self.clock_pin.set_output(
-                    state_ctx,
-                    state_ctx
-                        .read_circuit_internal_state::<TestCircuitState, _>(|s| s.state)
-                        .unwrap_or_default()
-                        .into(),
-                );
-            }
-
             _ => {}
+        }
+
+        if pin.is_none() {
+            self.clock_pin.set_output(
+                state_ctx,
+                state_ctx
+                    .read_circuit_internal_state::<TestCircuitState, _>(|s| s.state)
+                    .unwrap_or_default()
+                    .into(),
+            );
         }
     }
 
@@ -484,7 +456,7 @@ impl CircuitImpl for TestCircuitImpl {
             .unwrap_or_default()
         {
             true => Some(Duration::from_millis(200)),
-            false => Some(Duration::from_secs(1)),
+            false => Some(Duration::from_secs(2)),
         }
     }
 }

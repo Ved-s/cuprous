@@ -67,6 +67,7 @@ impl<T> FixedVec<T> {
         if pos >= self.vec.len() {
             return self.set(creator(), pos).value_ref;
         }
+        self.update_first_free_set(pos);
 
         let option = &mut self.vec[pos];
         option.get_or_insert_with(creator)
@@ -93,7 +94,14 @@ impl<T> FixedVec<T> {
             while !self.vec.is_empty() && self.vec[self.vec.len() - 1].is_none() {
                 self.vec.remove(self.vec.len() - 1);
             }
+            if let Some(v) = self.first_free {
+                if v >= self.vec.len() {
+                    self.first_free = None;
+                }
+            }
         }
+
+        self.test_free_correct();
 
         value
     }
@@ -118,18 +126,24 @@ impl<T> FixedVec<T> {
             };
         };
 
-        if let Some(ff) = self.first_free {
-            if ff == into {
-                self.first_free = (ff + 1..self.vec.len()).find(|i| matches!(self.vec[*i], None));
-            }
-        }
+        self.update_first_free_set(into);
 
         let prev = self.vec.get_mut(into).unwrap().replace(value);
+
+        self.test_free_correct();
 
         return VecSetResult {
             value_ref: self.vec[into].as_mut().unwrap(),
             prev,
         };
+    }
+
+    fn update_first_free_set(&mut self, into: usize) {
+        if let Some(ff) = self.first_free {
+            if ff == into {
+                self.first_free = (ff + 1..self.vec.len()).find(|i| matches!(self.vec[*i], None));
+            }
+        }
     }
 
     pub fn first_free_pos(&self) -> usize {
@@ -148,6 +162,10 @@ impl<T> FixedVec<T> {
 
     pub fn is_empty(&self) -> bool {
         self.vec.is_empty()
+    }
+
+    fn test_free_correct(&self) {
+        assert!(!self.first_free.is_some_and(|v| self.get(v).is_some()));
     }
 }
 
@@ -451,6 +469,10 @@ impl<T, S: BuildHasher> RandomQueue<T, S> {
         self.hasher.write_usize(pos);
         Some(item)
     }
+
+    pub fn inner(&self) -> &FixedVec<T> {
+        &self.vec
+    }
 }
 
 #[cfg(test)]
@@ -468,5 +490,23 @@ mod test {
         assert_eq!(fv.vec.len(), 5);
         fv.remove(4);
         assert_eq!(fv.vec.len(), 2);
+    }
+
+    #[test]
+    fn fixed_vec_correct_free() {
+        let mut fv = FixedVec::new(vec![]);
+
+        fv.set(35, 0);
+        fv.set(15, 1);
+        fv.set(100, 4);
+
+        assert_eq!(fv.first_free_pos(), 2);
+
+        fv.set(25, 2);
+        fv.remove(4);
+        assert_eq!(fv.first_free_pos(), 3);
+
+        fv.remove(1);
+        assert_eq!(fv.first_free_pos(), 1);
     }
 }

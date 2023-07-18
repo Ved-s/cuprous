@@ -1,6 +1,6 @@
 use std::{
     any::Any,
-    sync::{Arc, Mutex, RwLock},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -9,9 +9,10 @@ use eframe::epaint::Color32;
 use crate::{
     circuits::*,
     containers::{FixedVec, RandomQueue},
-    wires::*, board::CircuitBoard,
+    wires::*, board::CircuitBoard, RwLock, Mutex,
 };
 
+#[derive(Debug)]
 pub enum UpdateTask {
     UpdateCircuitSignals { id: usize, pin: Option<usize> },
     UpdateWireState(usize),
@@ -106,13 +107,13 @@ impl StateCollection {
         (id, state)
     }
 
-    pub fn update_wire(&self, wire: &Wire) {
+    pub fn update_wire(&self, wire: usize) {
         for state in self.states.read().unwrap().iter() {
             state.update_wire(wire);
         }
     }
 
-    pub fn update_circuit_signals(&self, circuit: &Circuit, pin: Option<usize>) {
+    pub fn update_circuit_signals(&self, circuit: usize, pin: Option<usize>) {
         for state in self.states.read().unwrap().iter() {
             state.update_circuit_signals(circuit, pin);
         }
@@ -133,19 +134,8 @@ pub struct State {
     pub wires: Arc<RwLock<FixedVec<Arc<RwLock<WireState>>>>>,
     pub circuits: Arc<RwLock<FixedVec<Arc<RwLock<CircuitState>>>>>,
 
-    pub queue: Arc<Mutex<RandomQueue<UpdateTask>>>,
+    queue: Arc<Mutex<RandomQueue<UpdateTask>>>,
     pub updates: Arc<Mutex<Vec<(usize, Instant)>>>,
-}
-
-impl Default for State {
-    fn default() -> Self {
-        Self {
-            wires: Arc::new(RwLock::new(vec![].into())),
-            circuits: Arc::new(RwLock::new(vec![].into())),
-            queue: Arc::new(Mutex::new(RandomQueue::new())),
-            updates: Arc::new(Mutex::new(vec![])),
-        }
-    }
 }
 
 impl State {
@@ -201,12 +191,12 @@ impl State {
                 match task {
                     UpdateTask::UpdateWireState(wire) => {
                         if let Some(wire) = board.wires.get(wire) {
-                            self.update_wire(wire);
+                            self.update_wire_now(wire);
                         }
                     }
                     UpdateTask::UpdateCircuitSignals { id, pin } => {
                         if let Some(circuit) = board.circuits.get(id) {
-                            self.update_circuit_signals(circuit, pin);
+                            self.update_circuit_signals_now(circuit, pin);
                         }
                     }
                 }
@@ -244,19 +234,22 @@ impl State {
         }
     }
 
-    pub fn update_wire(&self, wire: &Wire) {
+    fn update_wire_now(&self, wire: &Wire) {
         let mut state = WireState::None;
+        let mut writing_pins = 0;
         for (_, point) in wire.points.iter() {
             if let Some(pin) = &point.pin {
                 let pin = pin.read().unwrap();
                 if let PinDirection::Outside = pin.direction(self) {
-                    state = state.combine(pin.get_state(self))
+                    state = state.combine(pin.get_state(self));
+                    writing_pins += 1;
                 }
             }
         }
 
         let current = self.get_wire(wire.id);
         if *current.read().unwrap() == state {
+            println!("false wire {} update ({writing_pins} in pins)", wire.id);
             return;
         }
 
@@ -271,10 +264,36 @@ impl State {
         }
     }
 
-    pub fn update_circuit_signals(&self, circuit: &Circuit, pin: Option<usize>) {
+    fn update_circuit_signals_now(&self, circuit: &Circuit, pin: Option<usize>) {
         circuit.imp.write().unwrap().update_signals(
             &CircuitStateContext::new(self, circuit),
             pin,
         )
+    }
+
+    pub fn update_wire(&self, wire: usize) {
+        self.schedule_update(UpdateTask::UpdateWireState(wire));
+    }
+
+    pub fn update_circuit_signals(&self, circuit: usize, pin: Option<usize>) {
+        self.schedule_update(UpdateTask::UpdateCircuitSignals { id: circuit, pin });
+    }
+
+    fn schedule_update(&self, task: UpdateTask) {
+        // TODO: use condvar for future enqueues
+        let mut queue = self.queue.lock().unwrap();
+        queue.enqueue(task);
+        dbg!(queue.inner());
+    }
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            wires: Arc::new(RwLock::new(vec![].into())),
+            circuits: Arc::new(RwLock::new(vec![].into())),
+            queue: Arc::new(Mutex::new(RandomQueue::new())),
+            updates: Arc::new(Mutex::new(vec![])),
+        }
     }
 }

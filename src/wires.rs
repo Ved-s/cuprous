@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    sync::{Arc, RwLock}, num::NonZeroU32,
+    sync::Arc, num::NonZeroU32,
 };
 
 use eframe::epaint::Color32;
@@ -8,10 +8,10 @@ use eframe::epaint::Color32;
 use crate::{
     circuits::CircuitPin,
     vector::{Vec2i, Vector},
-    OptionalInt, SizeCalc, State, state::StateCollection, board::CircuitBoard,
+    OptionalInt, SizeCalc, State, state::StateCollection, RwLock,
 };
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct Wire {
     pub id: usize,
     pub points: HashMap<Vec2i, WirePoint>,
@@ -29,7 +29,7 @@ impl Wire {
             }
         }
         if let Some(states) = states {
-            states.update_wire(self);
+            states.update_wire(self.id);
         }
     }
 
@@ -37,7 +37,7 @@ impl Wire {
         self.points.insert(pos, WirePoint { left, up, pin });
 
         if let Some(states) = states {
-            states.update_wire(self);
+            states.update_wire(self.id);
         }
     }
 }

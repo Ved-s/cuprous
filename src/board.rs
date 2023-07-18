@@ -1,8 +1,8 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, hash_map::DefaultHasher},
     f32::consts::TAU,
     num::NonZeroU32,
-    sync::{Arc, RwLock},
+    sync::Arc, hash::Hasher,
 };
 
 use eframe::{
@@ -17,7 +17,7 @@ use crate::{
     state::{State, StateCollection},
     vector::{IsZero, Vec2f, Vec2i},
     wires::{FoundWireNode, TileWires, Wire, WireDirection, WireNode, WirePart, WirePoint},
-    PaintContext,
+    PaintContext, RwLock,
 };
 
 pub struct CircuitBoard {
@@ -73,8 +73,13 @@ impl CircuitBoard {
             }
         }
 
+        let wire = self.wires.get_mut(id).unwrap();
+        for point in points {
+            wire.points.insert(point.0, point.1);
+        }
+
         if update_states {
-            self.states.update_wire(self.wires.get(id).unwrap());
+            self.states.update_wire(id);
         }
     }
 
@@ -123,7 +128,7 @@ impl CircuitBoard {
             None => return None,
             Some(w) => w,
         };
-        
+
         let mut new_points = HashMap::new();
         for pos in points.iter() {
             let point = match wire.points.remove(pos) {
@@ -167,9 +172,8 @@ impl CircuitBoard {
         self.wires.set(new_wire, new_wire_id);
 
         if update_states {
-            self.states.update_wire(self.wires.get(id).unwrap());
-            self.states
-                .update_wire(self.wires.get(new_wire_id).unwrap());
+            self.states.update_wire(id);
+            self.states.update_wire(new_wire_id);
         }
 
         Some(new_wire_id)
@@ -339,7 +343,16 @@ impl ActiveCircuitBoard {
                 node.origin_dist = [i, j].into();
             }
         }
-        let circ_info = { self.board.read().unwrap().circuits.get(cid).unwrap().info.clone() };
+        let circ_info = {
+            self.board
+                .read()
+                .unwrap()
+                .circuits
+                .get(cid)
+                .unwrap()
+                .info
+                .clone()
+        };
         for pin in circ_info.read().unwrap().pins.iter() {
             let pos = place_pos + pin.pos.convert_values(|v| v as i32);
             if let Some(wire) = self.create_wire_intersection(pos, None) {
@@ -362,11 +375,7 @@ impl ActiveCircuitBoard {
         }
         let board = self.board.read().unwrap();
         let circ = board.circuits.get(cid).unwrap();
-        self.board
-            .read()
-            .unwrap()
-            .states
-            .update_circuit_signals(circ, None);
+        board.states.update_circuit_signals(cid, None);
 
         let state_ctx = CircuitStateContext::new(&self.state, circ);
         let update_interval = circ.imp.read().unwrap().update_interval(&state_ctx);
@@ -400,7 +409,6 @@ impl ActiveCircuitBoard {
     }
 
     fn update_wires(&mut self, ctx: &PaintContext, selected: bool) {
-
         if !selected {
             self.wire_drag_pos = None;
             return;
@@ -415,7 +423,7 @@ impl ActiveCircuitBoard {
 
         let drawing_wire = Self::calc_wire_part(self.wire_drag_pos, mouse_tile_pos_i);
         if let Some(ref part) = drawing_wire {
-            self.draw_wire_part(ctx, part, Color32::GRAY);
+            self.draw_wire_part(ctx, part, Color32::GRAY, None);
         }
 
         let interaction = ctx
@@ -556,7 +564,7 @@ impl ActiveCircuitBoard {
                 vertical: info.vertical,
             };
 
-            this.draw_wire_part(ctx, &part, info.color)
+            this.draw_wire_part(ctx, &part, info.color, info.wire);
         }
         if node.wire.is_none() && node.up == 0 && node.left == 0 {
             return;
@@ -608,6 +616,7 @@ impl ActiveCircuitBoard {
                         pos,
                         wire.color(&self.state),
                         wire.points.get(&pos).is_some_and(|p| p.pin.is_some()),
+                        Some(wire.id)
                     )
                 }
             }
@@ -642,7 +651,7 @@ impl ActiveCircuitBoard {
         }
     }
 
-    fn draw_wire_part(&self, ctx: &PaintContext, part: &WirePart, color: Color32) {
+    fn draw_wire_part(&self, ctx: &PaintContext, part: &WirePart, color: Color32, wire_id: Option<usize>) {
         let screen = &ctx.screen;
         let thickness = ctx.screen.scale * 0.25;
 
@@ -655,21 +664,54 @@ impl ActiveCircuitBoard {
         };
         let rect = Rect::from_min_size(pos.into(), rect_size);
         ctx.paint.rect_filled(rect, Rounding::none(), color);
+
+        // DEBUG: visuals
+        if let Some(wire) = wire_id {
+            let thickness = ctx.screen.scale * 0.05;
+            let pos = screen.world_to_screen_tile(part.pos) + ((screen.scale - thickness) * 0.5);
+            let length = screen.scale * part.length.get() as f32 + thickness;
+            let rect_size = match part.vertical {
+                true => vec2(thickness, length),
+                false => vec2(length, thickness),
+            };
+            let rect = Rect::from_min_size(pos.into(), rect_size);
+
+            let mut hasher = DefaultHasher::new();
+            hasher.write_usize(wire);
+            hasher.write_usize(1999573);
+            let [r, _, g, _, b, _, _, _ ] = hasher.finish().to_le_bytes();
+
+            ctx.paint.rect_filled(rect, Rounding::none(), Color32::from_rgb(r, g, b));
+        }
     }
 
-    fn draw_wire_intersection(ctx: &PaintContext, pos: Vec2i, color: Color32, pin: bool) {
+    fn draw_wire_intersection(ctx: &PaintContext, pos: Vec2i, color: Color32, pin: bool, wire_id: Option<usize>) {
         let screen = &ctx.screen;
         let thickness = screen.scale * 0.4;
 
-        let pos = screen.world_to_screen_tile(pos) + ((screen.scale - thickness) * 0.5);
+        let rect_pos = screen.world_to_screen_tile(pos) + ((screen.scale - thickness) * 0.5);
 
-        let rect = Rect::from_min_size(pos.into(), vec2(thickness, thickness));
+        let rect = Rect::from_min_size(rect_pos.into(), vec2(thickness, thickness));
         ctx.paint.rect_filled(rect, Rounding::none(), color);
 
         // DEBUG: visuals
         if pin {
             ctx.paint
                 .rect_stroke(rect, Rounding::none(), Stroke::new(1.0, Color32::RED));
+        }
+
+        if let Some(wire) = wire_id {
+            let thickness = screen.scale * 0.15;
+
+            let pos = screen.world_to_screen_tile(pos) + ((screen.scale - thickness) * 0.5);
+            let rect = Rect::from_min_size(pos.into(), vec2(thickness, thickness));
+
+            let mut hasher = DefaultHasher::new();
+            hasher.write_usize(wire);
+            hasher.write_usize(1999573);
+            let [r, _, g, _, b, _, _, _ ] = hasher.finish().to_le_bytes();
+
+            ctx.paint.rect_filled(rect, Rounding::none(), Color32::from_rgb(r, g, b));
         }
     }
 
@@ -951,9 +993,7 @@ impl ActiveCircuitBoard {
         }
 
         let board = self.board.read().unwrap();
-        board
-            .states
-            .update_wire(self.board.read().unwrap().wires.get(new_wire).unwrap());
+        board.states.update_wire(new_wire);
     }
 
     fn optimize_wire_part(&mut self, part: WirePart) -> Option<WirePart> {
@@ -1201,12 +1241,9 @@ impl ActiveCircuitBoard {
         }
 
         if update_states {
+            let states = self.board.read().unwrap().states.clone();
             for wire in wires {
-                self.board
-                    .read()
-                    .unwrap()
-                    .states
-                    .update_wire(self.board.read().unwrap().wires.get(wire).unwrap());
+                states.update_wire(wire);
             }
         }
     }
@@ -1265,10 +1302,9 @@ impl ActiveCircuitBoard {
             possibly_remove: bool,
         ) {
             let increment_to = to > 0 || !possibly_remove;
-            let dir = if vertical { [0, 1] } else { [1, 0] };
 
-            for i in 1.. {
-                let pos = pos + dir;
+            for i in 1u32.. {
+                let pos = pos + if vertical { [0, i as i32] } else { [i as i32, 0] };
 
                 let node = match wires.get_mut(pos.x() as isize, pos.y() as isize) {
                     None => break,
@@ -1313,19 +1349,34 @@ impl ActiveCircuitBoard {
             fix_pointers(&mut self.wire_nodes, pos, true, 0, up, true);
         }
 
-        let states_to_update = match update_state {
-            true => Some(self.board.read().unwrap().states.clone()),
-            false => None,
-        };
+        {
+            let pin = self.pin_at(pos);
+            if let Some(pin) = &pin {
+                pin.write().unwrap().set_wire(None, wire);
+            }
 
-        let mut board = self.board.write().unwrap();
+            let mut board = self.board.write().unwrap();
 
-        if let Some(wire) = prev_wire.and_then(|w| board.wires.get_mut(w)) {
-            wire.remove_point(pos, states_to_update.clone());
+
+            if let Some(wire) = prev_wire.and_then(|w| board.wires.get_mut(w)) {
+                wire.remove_point(pos, None);
+            }
+
+            if let Some(wire) = wire.and_then(|w| board.wires.get_mut(w)) {
+                wire.add_point(pos, None, left > 0, up > 0, pin);
+            }
         }
 
-        if let Some(wire) = wire.and_then(|w| board.wires.get_mut(w)) {
-            wire.add_point(pos, states_to_update, left > 0, up > 0, self.pin_at(pos));
+        if update_state {
+            let states = self.board.read().unwrap().states.clone();
+
+            if let Some(wire) = prev_wire {
+                states.update_wire(wire);
+            }
+
+            if let Some(wire) = wire {
+                states.update_wire(wire)
+            }
         }
 
         prev_wire

@@ -1,11 +1,12 @@
 #![allow(incomplete_features)]
 #![feature(generic_const_exprs)]
 #![feature(int_roundings)]
+#![feature(lazy_cell)]
 
 use std::{
     mem::size_of,
     ops::Range,
-    sync::{Arc, RwLock},
+    sync::Arc,
     time::Instant,
 };
 
@@ -33,6 +34,16 @@ mod state;
 use state::State;
 
 mod board;
+
+#[cfg(debug_assertions)]
+mod debug;
+
+#[cfg(debug_assertions)]
+type RwLock<T> = debug::DebugRwLock<T>;
+
+#[cfg(not(debug_assertions))]
+type RwLock<T> = std::sync::RwLock<T>;
+type Mutex<T> = std::sync::Mutex<T>;
 
 fn main() {
     eframe::run_native(
