@@ -283,7 +283,6 @@ impl State {
         // TODO: use condvar for future enqueues
         let mut queue = self.queue.lock().unwrap();
         queue.enqueue(task);
-        dbg!(queue.inner());
     }
 }
 
