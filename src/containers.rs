@@ -4,7 +4,9 @@ use std::{
     ops::Range,
 };
 
-use crate::{vector::Vector, SizeCalc};
+use eframe::egui::containers;
+
+use crate::{vector::Vector, SizeCalc, Intersect};
 
 #[derive(Debug, Clone)]
 pub struct FixedVec<T> {
@@ -55,7 +57,10 @@ impl<T> FixedVec<T> {
         self.vec.get(pos)?.as_ref()
     }
 
-    pub fn get_clone(&self, pos: usize) -> Option<T> where T: Clone {
+    pub fn get_clone(&self, pos: usize) -> Option<T>
+    where
+        T: Clone,
+    {
         self.vec.get(pos)?.as_ref().cloned()
     }
 
@@ -297,11 +302,7 @@ impl<const CHUNK_SIZE: usize, T: Default> Chunks2D<CHUNK_SIZE, T> {
             .and_then(|row| row.get(qx)?.as_ref().map(|b| b.as_ref()))
     }
 
-    pub fn get_chunk_mut(
-        &mut self,
-        x: isize,
-        y: isize,
-    ) -> Option<&mut Chunk<CHUNK_SIZE, T>> {
+    pub fn get_chunk_mut(&mut self, x: isize, y: isize) -> Option<&mut Chunk<CHUNK_SIZE, T>> {
         let ((qx, qy), qid) = Self::to_quarter_id_pos(x, y);
         let quarter = &mut self.quarters[qid];
         let row = quarter.get_mut(qy)?;
@@ -410,6 +411,222 @@ impl<const CHUNK_SIZE: usize, T: Default> Chunks2D<CHUNK_SIZE, T> {
             end: rightcount,
         }
     }
+
+    pub fn iter_area(
+        &self,
+        pos: Vector<2, isize>,
+        size: Vector<2, usize>,
+    ) -> ChunksAreaIterator<'_, CHUNK_SIZE, T> {
+        let size = size.convert_values(|v| v as isize);
+
+        let tiles_tl = pos;
+        let tiles_br = pos + size;
+
+        let chunks_tl = pos.convert_values(|v| v.div_floor(CHUNK_SIZE as isize));
+        let chunks_br = (pos + size).convert_values(|v| v.div_ceil(CHUNK_SIZE as isize));
+
+        let empty = size.x() == 0 || size.y() == 0;
+
+        let in_chunk_start = tiles_tl - chunks_tl * CHUNK_SIZE as isize;
+        let in_chunk_end = Vector::single_value(CHUNK_SIZE as isize)
+            - ((chunks_br * CHUNK_SIZE as isize) - tiles_br);
+
+        ChunksAreaIterator {
+            chunks: self,
+            chunk_bounds_tl: chunks_tl,
+            chunk_bounds_br_excl: chunks_br,
+            chunk: self.get_chunk(chunks_tl.x(), chunks_tl.y()),
+            chunk_pos: chunks_tl,
+            in_chunk_pos: in_chunk_start.convert_values(|v| v as usize),
+            in_chunk_start: in_chunk_start.convert_values(|v| v as usize),
+            in_chunk_end_excl: in_chunk_end.convert_values(|v| v as usize),
+            empty,
+        }
+    }
+
+    pub fn for_each_item<P>(&self, tl: Vector<2, isize>, br: Vector<2, isize>, pass: &P, f: impl Fn(Vector<2, isize>, &T, &P)) {
+
+        let chunks_tl = tl.convert_values(|v| v.div_floor(CHUNK_SIZE as isize));
+        let chunks_br = br.convert_values(|v| v.div_floor(CHUNK_SIZE as isize));
+
+        for cy in chunks_tl.y()..=chunks_br.y() {
+            let rowrange = self.get_chunk_row_range(cy);
+            let rowrange = Range {
+                start: rowrange.start,
+                end: rowrange.end,
+            };
+
+            for cx in (chunks_tl.x()..chunks_br.x() + 1).intersect(&rowrange) {
+                let chunk_coord: Vector<2, isize> = [cx, cy].into();
+                let chunk_tl = chunk_coord * 16;
+                let chunk =
+                    match self.get_chunk(chunk_coord.x(), chunk_coord.y()) {
+                        Some(v) => v,
+                        None => continue,
+                    };
+
+                let chunk_start = tl - chunk_tl;
+                let chunk_wnd = br - chunk_tl;
+
+                for j in 0..16 {
+                    if j < chunk_start.y() {
+                        continue;
+                    } else if j > chunk_wnd.y() {
+                        break;
+                    }
+
+                    for i in 0..16 {
+                        if i < chunk_start.x() {
+                            continue;
+                        } else if i > chunk_wnd.x() {
+                            break;
+                        }
+
+                        let item = &chunk[i as usize][j as usize];
+ 
+                        let pos = chunk_tl + [i, j];
+                        
+                        f(pos, item, pass);
+                    }
+                }
+            }
+        }
+    }
+
+}
+
+pub struct ChunksAreaIterator<'a, const CHUNK_SIZE: usize, T: Default> {
+    chunks: &'a Chunks2D<CHUNK_SIZE, T>,
+
+    chunk_bounds_tl: Vector<2, isize>,
+    chunk_bounds_br_excl: Vector<2, isize>,
+
+    chunk: Option<&'a Chunk<CHUNK_SIZE, T>>,
+    chunk_pos: Vector<2, isize>,
+    in_chunk_pos: Vector<2, usize>,
+
+    in_chunk_start: Vector<2, usize>,
+    in_chunk_end_excl: Vector<2, usize>,
+
+    empty: bool,
+}
+
+impl<'a, const CHUNK_SIZE: usize, T: Default> ChunksAreaIterator<'a, CHUNK_SIZE, T> {
+    fn next_chunk(&mut self) -> bool {
+        if self.empty || self.chunk_pos.y() >= self.chunk_bounds_br_excl.y() {
+            return false;
+        }
+
+        self.in_chunk_pos = [0, 0].into();
+
+        loop {
+            *self.chunk_pos.x_mut() += 1;
+            if self.chunk_pos.x() >= self.chunk_bounds_br_excl.x() {
+                *self.chunk_pos.x_mut() = self.chunk_bounds_tl.x();
+                *self.chunk_pos.y_mut() += 1;
+                if self.chunk_pos.y() >= self.chunk_bounds_br_excl.y() {
+                    self.chunk = None;
+                    self.empty = true;
+                    return false;
+                }
+            }
+
+            self.chunk = self
+                .chunks
+                .get_chunk(self.chunk_pos.x(), self.chunk_pos.y());
+
+            match self.chunk {
+                Some(_) => {
+                    self.set_in_chunk_start_pos();
+                    return true
+                },
+                None => continue,
+            }
+        }
+    }
+
+    fn transform_coord(chunk: isize, in_chunk: usize) -> isize {
+        chunk * CHUNK_SIZE as isize + in_chunk as isize
+    }
+
+    fn next_item(&mut self) {
+        let mut pos = self.in_chunk_pos;
+        *pos.x_mut() += 1;
+
+        let x_end = if self.chunk_pos.x() == self.chunk_bounds_br_excl.x() - 1 {
+            self.in_chunk_end_excl.x()
+        } else {
+            CHUNK_SIZE
+        };
+
+        if pos.x() >= x_end {
+            let x_start = if self.chunk_pos.x() == self.chunk_bounds_tl.x() {
+                self.in_chunk_start.x()
+            } else {
+                0
+            };
+
+            *pos.x_mut() = x_start;
+            *pos.y_mut() += 1;
+
+            let y_end = if self.chunk_pos.y() == self.chunk_bounds_br_excl.y() - 1 {
+                self.in_chunk_end_excl.y()
+            } else {
+                CHUNK_SIZE
+            };
+
+            if pos.y() >= y_end {
+                self.next_chunk();
+                return;
+            }
+        }
+        
+        self.in_chunk_pos = pos;
+    }
+
+    fn set_in_chunk_start_pos(&mut self) {
+        let x_start = if self.chunk_pos.x() == self.chunk_bounds_tl.x() {
+            self.in_chunk_start.x()
+        } else {
+            0
+        };
+
+        let y_start = if self.chunk_pos.y() == self.chunk_bounds_tl.y() {
+            self.in_chunk_start.y()
+        } else {
+            0
+        };
+        self.in_chunk_pos = [x_start, y_start].into();
+
+    }
+}
+
+impl<'a, const CHUNK_SIZE: usize, T: Default> Iterator for ChunksAreaIterator<'a, CHUNK_SIZE, T> {
+    type Item = (Vector<2, isize>, &'a T);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.empty {
+            return None;
+        }
+
+        if self.chunk.is_none() && !self.next_chunk() {
+            return None;
+        }
+
+        match self.chunk {
+            None => None,
+            Some(chunk) => {
+                let item = &chunk[self.in_chunk_pos.x()][self.in_chunk_pos.y()];
+                let tx = Self::transform_coord(self.chunk_pos.x(), self.in_chunk_pos.x());
+                let ty = Self::transform_coord(self.chunk_pos.y(), self.in_chunk_pos.y());
+                let res = ([tx, ty].into(), item);
+
+                self.next_item();
+
+                Some(res)
+            }
+        }
+    }
 }
 
 impl<const CHUNK_SIZE: usize, T: SizeCalc + Default> SizeCalc for Chunks2D<CHUNK_SIZE, T> {
@@ -460,7 +677,11 @@ impl<T, S: BuildHasher> RandomQueue<T, S> {
         let pos = (self.hasher.finish() % len as u64) as usize;
         let real_pos = match self.vec.get_nth_existing_index(pos) {
             Some(v) => v,
-            None => unreachable!("Queue length ({}) does not match internal vector ({})!", len, self.vec.iter().count()),
+            None => unreachable!(
+                "Queue length ({}) does not match internal vector ({})!",
+                len,
+                self.vec.iter().count()
+            ),
         };
         let item = match self.vec.remove(real_pos) {
             Some(v) => v,

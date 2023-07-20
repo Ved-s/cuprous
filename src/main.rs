@@ -268,6 +268,7 @@ impl Screen {
 
 #[derive(Debug)]
 enum SelectedItem {
+    None,
     Wires,
     Circuit(Box<dyn CircuitPreview>),
 }
@@ -282,7 +283,6 @@ struct App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &eframe::egui::Context, frame: &mut eframe::Frame) {
-        let start_time = Instant::now();
         let int_info = frame.info();
         if let Some(win_pos) = int_info.window_info.position {
             if let Some(last_win_pos) = self.last_win_pos {
@@ -298,83 +298,18 @@ impl eframe::App for App {
         self.board.state.update(&self.board.board.read().unwrap());
 
         if ctx.input(|input| input.key_pressed(Key::F1)) {
-            self.selected = match self.selected {
+            self.selected = match &self.selected {
+                SelectedItem::None => SelectedItem::Wires,
                 SelectedItem::Wires => {
                     SelectedItem::Circuit(Box::new(circuits::TestCircuitPreview { a: 10, b: 20 }))
                 }
-                SelectedItem::Circuit(_) => SelectedItem::Wires,
+                SelectedItem::Circuit(_) => SelectedItem::None,
             }
         }
 
         egui::CentralPanel::default()
             .frame(Frame::central_panel(ctx.style().as_ref()).inner_margin(Margin::same(0.0)))
-            .show(ctx, |ui| {
-                let rect = ui.max_rect();
-
-                self.pan_zoom.update(ui, rect);
-
-                let paint = ui.painter_at(rect);
-
-                let font_id = TextStyle::Monospace.resolve(ui.style());
-
-                let mut grid_ds_cell_size = self.pan_zoom.scale;
-
-                while grid_ds_cell_size < 6.0 {
-                    grid_ds_cell_size *= 16.0;
-                }
-
-                App::draw_grid(
-                    self.pan_zoom.pos * self.pan_zoom.scale / grid_ds_cell_size,
-                    grid_ds_cell_size.into(),
-                    16.into(),
-                    rect,
-                    &paint,
-                );
-
-                self.draw_cross(rect, &paint);
-
-                let bounds = self.calc_draw_bounds(rect);
-                let ctx = PaintContext {
-                    screen: self.pan_zoom.to_screen(rect.left_top().into()),
-                    paint: &paint,
-                    rect,
-                    bounds,
-                    ui: Arc::new(ui),
-                    egui_ctx: ctx,
-                };
-
-                self.board.update(
-                    &ctx,
-                    match &self.selected {
-                        SelectedItem::Wires => SelectedBoardItem::Wire,
-                        SelectedItem::Circuit(p) => SelectedBoardItem::Circuit(p.as_ref()),
-                    },
-                );
-
-                let update_time = Instant::now() - start_time;
-
-                paint.text(
-                    rect.left_top() + vec2(10.0, 10.0),
-                    Align2::LEFT_TOP,
-                    format!(
-                        r#"Pos: {}
-Tile draw bounds: {} - {}
-Chunk draw bounds: {} - {}
-Time: {:.4} ms
-Selected: {:?}
-"#,
-                        self.pan_zoom.pos,
-                        bounds.tiles_tl,
-                        bounds.tiles_br,
-                        bounds.chunks_tl,
-                        bounds.chunks_br,
-                        update_time.as_secs_f64() * 1000.0,
-                        self.selected
-                    ),
-                    font_id,
-                    Color32::WHITE,
-                );
-            });
+            .show(ctx, |ui| self.main_update(ui, ctx));
     }
 }
 
@@ -388,7 +323,7 @@ impl App {
         Self {
             pan_zoom: PanAndZoom::new(0.0.into(), 16.0),
             last_win_pos: None,
-            selected: SelectedItem::Wires,
+            selected: SelectedItem::None,
             board: ActiveCircuitBoard::new(board, state_id).unwrap()
         }
     }
@@ -521,6 +456,67 @@ impl App {
             chunks_tl: (screen_tl / chunk_size).convert_values(|v| v.floor() as i32),
             chunks_br: (screen_br / chunk_size).convert_values(|v| v.floor() as i32),
         }
+    }
+
+    fn main_update(&mut self, ui: &mut Ui, ctx: &Context) {
+
+        let start_time = Instant::now();
+
+        let rect = ui.max_rect();
+        self.pan_zoom.update(ui, rect);
+        let paint = ui.painter_at(rect);
+        let font_id = TextStyle::Monospace.resolve(ui.style());
+        let mut grid_ds_cell_size = self.pan_zoom.scale;
+        while grid_ds_cell_size < 6.0 {
+            grid_ds_cell_size *= 16.0;
+        }
+        App::draw_grid(
+            self.pan_zoom.pos * self.pan_zoom.scale / grid_ds_cell_size,
+            grid_ds_cell_size.into(),
+            16.into(),
+            rect,
+            &paint,
+        );
+        self.draw_cross(rect, &paint);
+        let bounds = self.calc_draw_bounds(rect);
+        let ctx = PaintContext {
+            screen: self.pan_zoom.to_screen(rect.left_top().into()),
+            paint: &paint,
+            rect,
+            bounds,
+            ui: Arc::new(ui),
+            egui_ctx: ctx,
+        };
+        self.board.update(
+            &ctx,
+            match &self.selected {
+                SelectedItem::None => SelectedBoardItem::None,
+                SelectedItem::Wires => SelectedBoardItem::Wire,
+                SelectedItem::Circuit(p) => SelectedBoardItem::Circuit(p.as_ref()),
+            },
+        );
+        let update_time = Instant::now() - start_time;
+        paint.text(
+            rect.left_top() + vec2(10.0, 10.0),
+            Align2::LEFT_TOP,
+            format!(
+                r#"Pos: {}
+Tile draw bounds: {} - {}
+Chunk draw bounds: {} - {}
+Time: {:.4} ms
+Selected: {:?}
+"#,
+                self.pan_zoom.pos,
+                bounds.tiles_tl,
+                bounds.tiles_br,
+                bounds.chunks_tl,
+                bounds.chunks_br,
+                update_time.as_secs_f64() * 1000.0,
+                self.selected
+            ),
+            font_id,
+            Color32::WHITE,
+        );
     }
 }
 trait SizeCalc

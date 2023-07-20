@@ -51,6 +51,8 @@ pub struct WirePoint {
 pub struct WirePart {
     pub pos: Vec2i,
     pub length: NonZeroU32,
+
+    /// Down and right
     pub vertical: bool,
 }
 

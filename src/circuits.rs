@@ -5,7 +5,7 @@ use emath::Align2;
 
 use crate::{
     board::CircuitBoard,
-    state::{CircuitState, InternalCircuitState, State, UpdateTask, WireState},
+    state::{CircuitState, InternalCircuitState, State, WireState},
     vector::{Vec2i, Vec2u, Vector},
     OptionalInt, PaintContext, RwLock,
 };
@@ -282,7 +282,13 @@ impl<'a> CircuitStateContext<'a> {
                 .get_internal_mut(),
         )
     }
+
+    pub fn set_update_interval(&self, interval: Option<Duration>) {
+        self.global_state.set_circuit_update_interval(self.circuit.id, interval);
+    }
 }
+
+#[allow(unused_variables)]
 pub trait CircuitImpl {
     fn draw(&self, state_ctx: &CircuitStateContext, paint_ctx: &PaintContext);
 
@@ -290,10 +296,13 @@ pub trait CircuitImpl {
 
     fn update_signals(&mut self, state_ctx: &CircuitStateContext, changed_pin: Option<usize>);
 
-    fn update(&mut self, state_ctx: &CircuitStateContext);
+    /// Called once every period determined by `Self::update_interval`
+    fn update(&mut self, state_ctx: &CircuitStateContext) {}
 
-    /// Warning! Must always return either [`Some`] or [`None`] (same type)
-    #[allow(unused_variables)]
+    /// Called once on circuit creation, use for update interval setup
+    fn init_state(&self, state_ctx: &CircuitStateContext) {}
+
+    /// Called after `Self::update` to determine next update timestamp
     fn update_interval(&self, state_ctx: &CircuitStateContext) -> Option<Duration> {
         None
     }
@@ -458,6 +467,10 @@ impl CircuitImpl for TestCircuitImpl {
             true => Some(Duration::from_millis(200)),
             false => Some(Duration::from_secs(2)),
         }
+    }
+
+    fn init_state(&self, state_ctx: &CircuitStateContext) {
+        state_ctx.set_update_interval(self.update_interval(state_ctx));
     }
 }
 

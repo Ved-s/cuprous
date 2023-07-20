@@ -92,7 +92,6 @@ pub struct StateCollection {
 }
 
 impl StateCollection {
-
     pub fn new() -> Self {
         Self {
             states: Default::default(),
@@ -119,15 +118,15 @@ impl StateCollection {
         }
     }
 
-    pub fn update_circuit_interval(&self, id: usize, dur: Duration) {
-        for state in self.states.read().unwrap().iter() {
-            state.update_circuit_interval(id, dur);
-        }
-    }
-
     pub fn get(&self, state: usize) -> Option<Arc<State>> {
         self.states.read().unwrap().get(state).cloned()
     }
+
+    pub fn init_circuit(&self, circuit: &Circuit) {
+        for state in self.states.read().unwrap().iter() {
+            state.init_circuit(circuit);
+        }
+    } 
 }
 
 pub struct State {
@@ -168,14 +167,24 @@ impl State {
             .clone()
     }
 
-    pub fn update_circuit_interval(&self, id: usize, dur: Duration) {
+    pub fn set_circuit_update_interval(&self, id: usize, dur: Option<Duration>) {
         let mut updates = self.updates.lock().unwrap();
-        let index = updates.iter_mut().find(|v| v.0 == id);
-        match index {
-            Some(v) => v.1 = Instant::now() + dur,
+        match dur {
+            Some(dur) => {
+                let index = updates.iter_mut().find(|v| v.0 == id);
+                match index {
+                    Some(v) => v.1 = Instant::now() + dur,
+                    None => {
+                        let _i = updates.len();
+                        updates.push((id, Instant::now() + dur))
+                    }
+                }
+            }
             None => {
-                let _i = updates.len();
-                updates.push((id, Instant::now() + dur))
+                let index = updates.iter().enumerate().find(|(i, t)| t.0 == id).map(|(i, _)| i);
+                if let Some(index) = index {
+                    updates.remove(index);
+                }
             }
         }
     }
@@ -283,6 +292,11 @@ impl State {
         // TODO: use condvar for future enqueues
         let mut queue = self.queue.lock().unwrap();
         queue.enqueue(task);
+    }
+
+    fn init_circuit(&self, circuit: &Circuit) {
+        let state_ctx = CircuitStateContext::new(self, circuit);
+        circuit.imp.read().unwrap().init_state(&state_ctx);
     }
 }
 
