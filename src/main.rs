@@ -273,6 +273,8 @@ struct App {
     pub pan_zoom: PanAndZoom,
     pub board: ActiveCircuitBoard,
     pub selected: SelectedItem,
+
+    pub debug: bool,
 }
 
 impl eframe::App for App {
@@ -300,6 +302,9 @@ impl eframe::App for App {
                 SelectedItem::Circuit(_) => SelectedItem::None,
             }
         }
+        if ctx.input(|input| input.key_pressed(Key::F9)) {
+            self.debug = !self.debug;
+        }
 
         egui::CentralPanel::default()
             .frame(Frame::central_panel(ctx.style().as_ref()).inner_margin(Margin::same(0.0)))
@@ -318,6 +323,7 @@ impl App {
             last_win_pos: None,
             selected: SelectedItem::None,
             board: ActiveCircuitBoard::new(board, state_id).unwrap(),
+            debug: true
         }
     }
 
@@ -486,6 +492,7 @@ impl App {
                 SelectedItem::Wires => SelectedBoardItem::Wire,
                 SelectedItem::Circuit(p) => SelectedBoardItem::Circuit(p.as_ref()),
             },
+            self.debug
         );
         let update_time = Instant::now() - start_time;
         paint.text(
@@ -496,7 +503,11 @@ impl App {
 Tile draw bounds: {} - {}
 Chunk draw bounds: {} - {}
 Time: {:.4} ms
-Selected: {:?}
+
+[F1] Selected: {:?}
+[F9] Debug: {}
+
+Wire parts drawn: {}
 "#,
                 self.pan_zoom.pos,
                 bounds.tiles_tl,
@@ -504,7 +515,10 @@ Selected: {:?}
                 bounds.chunks_tl,
                 bounds.chunks_br,
                 update_time.as_secs_f64() * 1000.0,
-                self.selected
+                self.selected,
+                self.debug,
+
+                self.board.wires_drawn.load(std::sync::atomic::Ordering::Relaxed)
             ),
             font_id,
             Color32::WHITE,
@@ -775,7 +789,7 @@ impl Direction4 {
         include_start: bool,
     ) -> DirectionPosItreator {
         let dir = self.unit_vector() * if dist >= 0 { 1 } else { -1 };
-        let dist = dist.abs() as u32;
+        let dist = dist.unsigned_abs();
 
         let (pos, dist) = if include_start { (pos, dist + 1) } else { (pos + dir, dist) };
         DirectionPosItreator { pos, remaining: dist, dir }
@@ -824,7 +838,7 @@ impl Direction2 {
         include_start: bool,
     ) -> DirectionPosItreator {
         let dir = self.unit_vector(dist >= 0);
-        let dist = dist.abs() as u32;
+        let dist = dist.unsigned_abs();
 
         let (pos, dist) = if include_start { (pos, dist + 1) } else { (pos + dir, dist) };
         DirectionPosItreator { pos, remaining: dist, dir }

@@ -58,27 +58,27 @@ impl<const SIZE: usize, T: VectorValue> Vector<SIZE, T> {
         c
     }
 
-    pub fn into_type<I>(&self) -> Vector<SIZE, I> where T: Into<I>, I: VectorValue {
+    pub fn into_type<I>(self) -> Vector<SIZE, I> where T: Into<I>, I: VectorValue {
         let mut v = [I::default(); SIZE];
-        for i in 0..SIZE {
+        (0..SIZE).for_each(|i| {
             v[i] = self.0[i].into();
-        }
+        });
         v.into()
     }
 
     pub fn convert<I: VectorValue>(&self, converter: impl Fn(T) -> I) -> Vector<SIZE, I> {
         let mut v = [I::default(); SIZE];
-        for i in 0..SIZE {
+        (0..SIZE).for_each(|i| {
             v[i] = converter(self.0[i]);
-        }
+        });
         v.into()
     }
 
     pub fn combine_with<I: VectorValue, O: VectorValue>(&self, other: Vector<SIZE, I>, combiner: impl Fn(T, I) -> O) -> Vector<SIZE, O> {
         let mut v = [O::default(); SIZE];
-        for i in 0..SIZE {
+        (0..SIZE).for_each(|i| {
             v[i] = combiner(self.0[i], other.0[i]);
-        }
+        });
         v.into()
     }
 }

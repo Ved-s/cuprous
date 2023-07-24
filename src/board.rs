@@ -3,7 +3,7 @@ use std::{
     f32::consts::TAU,
     hash::Hasher,
     num::NonZeroU32,
-    sync::Arc,
+    sync::{Arc, atomic::{AtomicUsize, Ordering}}, cell::RefCell,
 };
 
 use eframe::{
@@ -216,8 +216,8 @@ pub struct ActiveCircuitBoard {
     pub board: Arc<RwLock<CircuitBoard>>,
     pub state: Arc<State>,
 
-    wire_nodes: Chunks2D<16, WireNode>,
-    circuit_nodes: Chunks2D<16, CircuitNode>,
+    pub wire_nodes: Chunks2D<16, WireNode>,
+    pub circuit_nodes: Chunks2D<16, CircuitNode>,
 
     wire_drag_pos: Option<Vec2i>,
 
@@ -226,6 +226,8 @@ pub struct ActiveCircuitBoard {
     selection: HashSet<SelectedWorldObject>,
     selection_change: HashSet<SelectedWorldObject>,
     selection_mode: SelectionMode,
+
+    pub wires_drawn: AtomicUsize
 }
 
 impl ActiveCircuitBoard {
@@ -250,10 +252,13 @@ impl ActiveCircuitBoard {
             selection: HashSet::new(),
             selection_change: HashSet::new(),
             selection_mode: SelectionMode::Include,
+
+            wires_drawn: AtomicUsize::new(0)
         })
     }
 
-    pub fn update(&mut self, ctx: &PaintContext, selected: SelectedBoardItem) {
+    pub fn update(&mut self, ctx: &PaintContext, selected: SelectedBoardItem, debug: bool) {
+        self.wires_drawn.store(0, Ordering::Relaxed);
         self.pre_update_selection(ctx, selected.none());
         ctx.draw_chunks(
             &self.wire_nodes,
@@ -264,6 +269,17 @@ impl ActiveCircuitBoard {
             },
         );
 
+        if debug {
+            ctx.draw_chunks(
+                &self.wire_nodes,
+                &self,
+                |node| !node.is_empty(),
+                |node, pos, ctx, this, lookaround| {
+                    this.draw_wire_node_tests(ctx, node, pos, lookaround);
+                },
+            );
+        }
+
         ctx.draw_chunks(
             &self.circuit_nodes,
             &*self,
@@ -273,7 +289,7 @@ impl ActiveCircuitBoard {
 
         self.update_wires(ctx, selected.wire());
         self.update_circuits(ctx, selected.circuit());
-        self.update_selection(ctx, selected.none());
+        self.update_selection(ctx);
     }
 
     fn draw_wire_node(
@@ -331,7 +347,7 @@ impl ActiveCircuitBoard {
                 dir: info.dir,
             };
 
-            this.draw_wire_part(ctx, &part, info.color.linear_multiply(0.5));
+            this.draw_wire_part(ctx, &part, info.color);
         }
         if node.is_empty() {
             return;
@@ -349,7 +365,7 @@ impl ActiveCircuitBoard {
 
             let draw = WireDrawInfo {
                 dist: node.get_dir(dir.into()).get(),
-                next_dist: next_node.map_or(None, |n| n.get_dir(dir.into()).get()),
+                next_dist: next_node.and_then(|n| n.get_dir(dir.into()).get()),
                 wire: node.wire.get(),
                 dir,
                 pos,
@@ -378,29 +394,44 @@ impl ActiveCircuitBoard {
                 }
             }
         }
+    }
 
+    fn draw_wire_node_tests(
+        &self,
+        ctx: &PaintContext<'_>,
+        node: &WireNode,
+        pos: Vec2i,
+        lookaround: &ChunksLookaround<'_, 16, WireNode>,
+    ) {
+        if node.is_empty() {
+            return;
+        }
         let incorrect_font = TextStyle::Monospace.resolve(ctx.ui.style());
 
         for dir in Direction4::iter_all() {
             let correct = match node.get_dir(dir).get() {
                 None => true,
                 Some(dist) => 'm: {
-
                     // TODO: something wrong here
 
                     let back_dir = dir.inverted();
+                    let backptr_start = if node.wire.is_some() {
+                        0
+                    } else {
+                        node.get_dir(back_dir).get().unwrap_or(0)
+                    };
                     for i in 1..=dist {
-                        let target = lookaround.get_relative(
-                            dir.unit_vector().convert(|v| v as isize) * dist as isize,
-                        );
+                        let rel_pos = dir.unit_vector().convert(|v| v as isize) * i as isize;
+
+                        let target = lookaround.get_relative(rel_pos);
                         let target = match target {
                             Some(t) => t,
                             None => break 'm false,
                         };
-                        //let back_ptr = target.get_dir(back_dir);
-                        //if back_ptr.get() != Some(i) {
-                        //   break 'm false;
-                        //}
+                        let back_ptr = target.get_dir(back_dir);
+                        if back_ptr.get() != Some(backptr_start + i) {
+                            break 'm false;
+                        }
 
                         if i == dist {
                             // Target node wire should be not None and match current node wire, if it exists
@@ -418,21 +449,23 @@ impl ActiveCircuitBoard {
                 }
             };
 
-            if let Some(dist) = node.get_dir(dir).get() {
-                let world_pos = pos.convert(|v| v as f32 + 0.5);
-                let world_pos = world_pos + dir.unit_vector().convert(|v| v as f32 * 0.25);
-                let screen_pos = ctx.screen.world_to_screen(world_pos);
-                ctx.paint.text(
-                    screen_pos.into(),
-                    Align2::CENTER_CENTER,
-                    dist.to_string(),
-                    incorrect_font.clone(),
-                    if correct {
-                        Color32::WHITE
-                    } else {
-                        Color32::RED
-                    },
-                );
+            if !correct {
+                if let Some(dist) = node.get_dir(dir).get() {
+                    let world_pos = pos.convert(|v| v as f32 + 0.5);
+                    let world_pos = world_pos + dir.unit_vector().convert(|v| v as f32 * 0.25);
+                    let screen_pos = ctx.screen.world_to_screen(world_pos);
+                    ctx.paint.text(
+                        screen_pos.into(),
+                        Align2::CENTER_CENTER,
+                        dist.to_string(),
+                        incorrect_font.clone(),
+                        if correct {
+                            Color32::WHITE
+                        } else {
+                            Color32::RED
+                        },
+                    );
+                }
             }
         }
 
@@ -447,27 +480,6 @@ impl ActiveCircuitBoard {
                 Color32::WHITE,
             );
         }
-
-        //let correct_up = node.up == 0
-        //    ||
-        //let correct_left = node.left == 0
-        //    || lookaround
-        //        .get_relative(-(node.left as isize), 0)
-        //        .is_some_and(|n| n.wire.is_some())
-        //        && (1..node.left as isize).all(|p| {
-        //            lookaround
-        //                .get_relative(-p, 0)
-        //                .is_some_and(|n| n.wire.is_none())
-        //        });
-        //if !correct_up || !correct_left {
-        //    let pos = ctx.screen.world_to_screen_tile(pos);
-        //    let rect = Rect::from_min_size(pos.into(), vec2(ctx.screen.scale, ctx.screen.scale));
-        //    ctx.paint.rect_filled(
-        //        rect,
-        //        Rounding::none(),
-        //        Color32::from_rgba_unmultiplied(255, 0, 0, 100),
-        //    );
-        //}
     }
 
     fn draw_circuit_node(&self, node: &CircuitNode, pos: Vec2i, ctx: &PaintContext) {
@@ -605,7 +617,7 @@ impl ActiveCircuitBoard {
                 SelectedWorldObject::WirePart { pos, dir } => {
                     if let Some(w) = this.find_node(*pos, (*dir).into()) {
                         let part = WirePart {
-                            pos: w.pos,
+                            pos: *pos,
                             dir: *dir,
                             length: w.distance,
                         };
@@ -734,7 +746,7 @@ impl ActiveCircuitBoard {
         }
     }
 
-    fn update_selection(&mut self, ctx: &PaintContext, selected: bool) {
+    fn update_selection(&mut self, ctx: &PaintContext) {
         if let Some(rect) = self.selection_rect {
             ctx.paint
                 .rect_stroke(rect, Rounding::none(), Stroke::new(1.0, Color32::WHITE));
@@ -859,7 +871,7 @@ impl ActiveCircuitBoard {
         };
         for pin in circ_info.read().unwrap().pins.iter() {
             let pos = place_pos + pin.pos.convert(|v| v as i32);
-            if let Some(wire) = self.create_wire_intersection(pos, None) {
+            if let Some(wire) = self.create_wire_intersection(pos) {
                 let wire = if let Some(wire) = self.board.write().unwrap().wires.get_mut(wire) {
                     if let Some(p) = wire.points.get_mut(&pos) {
                         p.pin = Some(pin.pin.clone());
@@ -921,7 +933,7 @@ impl ActiveCircuitBoard {
         if center {
             self.remove_intersection_at_node(pos, *node, true);
         } else {
-            self.create_wire_intersection_at_node(pos, *node, None);
+            self.create_wire_intersection_at_node(pos, *node);
         }
     }
 
@@ -942,27 +954,16 @@ impl ActiveCircuitBoard {
         Rect::from_min_size(pos.into(), rect_size.into())
     }
 
-    fn draw_wire_part(
-        &self,
-        ctx: &PaintContext,
-        part: &WirePart,
-        color: Color32
-    ) {
+    fn draw_wire_part(&self, ctx: &PaintContext, part: &WirePart, color: Color32) {
         let screen = &ctx.screen;
         let rect = Self::calc_wire_part_rect(screen, part);
         ctx.paint.rect_filled(rect, Rounding::none(), color);
+
+        self.wires_drawn.fetch_add(1, Ordering::Relaxed);
     }
 
     fn calc_wire_point_rect(screen: &Screen, pos: Vec2i) -> Rect {
         let thickness = screen.scale * Self::WIRE_POINT_THICKNESS;
-
-        let rect_pos = screen.world_to_screen_tile(pos) + ((screen.scale - thickness) * 0.5);
-
-        Rect::from_min_size(rect_pos.into(), vec2(thickness, thickness))
-    }
-
-    fn calc_thin_wire_point_rect(screen: &Screen, pos: Vec2i) -> Rect {
-        let thickness = screen.scale * Self::WIRE_THICKNESS;
 
         let rect_pos = screen.world_to_screen_tile(pos) + ((screen.scale - thickness) * 0.5);
 
@@ -1051,13 +1052,13 @@ impl ActiveCircuitBoard {
         }
     }
 
-    pub fn create_wire_intersection(&mut self, pos: Vec2i, wire: Option<usize>) -> Option<usize> {
+    pub fn create_wire_intersection(&mut self, pos: Vec2i) -> Option<usize> {
         let node = self.wire_nodes.get(pos.convert(|v| v as isize));
         let node = match node {
             Some(v) => *v,
             None => return None,
         };
-        self.create_wire_intersection_at_node(pos, node, wire)
+        self.create_wire_intersection_at_node(pos, node)
     }
 
     // wire param: if Some(w) will use wire w, if None, will try to figure ot which wire to use (with merging wires)
@@ -1065,7 +1066,6 @@ impl ActiveCircuitBoard {
         &mut self,
         pos: Vec2i,
         node: WireNode,
-        wire: Option<usize>,
     ) -> Option<usize> {
         let wires = self.wires_at_node(pos, &node);
 
@@ -1111,9 +1111,9 @@ impl ActiveCircuitBoard {
                     Some(horizontal)
                 };
 
-                wire.and_then(|w| {
+                wire.map(|w| {
                     self.set_wire_point(pos, Some(w), true);
-                    Some(w)
+                    w
                 })
             }
         }
@@ -1130,10 +1130,13 @@ impl ActiveCircuitBoard {
     fn remove_intersection_at_node(&mut self, pos: Vec2i, node: WireNode, split: bool) {
         let (wire, int4) = match self.wires_at_node(pos, &node) {
             TileWires::None => return,
-            TileWires::One { wire, vertical } => return,
+            TileWires::One {
+                wire: _,
+                vertical: _,
+            } => return,
             TileWires::Two {
-                horizontal,
-                vertical,
+                horizontal: _,
+                vertical: _,
             } => return,
             TileWires::Point {
                 wire,
@@ -1191,7 +1194,7 @@ impl ActiveCircuitBoard {
                 if i == 0 || i as u32 == part.length.get() {
                     match self.wires_at(pos) {
                         TileWires::None => {}
-                        TileWires::One { wire, vertical } => {
+                        TileWires::One { wire, vertical: _ } => {
                             wires_crossed.insert(wire);
                         }
                         TileWires::Two {
@@ -1203,10 +1206,10 @@ impl ActiveCircuitBoard {
                         }
                         TileWires::Point {
                             wire,
-                            left,
-                            up,
-                            right,
-                            down,
+                            left: _,
+                            up: _,
+                            right: _,
+                            down: _,
                         } => {
                             wires_crossed.insert(wire);
                         }
