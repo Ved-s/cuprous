@@ -22,6 +22,12 @@ pub type Vec3i = Vector<3, i32>;
 pub type Vec2u = Vector<2, u32>;
 pub type Vec3u = Vector<3, u32>;
 
+pub type Vec2isize = Vector<2, isize>;
+pub type Vec3isize = Vector<3, isize>;
+
+pub type Vec2usize = Vector<2, usize>;
+pub type Vec3usize = Vector<3, usize>;
+
 impl<const SIZE: usize, T: VectorValue> Vector<SIZE, T> {
     pub fn single_value(value: T) -> Self {
         Self([value; SIZE])
@@ -60,7 +66,7 @@ impl<const SIZE: usize, T: VectorValue> Vector<SIZE, T> {
         v.into()
     }
 
-    pub fn convert_values<I: VectorValue>(&self, converter: impl Fn(T) -> I) -> Vector<SIZE, I> {
+    pub fn convert<I: VectorValue>(&self, converter: impl Fn(T) -> I) -> Vector<SIZE, I> {
         let mut v = [I::default(); SIZE];
         for i in 0..SIZE {
             v[i] = converter(self.0[i]);

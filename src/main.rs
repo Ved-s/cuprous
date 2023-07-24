@@ -3,14 +3,9 @@
 #![feature(int_roundings)]
 #![feature(lazy_cell)]
 
-use std::{
-    mem::size_of,
-    ops::Range,
-    sync::Arc,
-    time::Instant,
-};
+use std::{mem::size_of, ops::Range, sync::Arc, time::Instant};
 
-use board::{ActiveCircuitBoard, SelectedBoardItem, CircuitBoard};
+use board::{ActiveCircuitBoard, CircuitBoard, SelectedBoardItem};
 use eframe::{
     egui::{self, Context, Frame, Key, Margin, Sense, TextStyle, Ui},
     epaint::{Color32, Stroke},
@@ -119,11 +114,10 @@ impl PaintContext<'_> {
             for cx in (chunks_tl.x()..chunks_br.x() + 1).intersect(&rowrange) {
                 let chunk_coord: Vec2i = [cx, cy].into();
                 let chunk_tl = chunk_coord * 16;
-                let chunk =
-                    match chunks.get_chunk(chunk_coord.x() as isize, chunk_coord.y() as isize) {
-                        Some(v) => v,
-                        None => continue,
-                    };
+                let chunk = match chunks.get_chunk(chunk_coord.convert(|v| v as isize)) {
+                    Some(v) => v,
+                    None => continue,
+                };
 
                 let chunk_viewport_tl = tiles_tl - chunk_tl;
                 let chunk_viewport_br = tiles_br - chunk_tl;
@@ -149,13 +143,13 @@ impl PaintContext<'_> {
 
                         let pos: Vec2i = chunk_tl + [i, j];
                         let draw_pos = Vec2f::from(self.rect.left_top())
-                            + screen.world_to_screen(pos.convert_values(|v| v as f32));
+                            + screen.world_to_screen(pos.convert(|v| v as f32));
                         let rect =
                             Rect::from_min_size(draw_pos.into(), vec2(screen.scale, screen.scale));
                         let lookaround = ChunksLookaround::new(
                             chunks,
                             chunk,
-                            pos.convert_values(|v| v as isize),
+                            pos.convert(|v| v as isize),
                             [i as usize, j as usize].into(),
                         );
 
@@ -258,11 +252,11 @@ impl Screen {
     }
 
     pub fn screen_to_world_tile(&self, v: Vec2f) -> Vec2i {
-        self.screen_to_world(v).convert_values(|v| v.floor() as i32)
+        self.screen_to_world(v).convert(|v| v.floor() as i32)
     }
 
     pub fn world_to_screen_tile(&self, v: Vec2i) -> Vec2f {
-        self.world_to_screen(v.convert_values(|v| v as f32))
+        self.world_to_screen(v.convert(|v| v as f32))
     }
 }
 
@@ -315,7 +309,6 @@ impl eframe::App for App {
 
 impl App {
     fn new() -> Self {
-
         let board = CircuitBoard::new();
         let state_id = board.states.create_state().0;
         let board = Arc::new(RwLock::new(board));
@@ -324,7 +317,7 @@ impl App {
             pan_zoom: PanAndZoom::new(0.0.into(), 16.0),
             last_win_pos: None,
             selected: SelectedItem::None,
-            board: ActiveCircuitBoard::new(board, state_id).unwrap()
+            board: ActiveCircuitBoard::new(board, state_id).unwrap(),
         }
     }
 
@@ -336,8 +329,8 @@ impl App {
         paint: &egui::Painter,
     ) {
         let pos = pos * cell_size;
-        let visible_cells = (Vec2f::from(rect.size()) / cell_size).convert_values(|v| v as i32 + 2);
-        let start = (pos / cell_size).convert_values(|v| v as i32);
+        let visible_cells = (Vec2f::from(rect.size()) / cell_size).convert(|v| v as i32 + 2);
+        let start = (pos / cell_size).convert(|v| v as i32);
         let off = pos % cell_size;
 
         let dim_stroke = Stroke::new(1.0, Color32::from_gray(64));
@@ -371,7 +364,7 @@ impl App {
 
         let mid_cells =
             visible_cells.combine_with(mid_lines, |v, m| if m == 0 { 0 } else { v / m as i32 + 2 });
-        let mid_off = pos % (cell_size * mid_lines.convert_values(|v| v as f32));
+        let mid_off = pos % (cell_size * mid_lines.convert(|v| v as f32));
 
         for i in 0..mid_cells.x() {
             let pos = rect.left() + cell_size.x() * i as f32 * mid_lines.x() as f32 - mid_off.x();
@@ -450,16 +443,15 @@ impl App {
             screen_tl,
             screen_br,
 
-            tiles_tl: (screen_tl / screen.scale).convert_values(|v| v.floor() as i32),
-            tiles_br: (screen_br / screen.scale).convert_values(|v| v.floor() as i32),
+            tiles_tl: (screen_tl / screen.scale).convert(|v| v.floor() as i32),
+            tiles_br: (screen_br / screen.scale).convert(|v| v.floor() as i32),
 
-            chunks_tl: (screen_tl / chunk_size).convert_values(|v| v.floor() as i32),
-            chunks_br: (screen_br / chunk_size).convert_values(|v| v.floor() as i32),
+            chunks_tl: (screen_tl / chunk_size).convert(|v| v.floor() as i32),
+            chunks_br: (screen_br / chunk_size).convert(|v| v.floor() as i32),
         }
     }
 
     fn main_update(&mut self, ui: &mut Ui, ctx: &Context) {
-
         let start_time = Instant::now();
 
         let rect = ui.max_rect();
@@ -543,25 +535,19 @@ impl_empty_inner_size!(u8, i8, u16, i16, u32, i32, u64, i64, u128, i128, usize, 
 
 impl<T: SizeCalc> SizeCalc for &[T] {
     fn calc_size_inner(&self) -> usize {
-        self.iter()
-            .map(|i| i.calc_size_outer())
-            .sum()
+        self.iter().map(|i| i.calc_size_outer()).sum()
     }
 }
 
 impl<T: SizeCalc> SizeCalc for Vec<T> {
     fn calc_size_inner(&self) -> usize {
-        self.iter()
-            .map(|i| i.calc_size_outer())
-            .sum()
+        self.iter().map(|i| i.calc_size_outer()).sum()
     }
 }
 
 impl<const SIZE: usize, T: SizeCalc> SizeCalc for [T; SIZE] {
     fn calc_size_inner(&self) -> usize {
-        self.iter()
-            .map(|i| i.calc_size_inner())
-            .sum()
+        self.iter().map(|i| i.calc_size_inner()).sum()
     }
 }
 
@@ -618,53 +604,9 @@ impl<T: Ord + Copy> Intersect for Range<T> {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct OptionalInt<T: Integer>(T);
-
-impl<T: Integer> Default for OptionalInt<T> {
-    fn default() -> Self {
-        Self(Self::NONE_VALUE)
-    }
-}
-
-#[allow(unused)]
-impl<T: Integer> OptionalInt<T> {
-    const NONE_VALUE: T = if T::SIGNED { T::MIN } else { T::MAX };
-
-    fn is_none(&self) -> bool {
-        self.0 == Self::NONE_VALUE
-    }
-
-    fn is_some(&self) -> bool {
-        self.0 != Self::NONE_VALUE
-    }
-
-    fn is_some_and(&self, f: impl FnOnce(T) -> bool) -> bool {
-        self.0 != Self::NONE_VALUE && f(self.0)
-    }
-
-    fn is_none_or(&self, f: impl FnOnce(T) -> bool) -> bool {
-        self.0 == Self::NONE_VALUE || f(self.0)
-    }
-
-    fn get(&self) -> Option<T> {
-        if self.0 == Self::NONE_VALUE {
-            None
-        } else {
-            Some(self.0)
-        }
-    }
-
-    fn set(&mut self, value: Option<T>) {
-        self.0 = match value {
-            None => Self::NONE_VALUE,
-            Some(v) => v,
-        }
-    }
-}
-
 pub trait Integer: Eq + Copy {
     const SIGNED: bool;
+    const ZERO: Self;
     const MAX: Self;
     const MIN: Self;
 }
@@ -673,6 +615,7 @@ macro_rules! impl_integer_trait {
     (signed $($t:ty),+) => {
         $(impl crate::Integer for $t {
             const SIGNED: bool = true;
+            const ZERO: $t = 0;
             const MIN: $t = <$t>::MIN;
             const MAX: $t = <$t>::MAX;
         })+
@@ -680,6 +623,7 @@ macro_rules! impl_integer_trait {
     (unsigned $($t:ty),+) => {
         $(impl crate::Integer for $t {
             const SIGNED: bool = false;
+            const ZERO: $t = 0;
             const MIN: $t = <$t>::MIN;
             const MAX: $t = <$t>::MAX;
         })+
@@ -688,3 +632,222 @@ macro_rules! impl_integer_trait {
 
 impl_integer_trait!(signed i8, i16, i32, i64, i128, isize);
 impl_integer_trait!(unsigned u8, u16, u32, u64, u128, usize);
+
+macro_rules! impl_optional_int {
+    ($name:ident, $none:expr) => {
+        #[derive(Clone, Copy, Debug)]
+        pub struct $name<T: Integer>(T);
+
+        impl<T: Integer> Default for $name<T> {
+            fn default() -> Self {
+                Self(Self::NONE_VALUE)
+            }
+        }
+
+        #[allow(unused)]
+        impl<T: Integer> $name<T> {
+            const NONE_VALUE: T = $none;
+
+            pub fn new(value: T) -> Self {
+                Self(value)
+            }
+
+            pub fn none() -> Self {
+                Self(Self::NONE_VALUE)
+            }
+
+            pub fn is_none(&self) -> bool {
+                self.0 == Self::NONE_VALUE
+            }
+
+            pub fn is_some(&self) -> bool {
+                self.0 != Self::NONE_VALUE
+            }
+
+            pub fn is_some_and(&self, f: impl FnOnce(T) -> bool) -> bool {
+                self.0 != Self::NONE_VALUE && f(self.0)
+            }
+
+            pub fn is_none_or(&self, f: impl FnOnce(T) -> bool) -> bool {
+                self.0 == Self::NONE_VALUE || f(self.0)
+            }
+
+            pub fn get(&self) -> Option<T> {
+                if self.0 == Self::NONE_VALUE {
+                    None
+                } else {
+                    Some(self.0)
+                }
+            }
+
+            pub fn set(&mut self, value: Option<T>) {
+                self.0 = match value {
+                    None => Self::NONE_VALUE,
+                    Some(v) => v,
+                }
+            }
+        }
+    };
+}
+
+impl_optional_int!(OptionalInt, (if T::SIGNED { T::MIN } else { T::MAX }));
+impl_optional_int!(OptionalNonzeroInt, (T::ZERO));
+
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub enum Direction4 {
+    Up,
+    Left,
+    Down,
+    Right,
+}
+
+impl Direction4 {
+    pub fn iter_all() -> impl Iterator<Item = Self> {
+        [Self::Left, Self::Up, Self::Right, Self::Down].into_iter()
+    }
+
+    pub fn unit_vector(self) -> Vec2i {
+        match self {
+            Self::Up => [0, -1],
+            Self::Left => [-1, 0],
+            Self::Down => [0, 1],
+            Self::Right => [1, 0],
+        }
+        .into()
+    }
+
+    pub fn move_vector(self, vec: Vec2i, distance: i32) -> Vec2i {
+        vec + self.unit_vector() * distance
+    }
+
+    pub fn is_vertical(self) -> bool {
+        match self {
+            Self::Left | Self::Right => false,
+            Self::Up | Self::Down => true,
+        }
+    }
+
+    pub fn is_horizontal(self) -> bool {
+        match self {
+            Self::Left | Self::Right => true,
+            Self::Up | Self::Down => false,
+        }
+    }
+
+    pub fn is_left_up(self) -> bool {
+        match self {
+            Self::Left | Self::Up => true,
+            Self::Right | Self::Down => false,
+        }
+    }
+
+    pub fn is_right_bottom(self) -> bool {
+        match self {
+            Self::Right | Self::Down => true,
+            Self::Left | Self::Up => false,
+        }
+    }
+
+    pub fn inverted(self) -> Self {
+        match self {
+            Self::Up => Self::Down,
+            Self::Left => Self::Right,
+            Self::Down => Self::Up,
+            Self::Right => Self::Left,
+        }
+    }
+
+    /// Returns: (direction, forward)
+    pub fn into_dir2(self) -> (Direction2, bool) {
+        match self {
+            Direction4::Up => (Direction2::Up, true),
+            Direction4::Left => (Direction2::Left, true),
+            Direction4::Down => (Direction2::Up, false),
+            Direction4::Right => (Direction2::Left, false),
+        }
+    }
+
+    /// if include_start { returns dist values } else { returns start pos + dist values }
+    pub fn iter_pos_along(
+        self,
+        pos: Vec2i,
+        dist: i32,
+        include_start: bool,
+    ) -> DirectionPosItreator {
+        let dir = self.unit_vector() * if dist >= 0 { 1 } else { -1 };
+        let dist = dist.abs() as u32;
+
+        let (pos, dist) = if include_start { (pos, dist + 1) } else { (pos + dir, dist) };
+        DirectionPosItreator { pos, remaining: dist, dir }
+    }
+}
+
+impl From<Direction2> for Direction4 {
+    fn from(value: Direction2) -> Self {
+        match value {
+            Direction2::Up => Direction4::Up,
+            Direction2::Left => Direction4::Left,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub enum Direction2 {
+    Up,
+    Left,
+}
+
+impl Direction2 {
+    pub fn iter_all() -> impl Iterator<Item = Direction2> {
+        [Direction2::Left, Direction2::Up].into_iter()
+    }
+
+    pub fn unit_vector(self, forward: bool) -> Vec2i {
+        match (self, forward) {
+            (Direction2::Up, true) => [0, -1],
+            (Direction2::Left, true) => [-1, 0],
+            (Direction2::Up, false) => [0, 1],
+            (Direction2::Left, false) => [1, 0],
+        }
+        .into()
+    }
+
+    pub fn move_vector(self, vec: Vec2i, distance: i32, forward: bool) -> Vec2i {
+        vec + self.unit_vector(forward) * distance
+    }
+
+    /// if include_start { returns dist values } else { returns start pos + dist values }
+    pub fn iter_pos_along(
+        self,
+        pos: Vec2i,
+        dist: i32,
+        include_start: bool,
+    ) -> DirectionPosItreator {
+        let dir = self.unit_vector(dist >= 0);
+        let dist = dist.abs() as u32;
+
+        let (pos, dist) = if include_start { (pos, dist + 1) } else { (pos + dir, dist) };
+        DirectionPosItreator { pos, remaining: dist, dir }
+    }
+}
+
+pub struct DirectionPosItreator {
+    pos: Vec2i,
+    remaining: u32,
+    dir: Vec2i,
+}
+
+impl Iterator for DirectionPosItreator {
+    type Item = Vec2i;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.remaining == 0 {
+            return None;
+        }
+
+        let p = self.pos;
+        self.pos += self.dir;
+        self.remaining -= 1;
+        Some(p)
+    }
+}

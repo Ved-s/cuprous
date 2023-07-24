@@ -4,9 +4,7 @@ use std::{
     ops::Range,
 };
 
-use eframe::egui::containers;
-
-use crate::{vector::Vector, SizeCalc, Intersect};
+use crate::{vector::{Vector, Vec2isize, Vec2usize}, SizeCalc, Intersect};
 
 #[derive(Debug, Clone)]
 pub struct FixedVec<T> {
@@ -239,18 +237,18 @@ impl<'a, const CHUNK_SIZE: usize, T: Default> ChunksLookaround<'a, CHUNK_SIZE, T
         }
     }
 
-    pub fn get_relative(&self, x: isize, y: isize) -> Option<&T> {
-        let target_x = x + self.in_chunk_pos.x() as isize;
-        let target_y = y + self.in_chunk_pos.y() as isize;
+    pub fn get_relative(&self, rel: impl Into<Vec2isize>) -> Option<&T> {
+        let rel = rel.into();
+        let target = rel + self.in_chunk_pos.convert(|v| v as isize);
 
-        if target_x < 0
-            || target_x >= CHUNK_SIZE as isize
-            || target_y < 0
-            || target_y >= CHUNK_SIZE as isize
+        if target.x() < 0
+            || target.x() >= CHUNK_SIZE as isize
+            || target.y() < 0
+            || target.y() >= CHUNK_SIZE as isize
         {
-            self.chunks.get(self.pos.x() + x, self.pos.y() + y)
+            self.chunks.get(self.pos + rel)
         } else {
-            Some(&self.chunk[target_x as usize][target_y as usize])
+            Some(&self.chunk[target.x() as usize][target.y() as usize])
         }
     }
 }
@@ -265,23 +263,25 @@ impl<const CHUNK_SIZE: usize, T: Default> Chunks2D<CHUNK_SIZE, T> {
     const QUARTERS_BOTTOM: usize = 0x2;
     const QUARTERS_RIGHT: usize = 0x1;
 
-    fn to_chunk_pos(v: isize) -> (isize, usize) {
-        let chunk = v.div_floor(CHUNK_SIZE as isize);
-        let pos = (v - (chunk * CHUNK_SIZE as isize)) as usize;
-        (chunk, pos)
+    fn to_chunk_pos(pos: Vec2isize) -> (Vec2isize, Vec2usize) {
+        let chunk_x = pos.x().div_floor(CHUNK_SIZE as isize);
+        let chunk_y = pos.y().div_floor(CHUNK_SIZE as isize);
+        let pos_x = (pos.x() - (chunk_x * CHUNK_SIZE as isize)) as usize;
+        let pos_y = (pos.y() - (chunk_y * CHUNK_SIZE as isize)) as usize;
+        ([chunk_x, chunk_y].into(), [pos_x, pos_y].into())
     }
 
-    fn to_quarter_id_pos(chunk_x: isize, chunk_y: isize) -> ((usize, usize), usize) {
-        let (x, right) = if chunk_x >= 0 {
-            (chunk_x as usize, true)
+    fn to_quarter_id_pos(chunk_pos: Vec2isize) -> ((usize, usize), usize) {
+        let (x, right) = if chunk_pos.x() >= 0 {
+            (chunk_pos.x() as usize, true)
         } else {
-            ((-chunk_x - 1) as usize, false)
+            ((-chunk_pos.x() - 1) as usize, false)
         };
 
-        let (y, bottom) = if chunk_y >= 0 {
-            (chunk_y as usize, true)
+        let (y, bottom) = if chunk_pos.y() >= 0 {
+            (chunk_pos.y() as usize, true)
         } else {
-            ((-chunk_y - 1) as usize, false)
+            ((-chunk_pos.y() - 1) as usize, false)
         };
 
         let quarter = match (right, bottom) {
@@ -294,24 +294,24 @@ impl<const CHUNK_SIZE: usize, T: Default> Chunks2D<CHUNK_SIZE, T> {
         ((x, y), quarter)
     }
 
-    pub fn get_chunk(&self, x: isize, y: isize) -> Option<&Chunk<CHUNK_SIZE, T>> {
-        let ((qx, qy), qid) = Self::to_quarter_id_pos(x, y);
+    pub fn get_chunk(&self, pos: impl Into<Vec2isize>) -> Option<&Chunk<CHUNK_SIZE, T>> {
+        let ((qx, qy), qid) = Self::to_quarter_id_pos(pos.into());
         let quarter = &self.quarters[qid];
         let row = quarter.get(qy)?;
         row.as_ref()
             .and_then(|row| row.get(qx)?.as_ref().map(|b| b.as_ref()))
     }
 
-    pub fn get_chunk_mut(&mut self, x: isize, y: isize) -> Option<&mut Chunk<CHUNK_SIZE, T>> {
-        let ((qx, qy), qid) = Self::to_quarter_id_pos(x, y);
+    pub fn get_chunk_mut(&mut self, pos: impl Into<Vec2isize>) -> Option<&mut Chunk<CHUNK_SIZE, T>> {
+        let ((qx, qy), qid) = Self::to_quarter_id_pos(pos.into());
         let quarter = &mut self.quarters[qid];
         let row = quarter.get_mut(qy)?;
         row.as_mut()
             .and_then(|row| row.get_mut(qx)?.as_mut().map(|b| b.as_mut()))
     }
 
-    pub fn get_or_create_chunk_mut(&mut self, x: isize, y: isize) -> &mut Chunk<CHUNK_SIZE, T> {
-        let ((qx, qy), qid) = Self::to_quarter_id_pos(x, y);
+    pub fn get_or_create_chunk_mut(&mut self, pos: impl Into<Vec2isize>) -> &mut Chunk<CHUNK_SIZE, T> {
+        let ((qx, qy), qid) = Self::to_quarter_id_pos(pos.into());
         let quarter = &mut self.quarters[qid];
 
         if quarter.capacity() <= qy {
@@ -352,35 +352,29 @@ impl<const CHUNK_SIZE: usize, T: Default> Chunks2D<CHUNK_SIZE, T> {
         }
     }
 
-    pub fn get(&self, x: isize, y: isize) -> Option<&T> {
-        let (chunk_x, x) = Self::to_chunk_pos(x);
-        let (chunk_y, y) = Self::to_chunk_pos(y);
+    pub fn get(&self, pos: impl Into<Vec2isize>) -> Option<&T> {
+        let (chunk_pos, pos) = Self::to_chunk_pos(pos.into());
 
-        let chunk = self.get_chunk(chunk_x, chunk_y)?;
-        Some(&chunk[x][y])
+        let chunk = self.get_chunk(chunk_pos)?;
+        Some(&chunk[pos.x()][pos.y()])
     }
 
-    pub fn get_mut(&mut self, x: isize, y: isize) -> Option<&mut T> {
-        let (chunk_x, x) = Self::to_chunk_pos(x);
-        let (chunk_y, y) = Self::to_chunk_pos(y);
-
-        let chunk = self.get_chunk_mut(chunk_x, chunk_y)?;
-        Some(&mut chunk[x][y])
+    pub fn get_mut(&mut self, pos: impl Into<Vec2isize>) -> Option<&mut T> {
+        let (chunk_pos, pos) = Self::to_chunk_pos(pos.into());
+        let chunk = self.get_chunk_mut(chunk_pos)?;
+        Some(&mut chunk[pos.x()][pos.y()])
     }
 
-    pub fn get_or_create_mut(&mut self, x: isize, y: isize) -> &mut T {
-        let (chunk_x, x) = Self::to_chunk_pos(x);
-        let (chunk_y, y) = Self::to_chunk_pos(y);
-
-        let chunk = self.get_or_create_chunk_mut(chunk_x, chunk_y);
-        &mut chunk[x][y]
+    pub fn get_or_create_mut(&mut self, pos: impl Into<Vec2isize>) -> &mut T {
+        let (chunk_pos, pos) = Self::to_chunk_pos(pos.into());
+        let chunk = self.get_or_create_chunk_mut(chunk_pos);
+        &mut chunk[pos.x()][pos.y()]
     }
 
-    pub fn chunk_exists_at(&self, x: isize, y: isize) -> bool {
-        let (chunk_x, _) = Self::to_chunk_pos(x);
-        let (chunk_y, _) = Self::to_chunk_pos(y);
+    pub fn chunk_exists_at(&self, pos: impl Into<Vec2isize>) -> bool {
+        let (chunk_pos, pos) = Self::to_chunk_pos(pos.into());
 
-        self.get_chunk(chunk_x, chunk_y).is_some()
+        self.get_chunk(chunk_pos).is_some()
     }
 
     pub fn get_chunk_row_range(&self, row: isize) -> Range<isize> {
@@ -417,13 +411,13 @@ impl<const CHUNK_SIZE: usize, T: Default> Chunks2D<CHUNK_SIZE, T> {
         pos: Vector<2, isize>,
         size: Vector<2, usize>,
     ) -> ChunksAreaIterator<'_, CHUNK_SIZE, T> {
-        let size = size.convert_values(|v| v as isize);
+        let size = size.convert(|v| v as isize);
 
         let tiles_tl = pos;
         let tiles_br = pos + size;
 
-        let chunks_tl = pos.convert_values(|v| v.div_floor(CHUNK_SIZE as isize));
-        let chunks_br = (pos + size).convert_values(|v| v.div_ceil(CHUNK_SIZE as isize));
+        let chunks_tl = pos.convert(|v| v.div_floor(CHUNK_SIZE as isize));
+        let chunks_br = (pos + size).convert(|v| v.div_ceil(CHUNK_SIZE as isize));
 
         let empty = size.x() == 0 || size.y() == 0;
 
@@ -435,19 +429,19 @@ impl<const CHUNK_SIZE: usize, T: Default> Chunks2D<CHUNK_SIZE, T> {
             chunks: self,
             chunk_bounds_tl: chunks_tl,
             chunk_bounds_br_excl: chunks_br,
-            chunk: self.get_chunk(chunks_tl.x(), chunks_tl.y()),
+            chunk: self.get_chunk(chunks_tl),
             chunk_pos: chunks_tl,
-            in_chunk_pos: in_chunk_start.convert_values(|v| v as usize),
-            in_chunk_start: in_chunk_start.convert_values(|v| v as usize),
-            in_chunk_end_excl: in_chunk_end.convert_values(|v| v as usize),
+            in_chunk_pos: in_chunk_start.convert(|v| v as usize),
+            in_chunk_start: in_chunk_start.convert(|v| v as usize),
+            in_chunk_end_excl: in_chunk_end.convert(|v| v as usize),
             empty,
         }
     }
 
     pub fn for_each_item<P>(&self, tl: Vector<2, isize>, br: Vector<2, isize>, pass: &P, f: impl Fn(Vector<2, isize>, &T, &P)) {
 
-        let chunks_tl = tl.convert_values(|v| v.div_floor(CHUNK_SIZE as isize));
-        let chunks_br = br.convert_values(|v| v.div_floor(CHUNK_SIZE as isize));
+        let chunks_tl = tl.convert(|v| v.div_floor(CHUNK_SIZE as isize));
+        let chunks_br = br.convert(|v| v.div_floor(CHUNK_SIZE as isize));
 
         for cy in chunks_tl.y()..=chunks_br.y() {
             let rowrange = self.get_chunk_row_range(cy);
@@ -460,7 +454,7 @@ impl<const CHUNK_SIZE: usize, T: Default> Chunks2D<CHUNK_SIZE, T> {
                 let chunk_coord: Vector<2, isize> = [cx, cy].into();
                 let chunk_tl = chunk_coord * 16;
                 let chunk =
-                    match self.get_chunk(chunk_coord.x(), chunk_coord.y()) {
+                    match self.get_chunk(chunk_coord) {
                         Some(v) => v,
                         None => continue,
                     };
@@ -533,7 +527,7 @@ impl<'a, const CHUNK_SIZE: usize, T: Default> ChunksAreaIterator<'a, CHUNK_SIZE,
 
             self.chunk = self
                 .chunks
-                .get_chunk(self.chunk_pos.x(), self.chunk_pos.y());
+                .get_chunk(self.chunk_pos);
 
             match self.chunk {
                 Some(_) => {

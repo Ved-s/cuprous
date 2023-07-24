@@ -1,14 +1,12 @@
-use std::{
-    collections::HashMap,
-    sync::Arc, num::NonZeroU32,
-};
+use std::{collections::HashMap, num::NonZeroU32, sync::Arc};
 
 use eframe::epaint::Color32;
 
 use crate::{
     circuits::CircuitPin,
+    state::StateCollection,
     vector::{Vec2i, Vector},
-    OptionalInt, SizeCalc, State, state::StateCollection, RwLock,
+    Direction2, Direction4, OptionalInt, OptionalNonzeroInt, RwLock, SizeCalc, State, DirectionPosItreator,
 };
 
 #[derive(Debug, Default)]
@@ -33,8 +31,13 @@ impl Wire {
         }
     }
 
-    pub fn add_point(&mut self, pos: Vector<2, i32>, states: Option<StateCollection>, left: bool, up: bool, pin: Option<Arc<RwLock<CircuitPin>>>) {
-        self.points.insert(pos, WirePoint { left, up, pin });
+    pub fn add_point(
+        &mut self,
+        pos: Vector<2, i32>,
+        states: Option<StateCollection>,
+        point: WirePoint,
+    ) {
+        self.points.insert(pos, point);
 
         if let Some(states) = states {
             states.update_wire(self.id);
@@ -44,28 +47,56 @@ impl Wire {
 
 #[derive(Debug, Default)]
 pub struct WirePoint {
-    pub left: bool,
     pub up: bool,
+    pub left: bool,
     pub pin: Option<Arc<RwLock<CircuitPin>>>,
 }
 pub struct WirePart {
     pub pos: Vec2i,
     pub length: NonZeroU32,
+    pub dir: Direction2,
+}
 
-    /// Down and right
-    pub vertical: bool,
+impl WirePart {
+    pub fn iter_pos(&self, include_start: bool) -> DirectionPosItreator {
+        self.dir.iter_pos_along(self.pos, self.length.get() as i32, include_start)
+    }
 }
 
 #[derive(Default, Clone, Copy)]
 pub struct WireNode {
-    pub up: u32,
-    pub left: u32,
+    pub up: OptionalNonzeroInt<u32>,
+    pub left: OptionalNonzeroInt<u32>,
+    pub down: OptionalNonzeroInt<u32>,
+    pub right: OptionalNonzeroInt<u32>,
     pub wire: OptionalInt<usize>,
 }
 
 impl WireNode {
     pub fn is_empty(self) -> bool {
-        self.wire.is_none() && self.up == 0 && self.left == 0
+        self.wire.is_none()
+            && self.up.is_none()
+            && self.left.is_none()
+            && self.down.is_none()
+            && self.right.is_none()
+    }
+
+    pub fn get_dir(&self, dir: Direction4) -> OptionalNonzeroInt<u32> {
+        match dir {
+            Direction4::Up => self.up,
+            Direction4::Left => self.left,
+            Direction4::Down => self.down,
+            Direction4::Right => self.right,
+        }
+    }
+
+    pub fn get_dir_mut(&mut self, dir: Direction4) -> &mut OptionalNonzeroInt<u32> {
+        match dir {
+            Direction4::Up => &mut self.up,
+            Direction4::Left => &mut self.left,
+            Direction4::Down => &mut self.down,
+            Direction4::Right => &mut self.right,
+        }
     }
 }
 
@@ -75,14 +106,6 @@ impl SizeCalc for WireNode {
     }
 }
 
-// pub struct Wires {
-//     pub wire_drag_pos: Option<Vec2i>,
-//     pub nodes: Chunks2D<16, WireNode>,
-//     pub wires: FixedVec<Wire>,
-
-//     pub parts_drawn: RwLock<u32>,
-// }
-
 #[allow(unused)]
 pub struct FoundWireNode {
     pub node: WireNode,
@@ -91,40 +114,63 @@ pub struct FoundWireNode {
     pub distance: NonZeroU32,
 }
 
-pub enum WireDirection {
-    None,
-    Up,
-    Left,
-}
-
 pub enum TileWires {
     None,
-    One { wire: usize, dir: WireDirection },
-    Two { left: usize, up: usize },
+    One {
+        wire: usize,
+        vertical: bool,
+    },
+    Two {
+        horizontal: usize,
+        vertical: usize,
+    },
+    Point {
+        wire: usize,
+        left: bool,
+        up: bool,
+        right: bool,
+        down: bool,
+    },
 }
 
 impl TileWires {
-    pub fn up(&self) -> Option<usize> {
+    pub fn dir(&self, dir: Direction4) -> Option<usize> {
         match self {
-            TileWires::One { wire, dir }
-                if matches!(dir, WireDirection::Up) || matches!(dir, WireDirection::None) =>
-            {
-                Some(*wire)
+            TileWires::None => None,
+            TileWires::One { wire, vertical } => {
+                if dir.is_vertical() == *vertical {
+                    Some(*wire)
+                } else {
+                    None
+                }
             }
-            TileWires::Two { left: _, up } => Some(*up),
-            _ => None,
-        }
-    }
-
-    pub fn left(&self) -> Option<usize> {
-        match self {
-            TileWires::One { wire, dir }
-                if matches!(dir, WireDirection::Left) || matches!(dir, WireDirection::None) =>
-            {
-                Some(*wire)
+            TileWires::Two {
+                horizontal,
+                vertical,
+            } => Some(if dir.is_vertical() {
+                *vertical
+            } else {
+                *horizontal
+            }),
+            TileWires::Point {
+                wire,
+                left,
+                up,
+                right,
+                down,
+            } => {
+                let dir = match dir {
+                    Direction4::Up => *up,
+                    Direction4::Left => *left,
+                    Direction4::Down => *down,
+                    Direction4::Right => *right,
+                };
+                if dir {
+                    Some(*wire)
+                } else {
+                    None
+                }
             }
-            TileWires::Two { left, up: _ } => Some(*left),
-            _ => None,
         }
     }
 }

@@ -351,7 +351,7 @@ impl TestCircuitImpl {
 impl CircuitImpl for TestCircuitImpl {
     fn draw(&self, state_ctx: &CircuitStateContext, paint_ctx: &PaintContext) {
         for pin in state_ctx.circuit.info.read().unwrap().pins.iter() {
-            let pos = state_ctx.circuit.pos + pin.pos.convert_values(|v| v as i32);
+            let pos = state_ctx.circuit.pos + pin.pos.convert(|v| v as i32);
             let pin = pin.pin.read().unwrap();
             if pin.wire.is_some() {
                 continue;
@@ -386,7 +386,7 @@ impl CircuitImpl for TestCircuitImpl {
         );
 
         if let Some(wire) = wire {
-            let pos = state_ctx.circuit.pos + self.clock_pin.pos.convert_values(|v| v as i32);
+            let pos = state_ctx.circuit.pos + self.clock_pin.pos.convert(|v| v as i32);
             let pos = paint_ctx.screen.world_to_screen_tile(pos) + paint_ctx.screen.scale / 2.0;
             let pos = pos + [paint_ctx.screen.scale / 4.0, 0.0];
 
