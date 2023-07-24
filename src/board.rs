@@ -1,9 +1,13 @@
 use std::{
+    cell::RefCell,
     collections::{hash_map::DefaultHasher, HashMap, HashSet},
     f32::consts::TAU,
     hash::Hasher,
     num::NonZeroU32,
-    sync::{Arc, atomic::{AtomicUsize, Ordering}}, cell::RefCell,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
 };
 
 use eframe::{
@@ -227,7 +231,7 @@ pub struct ActiveCircuitBoard {
     selection_change: HashSet<SelectedWorldObject>,
     selection_mode: SelectionMode,
 
-    pub wires_drawn: AtomicUsize
+    pub wires_drawn: AtomicUsize,
 }
 
 impl ActiveCircuitBoard {
@@ -253,7 +257,7 @@ impl ActiveCircuitBoard {
             selection_change: HashSet::new(),
             selection_mode: SelectionMode::Include,
 
-            wires_drawn: AtomicUsize::new(0)
+            wires_drawn: AtomicUsize::new(0),
         })
     }
 
@@ -602,18 +606,9 @@ impl ActiveCircuitBoard {
             this: &ActiveCircuitBoard,
             item: &SelectedWorldObject,
             ctx: &PaintContext,
-            shift: bool,
+            possible_points: &mut HashSet<Vec2i>,
         ) {
             match item {
-                //SelectedWorldObject::WirePoint { id: _, pos } => {
-                //    if !this.should_draw_wire_point(*pos, shift) {
-                //        return;
-                //    }
-                //    let rect = ActiveCircuitBoard::calc_wire_point_rect(&ctx.screen, *pos);
-                //    let rect = rect.expand(2.0);
-                //    ctx.paint
-                //        .rect_filled(rect, Rounding::none(), Color32::WHITE);
-                //}
                 SelectedWorldObject::WirePart { pos, dir } => {
                     if let Some(w) = this.find_node(*pos, (*dir).into()) {
                         let part = WirePart {
@@ -625,6 +620,9 @@ impl ActiveCircuitBoard {
                         let rect = rect.expand(2.0);
                         ctx.paint
                             .rect_filled(rect, Rounding::none(), Color32::WHITE);
+
+                        possible_points.insert(*pos);
+                        possible_points.insert(w.pos);
                     }
                 }
                 SelectedWorldObject::Circuit { id } => {
@@ -727,21 +725,63 @@ impl ActiveCircuitBoard {
             }
         }
 
-        let shift = ctx.egui_ctx.input(|input| input.modifiers.shift);
+        let mut possible_points = HashSet::new();
+
         for item in self.selection.iter() {
             if matches!(self.selection_mode, SelectionMode::Exclude)
                 && self.selection_change.contains(item)
             {
                 continue;
             }
-            draw_selection(self, item, ctx, shift);
+            draw_selection(self, item, ctx, &mut possible_points);
         }
         if matches!(self.selection_mode, SelectionMode::Include) {
             for item in self.selection_change.iter() {
                 if self.selection.contains(item) {
                     continue;
                 }
-                draw_selection(self, item, ctx, shift);
+                draw_selection(self, item, ctx, &mut possible_points);
+            }
+        }
+
+        let shift = ctx.egui_ctx.input(|input| input.modifiers.shift);
+        for point in possible_points {
+            if self.should_draw_wire_point(point, shift) {
+                let node = match self.wire_nodes.get(point.convert(|v| v as isize)) {
+                    Some(n) => n,
+                    None => continue,
+                };
+
+                let all_connections_selected = Direction4::iter_all().all(|dir| 
+                    node.get_dir(dir).is_none_or(|_| {
+                        let (part_dir, forward) = dir.into_dir2();
+
+                        let part_pos = if forward {
+                            Some(point)
+                        } else {
+                            self.find_node_from_node(node, point, dir).map(|f| f.pos)
+                        };
+
+                        match part_pos {
+                            None => false,
+                            Some(part_pos) => {
+                                let part = SelectedWorldObject::WirePart { pos: part_pos, dir: part_dir };
+
+                                match self.selection_mode {
+                                    SelectionMode::Include => self.selection.contains(&part) || self.selection_change.contains(&part),
+                                    SelectionMode::Exclude => self.selection.contains(&part) && !self.selection_change.contains(&part),
+                                }
+                            },
+                        }
+                    })
+                );
+
+                if all_connections_selected {
+                    let rect = ActiveCircuitBoard::calc_wire_point_rect(&ctx.screen, point);
+                    let rect = rect.expand(2.0);
+                    ctx.paint
+                        .rect_filled(rect, Rounding::none(), Color32::WHITE);
+                }
             }
         }
     }
