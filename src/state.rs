@@ -181,7 +181,7 @@ impl State {
                 }
             }
             None => {
-                let index = updates.iter().enumerate().find(|(i, t)| t.0 == id).map(|(i, _)| i);
+                let index = updates.iter().enumerate().find(|(_, t)| t.0 == id).map(|(i, _)| i);
                 if let Some(index) = index {
                     updates.remove(index);
                 }
@@ -245,20 +245,17 @@ impl State {
 
     fn update_wire_now(&self, wire: &Wire) {
         let mut state = WireState::None;
-        let mut writing_pins = 0;
         for (_, point) in wire.points.iter() {
             if let Some(pin) = &point.pin {
                 let pin = pin.read().unwrap();
                 if let PinDirection::Outside = pin.direction(self) {
                     state = state.combine(pin.get_state(self));
-                    writing_pins += 1;
                 }
             }
         }
 
         let current = self.get_wire(wire.id);
         if *current.read().unwrap() == state {
-            println!("false wire {} update ({writing_pins} in pins)", wire.id);
             return;
         }
 

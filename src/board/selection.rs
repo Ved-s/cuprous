@@ -58,7 +58,7 @@ impl Selection {
         ) {
             match item {
                 SelectedWorldObject::WirePart { pos, dir } => {
-                    if let Some(w) = this.find_node(*pos, (*dir).into()) {
+                    if let Some(w) = this.find_wire_node(*pos, (*dir).into()) {
                         let part = WirePart {
                             pos: *pos,
                             dir: *dir,
@@ -204,7 +204,7 @@ impl Selection {
                         let part_pos = if forward {
                             Some(point)
                         } else {
-                            board.find_node_from_node(node, point, dir).map(|f| f.pos)
+                            board.find_wire_node_from_node(node, point, dir).map(|f| f.pos)
                         };
 
                         match part_pos {
@@ -262,7 +262,7 @@ impl Selection {
             //}
             if node.wire.is_some() {
                 for dir in Direction4::iter_all() {
-                    let node = board.find_node_from_node(node, pos, dir);
+                    let node = board.find_wire_node_from_node(node, pos, dir);
                     let node = unwrap_option_or_continue!(node);
                     let (dir, forward) = dir.into_dir2();
 
@@ -273,7 +273,7 @@ impl Selection {
                 }
             } else {
                 for dir in [Direction4::Right, Direction4::Down] {
-                    let node = board.find_node_from_node(node, pos, dir);
+                    let node = board.find_wire_node_from_node(node, pos, dir);
                     let node = unwrap_option_or_continue!(node);
                     self.change.insert(SelectedWorldObject::WirePart {
                         pos: node.pos,

@@ -1,4 +1,5 @@
 use std::{
+    cell::RefCell,
     collections::{hash_map::DefaultHasher, HashMap, HashSet},
     f32::consts::TAU,
     hash::Hasher,
@@ -6,7 +7,7 @@ use std::{
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
-    }, cell::RefCell,
+    },
 };
 
 use eframe::{
@@ -19,9 +20,10 @@ use crate::{
     circuits::{Circuit, CircuitNode, CircuitPin, CircuitPreview, CircuitStateContext},
     containers::{Chunks2D, ChunksLookaround, FixedVec},
     state::{State, StateCollection},
+    unwrap_option_or_continue, unwrap_option_or_return,
     vector::{IsZero, Vec2f, Vec2i},
     wires::{FoundWireNode, TileWires, Wire, WireNode, WirePart, WirePoint},
-    Direction2, Direction4, PaintContext, RwLock, Screen, unwrap_option_or_continue, unwrap_option_or_return,
+    Direction2, Direction4, PaintContext, RwLock, Screen,
 };
 
 use self::selection::Selection;
@@ -229,14 +231,16 @@ impl ActiveCircuitBoard {
             state,
             wire_drag_pos: None,
             selection: RefCell::new(Selection::new()),
-            
+
             wires_drawn: AtomicUsize::new(0),
         })
     }
 
     pub fn update(&mut self, ctx: &PaintContext, selected: SelectedBoardItem, debug: bool) {
         self.wires_drawn.store(0, Ordering::Relaxed);
-        self.selection.borrow_mut().pre_update_selection(self, ctx, selected.none());
+        self.selection
+            .borrow_mut()
+            .pre_update_selection(self, ctx, selected.none());
         ctx.draw_chunks(
             &self.wire_nodes,
             &self,
@@ -268,6 +272,8 @@ impl ActiveCircuitBoard {
         self.update_circuits(ctx, selected.circuit());
         self.selection.borrow_mut().update_selection(ctx);
     }
+
+    /* #region Drawing nodes */
 
     fn draw_wire_node(
         &self,
@@ -335,7 +341,11 @@ impl ActiveCircuitBoard {
         let center_color = node.wire.get().map(|w| self.state.read_wire(w).color());
 
         for dir in Direction2::iter_all() {
-            let wire_color = center_color.or_else(|| wires.dir(dir.into()).map(|w| self.state.read_wire(w).color()));
+            let wire_color = center_color.or_else(|| {
+                wires
+                    .dir(dir.into())
+                    .map(|w| self.state.read_wire(w).color())
+            });
 
             let wire_color = unwrap_option_or_continue!(wire_color);
 
@@ -486,6 +496,10 @@ impl ActiveCircuitBoard {
         circuit.imp.read().unwrap().draw(&state_ctx, &circ_ctx);
     }
 
+    /* #endregion */
+
+    /* #region Updating */
+
     fn update_wires(&mut self, ctx: &PaintContext, selected: bool) {
         if !selected {
             self.wire_drag_pos = None;
@@ -528,7 +542,7 @@ impl ActiveCircuitBoard {
             }
 
             for dir in Direction4::iter_all() {
-                if let Some(found) = self.find_node(mouse_pos, dir) {
+                if let Some(found) = self.find_wire_node(mouse_pos, dir) {
                     let world_pos = ctx.screen.world_to_screen_tile(found.pos);
                     let size = vec2(ctx.screen.scale, ctx.screen.scale);
                     let rect = Rect::from_min_size(world_pos.into(), size);
@@ -570,130 +584,24 @@ impl ActiveCircuitBoard {
         }
     }
 
-    fn should_draw_wire_point(&self, pos: Vec2i, shift: bool) -> bool {
-        let node = unwrap_option_or_return!(self.wire_nodes.get(pos.convert(|v| v as isize)), false);
+    /* #endregion */
 
-        if node.wire.is_none() {
-            return false;
-        }
+    /* #region Wire drawing helpers */
 
-        if shift {
-            return true;
-        }
+    fn draw_wire_part(&self, ctx: &PaintContext, part: &WirePart, color: Color32) {
+        let screen = &ctx.screen;
+        let rect = Self::calc_wire_part_rect(screen, part);
+        ctx.paint.rect_filled(rect, Rounding::none(), color);
 
-        Direction4::iter_all().all(|dir| node.get_dir(dir).is_some())
+        self.wires_drawn.fetch_add(1, Ordering::Relaxed);
     }
 
-    fn place_circuit(&mut self, place_pos: Vec2i, preview: &dyn CircuitPreview) {
-        let size = preview.size();
+    fn calc_wire_point_rect(screen: &Screen, pos: Vec2i) -> Rect {
+        let thickness = screen.scale * Self::WIRE_POINT_THICKNESS;
 
-        for j in 0..size.y() as i32 {
-            for i in 0..size.x() as i32 {
-                let pos = place_pos + [i, j];
-                if self
-                    .circuit_nodes
-                    .get(pos.convert(|v| v as isize))
-                    .is_some_and(|n| n.circuit.is_some())
-                {
-                    return;
-                }
-            }
-        }
+        let rect_pos = screen.world_to_screen_tile(pos) + ((screen.scale - thickness) * 0.5);
 
-        let cid = {
-            self.board
-                .write()
-                .unwrap()
-                .create_circuit(place_pos, preview)
-        };
-
-        for j in 0..size.y() {
-            for i in 0..size.x() {
-                let pos = place_pos + [i as i32, j as i32];
-                let node = self
-                    .circuit_nodes
-                    .get_or_create_mut(pos.convert(|v| v as isize));
-
-                node.circuit.set(Some(cid));
-                node.origin_dist = [i, j].into();
-            }
-        }
-        let circ_info = {
-            self.board
-                .read()
-                .unwrap()
-                .circuits
-                .get(cid)
-                .unwrap()
-                .info
-                .clone()
-        };
-        for pin in circ_info.read().unwrap().pins.iter() {
-            let pos = place_pos + pin.pos.convert(|v| v as i32);
-            if let Some(wire) = self.create_wire_intersection(pos) {
-                let wire = if let Some(wire) = self.board.write().unwrap().wires.get_mut(wire) {
-                    if let Some(p) = wire.points.get_mut(&pos) {
-                        p.pin = Some(pin.pin.clone());
-                    }
-                    Some(wire.id)
-                } else {
-                    None
-                };
-
-                if let Some(wire) = wire {
-                    pin.pin
-                        .write()
-                        .unwrap()
-                        .set_wire(Some(&self.board.read().unwrap()), Some(wire));
-                }
-            }
-        }
-        let board = self.board.read().unwrap();
-        let circ = board.circuits.get(cid).unwrap();
-        board.states.init_circuit(circ);
-        board.states.update_circuit_signals(cid, None);
-    }
-
-    fn pin_at(&self, pos: Vec2i) -> Option<Arc<RwLock<CircuitPin>>> {
-        let circ = self.circuit_nodes.get(pos.convert(|v| v as isize))?;
-        let pos = circ.origin_dist;
-        let circ = circ.circuit.get()?;
-
-        let board = self.board.read().unwrap();
-        let circ_info = board.circuits.get(circ)?.info.clone();
-        let circ_info = circ_info.read().unwrap();
-
-        circ_info
-            .pins
-            .iter()
-            .find(|p| p.pos == pos)
-            .map(|p| p.pin.clone())
-    }
-
-    fn try_toggle_node_intersection(&mut self, pos: Vec2i) {
-        let node = self.wire_nodes.get(pos.convert(|v| v as isize));
-
-        let node = match node {
-            None => return,
-            Some(n) if n.is_empty() => return,
-            Some(v) => v,
-        };
-
-        let center = node.wire.is_some();
-        let left = node.left.is_some();
-        let up = node.up.is_some();
-        let right = node.right.is_some();
-        let down = node.down.is_some();
-
-        if up != down || left != right {
-            return;
-        }
-
-        if center {
-            self.remove_intersection_at_node(pos, *node, true);
-        } else {
-            self.create_wire_intersection_at_node(pos, *node);
-        }
+        Rect::from_min_size(rect_pos.into(), vec2(thickness, thickness))
     }
 
     fn calc_wire_part_rect(screen: &Screen, part: &WirePart) -> Rect {
@@ -711,22 +619,6 @@ impl ActiveCircuitBoard {
             Direction2::Left => [length, thickness],
         };
         Rect::from_min_size(pos.into(), rect_size.into())
-    }
-
-    fn draw_wire_part(&self, ctx: &PaintContext, part: &WirePart, color: Color32) {
-        let screen = &ctx.screen;
-        let rect = Self::calc_wire_part_rect(screen, part);
-        ctx.paint.rect_filled(rect, Rounding::none(), color);
-
-        self.wires_drawn.fetch_add(1, Ordering::Relaxed);
-    }
-
-    fn calc_wire_point_rect(screen: &Screen, pos: Vec2i) -> Rect {
-        let thickness = screen.scale * Self::WIRE_POINT_THICKNESS;
-
-        let rect_pos = screen.world_to_screen_tile(pos) + ((screen.scale - thickness) * 0.5);
-
-        Rect::from_min_size(rect_pos.into(), vec2(thickness, thickness))
     }
 
     fn draw_wire_point(
@@ -763,51 +655,278 @@ impl ActiveCircuitBoard {
         }
     }
 
-    fn calc_wire_part(from: Option<Vec2i>, to: Option<Vec2i>) -> Option<WirePart> {
-        if let Some(from) = from {
-            if let Some(to) = to {
-                if from != to {
-                    let angle = (to - from).convert(|v| v as f32).angle_to_x();
-                    let axis = (angle / (TAU / 4.0)).round() as i32 % 4;
+    /* #endregion */
 
-                    let origin = match axis {
-                        0 => [to.x(), from.y()].into(),
-                        1 => from,
-                        2 => from,
-                        3 => [from.x(), to.y()].into(),
-                        _ => unreachable!(),
-                    };
-                    let length = match axis {
-                        0 => to.x() - from.x(),
-                        1 => from.y() - to.y(),
-                        2 => from.x() - to.x(),
-                        3 => to.y() - from.y(),
-                        _ => unreachable!(),
-                    } as u32;
+    /* #region Wire manipulations */
 
-                    let dir = match axis {
-                        0 => Direction2::Left,
-                        1 => Direction2::Up,
-                        2 => Direction2::Left,
-                        3 => Direction2::Up,
-                        _ => unreachable!(),
-                    };
+    fn place_wire_part(&mut self, part: WirePart) {
+        let part = unwrap_option_or_return!(self.optimize_wire_part(part));
 
-                    let part = WirePart {
-                        pos: origin,
-                        length: NonZeroU32::new(length).unwrap(),
-                        dir,
-                    };
+        let wires_crossed = {
+            let mut wires_crossed = HashSet::new();
+            for (i, pos) in part.iter_pos(true).enumerate() {
+                let node =
+                    unwrap_option_or_continue!(self.wire_nodes.get(pos.convert(|v| v as isize)));
 
-                    Some(part)
-                } else {
-                    None
+                if i == 0 || i as u32 == part.length.get() {
+                    match self.wires_at(pos) {
+                        TileWires::None => {}
+                        TileWires::One { wire, vertical: _ } => {
+                            wires_crossed.insert(wire);
+                        }
+                        TileWires::Two {
+                            horizontal,
+                            vertical,
+                        } => {
+                            wires_crossed.insert(horizontal);
+                            wires_crossed.insert(vertical);
+                        }
+                        TileWires::Point {
+                            wire,
+                            left: _,
+                            up: _,
+                            right: _,
+                            down: _,
+                        } => {
+                            wires_crossed.insert(wire);
+                        }
+                    }
+                } else if let Some(wire) = node.wire.get() {
+                    wires_crossed.insert(wire);
                 }
-            } else {
-                None
             }
+            wires_crossed
+        };
+
+        let new_wire = match wires_crossed.len() {
+            0 => self.board.write().unwrap().create_wire(),
+            1 => *wires_crossed.iter().next().unwrap(),
+            _ => {
+                let main_wire = {
+                    self.board
+                        .read()
+                        .unwrap()
+                        .wires
+                        .iter()
+                        .filter(|v| wires_crossed.contains(&v.id))
+                        .max_by(|x, y| x.points.len().cmp(&y.points.len()))
+                        .expect("Some matching wires")
+                        .id
+                };
+
+                for wire in wires_crossed.iter() {
+                    if *wire != main_wire {
+                        self.merge_wires(main_wire, *wire, false)
+                    }
+                }
+                main_wire
+            }
+        };
+
+        self.set_wire_point(part.pos, Some(new_wire), false);
+        self.set_wire_point(
+            part.dir
+                .move_vector(part.pos, part.length.get() as i32, true),
+            Some(new_wire),
+            false,
+        );
+
+        self.place_wire_multipart(&part, new_wire);
+
+        self.remove_useless_intersection(part.pos);
+        self.remove_useless_intersection(part.dir.move_vector(
+            part.pos,
+            part.length.get() as i32,
+            true,
+        ));
+
+        let board = self.board.read().unwrap();
+        board.states.update_wire(new_wire);
+    }
+
+    fn place_wire_multipart(&mut self, part: &WirePart, wire: usize) {
+        fn fix_pointers(this: &mut ActiveCircuitBoard, pos: Vec2i, dist: u32, dir: Direction4) {
+            for (i, pos) in dir.iter_pos_along(pos, dist as i32, false).enumerate() {
+                let node = this
+                    .wire_nodes
+                    .get_or_create_mut(pos.convert(|v| v as isize));
+                node.get_dir_mut(dir.inverted()).set(Some(i as u32 + 1))
+            }
+        }
+
+        let dir_rev = Direction4::from(part.dir).inverted();
+
+        let mut dist = 0;
+        for (i, pos) in part.iter_pos(true).enumerate() {
+            let node = self
+                .wire_nodes
+                .get_or_create_mut(pos.convert(|v| v as isize));
+
+            let point = node.wire.is_some() || i == 0 || i as u32 == part.length.get();
+
+            if i > 0 {
+                node.get_dir_mut(dir_rev).set(Some(dist))
+            }
+
+            if point {
+                if i > 0 {
+                    node.wire.set(Some(wire));
+                    let node = *node;
+                    fix_pointers(self, pos, dist, dir_rev);
+
+                    if let Some(wire) = self.board.write().unwrap().wires.get_mut(wire) {
+                        wire.add_point(
+                            pos,
+                            None,
+                            WirePoint {
+                                left: node.left.is_some(),
+                                up: node.up.is_some(),
+                                pin: self.pin_at(pos),
+                            },
+                        )
+                    }
+                }
+                dist = 1;
+            } else {
+                dist += 1;
+            }
+        }
+    }
+
+    /// returns previous wire id
+    fn set_wire_point(
+        &mut self,
+        pos: Vec2i,
+        wire: Option<usize>,
+        update_state: bool,
+    ) -> Option<usize> {
+        fn fix_pointers(
+            wires: &mut Chunks2D<16, WireNode>,
+            pos: Vec2i,
+            dir: Direction4,
+            start_dist: u32,
+            dist: u32,
+            possibly_remove: bool,
+        ) {
+            if dist == 0 {
+                return;
+            }
+
+            let remove = possibly_remove && start_dist == 0;
+
+            let back_dir = dir.inverted();
+
+            for (i, pos) in dir.iter_pos_along(pos, dist as i32, true).enumerate() {
+                let forward_ptr = if remove { None } else { Some(dist - i as u32) };
+                let back_ptr = if remove {
+                    None
+                } else {
+                    Some(i as u32 + start_dist)
+                };
+
+                let node = wires.get_or_create_mut(pos.convert(|v| v as isize));
+                if i > 0 {
+                    node.get_dir_mut(back_dir).set(back_ptr);
+                }
+                if (i as u32) < dist {
+                    node.get_dir_mut(dir).set(forward_ptr);
+                }
+            }
+        }
+
+        let node = self
+            .wire_nodes
+            .get_or_create_mut(pos.convert(|v| v as isize));
+        let prev_wire = node.wire.get();
+        if prev_wire == wire {
+            return prev_wire;
+        }
+
+        node.wire.set(wire);
+
+        let node = *node;
+
+        for dir in Direction4::iter_all() {
+            let dist_forward = unwrap_option_or_continue!(node.get_dir(dir).get());
+
+            if wire.is_some() {
+                fix_pointers(&mut self.wire_nodes, pos, dir, 0, dist_forward, false);
+            } else {
+                let dist_back = node.get_dir(dir.inverted()).get().unwrap_or(0);
+                fix_pointers(
+                    &mut self.wire_nodes,
+                    pos,
+                    dir,
+                    dist_back,
+                    dist_forward,
+                    true,
+                );
+            }
+        }
+
+        {
+            let pin = self.pin_at(pos);
+            if let Some(pin) = &pin {
+                pin.write().unwrap().set_wire(None, wire);
+            }
+
+            let mut board = self.board.write().unwrap();
+
+            if let Some(wire) = prev_wire.and_then(|w| board.wires.get_mut(w)) {
+                wire.remove_point(pos, None);
+            }
+
+            if let Some(wire) = wire.and_then(|w| board.wires.get_mut(w)) {
+                wire.add_point(
+                    pos,
+                    None,
+                    WirePoint {
+                        left: node.left.is_some(),
+                        up: node.up.is_some(),
+                        pin,
+                    },
+                );
+            }
+        }
+
+        if update_state {
+            let states = self.board.read().unwrap().states.clone();
+
+            if let Some(wire) = prev_wire {
+                states.update_wire(wire);
+            }
+
+            if let Some(wire) = wire {
+                states.update_wire(wire)
+            }
+        }
+
+        prev_wire
+    }
+
+    fn try_toggle_node_intersection(&mut self, pos: Vec2i) {
+        let node = self.wire_nodes.get(pos.convert(|v| v as isize));
+
+        let node = match node {
+            None => return,
+            Some(n) if n.is_empty() => return,
+            Some(v) => v,
+        };
+
+        let center = node.wire.is_some();
+        let left = node.left.is_some();
+        let up = node.up.is_some();
+        let right = node.right.is_some();
+        let down = node.down.is_some();
+
+        if up != down || left != right {
+            return;
+        }
+
+        if center {
+            self.remove_intersection_at_node(pos, *node, true);
         } else {
-            None
+            self.create_wire_intersection_at_node(pos, *node);
         }
     }
 
@@ -925,6 +1044,10 @@ impl ActiveCircuitBoard {
             return;
         }
 
+        if !split && int4 {
+            return;
+        }
+
         let split = split && int4;
 
         let prev = self.set_wire_point(pos, None, !split);
@@ -936,133 +1059,277 @@ impl ActiveCircuitBoard {
         }
     }
 
-    fn place_wire_part(&mut self, part: WirePart) {
-        let part = unwrap_option_or_return!(self.optimize_wire_part(part));
+    fn remove_useless_intersection(&mut self, pos: Vec2i) {
+        let node = self.wire_nodes.get(pos.convert(|v| v as isize));
+        let node = *unwrap_option_or_return!(node);
 
-        let wires_crossed = {
-            let mut wires_crossed = HashSet::new();
-            for (i, pos) in part.iter_pos(true).enumerate() {
-                let node = unwrap_option_or_continue!(self.wire_nodes.get(pos.convert(|v| v as isize)));
+        if node.wire.is_none() {
+            return;
+        }
 
-                if i == 0 || i as u32 == part.length.get() {
-                    match self.wires_at(pos) {
-                        TileWires::None => {}
-                        TileWires::One { wire, vertical: _ } => {
-                            wires_crossed.insert(wire);
-                        }
-                        TileWires::Two {
-                            horizontal,
-                            vertical,
-                        } => {
-                            wires_crossed.insert(horizontal);
-                            wires_crossed.insert(vertical);
-                        }
-                        TileWires::Point {
-                            wire,
-                            left: _,
-                            up: _,
-                            right: _,
-                            down: _,
-                        } => {
-                            wires_crossed.insert(wire);
-                        }
+        let up = node.up.is_some();
+        let left = node.left.is_some();
+        let right = node.right.is_some();
+        let down = node.down.is_some();
+
+        // 4-way intersections aren't useless
+        if up && left && right && down {
+            return;
+        }
+
+        if up == down && right == left {
+            self.remove_intersection_at_node(pos, node, false);
+        }
+    }
+
+    fn merge_wires(&mut self, wire: usize, with: usize, update_state: bool) {
+        {
+            let board = self.board.read().unwrap();
+
+            let with_wire = unwrap_option_or_return!(board.wires.get(with));
+
+            if !board.wires.exists(wire) || wire == with {
+                return;
+            }
+
+            let points: Vec<_> = with_wire.points.keys().cloned().collect();
+            drop(board);
+
+            self.set_node_wires(points.iter(), wire);
+        }
+        self.board
+            .write()
+            .unwrap()
+            .merge_wires(wire, with, update_state);
+    }
+
+    fn split_wires(&mut self, id: usize, update_states: bool) {
+        let mut groups = vec![];
+
+        let mut remaining_nodes: HashSet<_> = {
+            let board = self.board.read().unwrap();
+            let wire = unwrap_option_or_return!(board.wires.get(id));
+            wire.points.keys().copied().collect()
+        };
+        let mut queue = vec![];
+
+        while !remaining_nodes.is_empty() {
+            let mut group = HashSet::new();
+            let start = *remaining_nodes.iter().next().unwrap();
+            queue.push(start);
+
+            while let Some(pos) = queue.pop() {
+                if !remaining_nodes.remove(&pos) {
+                    continue;
+                }
+
+                group.insert(pos);
+
+                let (ints, intc) = self.node_neighboring_intersections(pos, Some(id));
+                (0..intc).for_each(|inti| {
+                    let int = ints[inti];
+                    if remaining_nodes.contains(&int) {
+                        queue.push(int);
                     }
-                } else if let Some(wire) = node.wire.get() {
-                    wires_crossed.insert(wire);
+                });
+            }
+            groups.push(group);
+        }
+
+        if groups.len() <= 1 {
+            return;
+        }
+
+        let biggest_wire = groups
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.len().cmp(&b.1.len()))
+            .unwrap()
+            .0;
+
+        let mut wires = vec![];
+
+        for (groupid, group) in groups.drain(..).enumerate() {
+            if groupid != biggest_wire {
+                let new_wire = self.board.write().unwrap().split_wire(id, &group, false);
+                if let Some(wire) = new_wire {
+                    self.set_node_wires(group.iter(), wire);
+                    wires.push(wire);
+                }
+            } else {
+                wires.push(id);
+            }
+        }
+
+        if update_states {
+            let states = self.board.read().unwrap().states.clone();
+            for wire in wires {
+                states.update_wire(wire);
+            }
+        }
+    }
+
+    fn set_node_wires<'a>(&mut self, positions: impl Iterator<Item = &'a Vec2i>, wire: usize) {
+        for npos in positions {
+            match self.wire_nodes.get_mut(npos.convert(|v| v as isize)) {
+                None => {}
+                Some(n) => n.wire.set(Some(wire)),
+            }
+        }
+    }
+
+    /* #endregion */
+
+    fn calc_wire_part(from: Option<Vec2i>, to: Option<Vec2i>) -> Option<WirePart> {
+        if let Some(from) = from {
+            if let Some(to) = to {
+                if from != to {
+                    let angle = (to - from).convert(|v| v as f32).angle_to_x();
+                    let axis = (angle / (TAU / 4.0)).round() as i32 % 4;
+
+                    let origin = match axis {
+                        0 => [to.x(), from.y()].into(),
+                        1 => from,
+                        2 => from,
+                        3 => [from.x(), to.y()].into(),
+                        _ => unreachable!(),
+                    };
+                    let length = match axis {
+                        0 => to.x() - from.x(),
+                        1 => from.y() - to.y(),
+                        2 => from.x() - to.x(),
+                        3 => to.y() - from.y(),
+                        _ => unreachable!(),
+                    } as u32;
+
+                    let dir = match axis {
+                        0 => Direction2::Left,
+                        1 => Direction2::Up,
+                        2 => Direction2::Left,
+                        3 => Direction2::Up,
+                        _ => unreachable!(),
+                    };
+
+                    let part = WirePart {
+                        pos: origin,
+                        length: NonZeroU32::new(length).unwrap(),
+                        dir,
+                    };
+
+                    Some(part)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+
+    fn should_draw_wire_point(&self, pos: Vec2i, shift: bool) -> bool {
+        let node =
+            unwrap_option_or_return!(self.wire_nodes.get(pos.convert(|v| v as isize)), false);
+
+        if node.wire.is_none() {
+            return false;
+        }
+
+        if shift {
+            return true;
+        }
+
+        Direction4::iter_all().all(|dir| node.get_dir(dir).is_some())
+    }
+
+    fn place_circuit(&mut self, place_pos: Vec2i, preview: &dyn CircuitPreview) {
+        let size = preview.size();
+
+        for j in 0..size.y() as i32 {
+            for i in 0..size.x() as i32 {
+                let pos = place_pos + [i, j];
+                if self
+                    .circuit_nodes
+                    .get(pos.convert(|v| v as isize))
+                    .is_some_and(|n| n.circuit.is_some())
+                {
+                    return;
                 }
             }
-            wires_crossed
+        }
+
+        let cid = {
+            self.board
+                .write()
+                .unwrap()
+                .create_circuit(place_pos, preview)
         };
 
-        let new_wire = match wires_crossed.len() {
-            0 => self.board.write().unwrap().create_wire(),
-            1 => *wires_crossed.iter().next().unwrap(),
-            _ => {
-                let main_wire = {
-                    self.board
-                        .read()
-                        .unwrap()
-                        .wires
-                        .iter()
-                        .filter(|v| wires_crossed.contains(&v.id))
-                        .max_by(|x, y| x.points.len().cmp(&y.points.len()))
-                        .expect("Some matching wires")
-                        .id
+        for j in 0..size.y() {
+            for i in 0..size.x() {
+                let pos = place_pos + [i as i32, j as i32];
+                let node = self
+                    .circuit_nodes
+                    .get_or_create_mut(pos.convert(|v| v as isize));
+
+                node.circuit.set(Some(cid));
+                node.origin_dist = [i, j].into();
+            }
+        }
+        let circ_info = {
+            self.board
+                .read()
+                .unwrap()
+                .circuits
+                .get(cid)
+                .unwrap()
+                .info
+                .clone()
+        };
+        for pin in circ_info.read().unwrap().pins.iter() {
+            let pos = place_pos + pin.pos.convert(|v| v as i32);
+            if let Some(wire) = self.create_wire_intersection(pos) {
+                let wire = if let Some(wire) = self.board.write().unwrap().wires.get_mut(wire) {
+                    if let Some(p) = wire.points.get_mut(&pos) {
+                        p.pin = Some(pin.pin.clone());
+                    }
+                    Some(wire.id)
+                } else {
+                    None
                 };
 
-                for wire in wires_crossed.iter() {
-                    if *wire != main_wire {
-                        self.merge_wires(main_wire, *wire, false)
-                    }
+                if let Some(wire) = wire {
+                    pin.pin
+                        .write()
+                        .unwrap()
+                        .set_wire(Some(&self.board.read().unwrap()), Some(wire));
                 }
-                main_wire
             }
-        };
+        }
+        let board = self.board.read().unwrap();
+        let circ = board.circuits.get(cid).unwrap();
+        board.states.init_circuit(circ);
+        board.states.update_circuit_signals(cid, None);
+    }
 
-        self.set_wire_point(part.pos, Some(new_wire), false);
-        self.set_wire_point(
-            part.dir
-                .move_vector(part.pos, part.length.get() as i32, true),
-            Some(new_wire),
-            false,
-        );
-
-        self.place_wire_multipart(&part, new_wire);
+    fn pin_at(&self, pos: Vec2i) -> Option<Arc<RwLock<CircuitPin>>> {
+        let circ = self.circuit_nodes.get(pos.convert(|v| v as isize))?;
+        let pos = circ.origin_dist;
+        let circ = circ.circuit.get()?;
 
         let board = self.board.read().unwrap();
-        board.states.update_wire(new_wire);
+        let circ_info = board.circuits.get(circ)?.info.clone();
+        let circ_info = circ_info.read().unwrap();
+
+        circ_info
+            .pins
+            .iter()
+            .find(|p| p.pos == pos)
+            .map(|p| p.pin.clone())
     }
 
-    fn place_wire_multipart(&mut self, part: &WirePart, wire: usize) {
-        fn fix_pointers(this: &mut ActiveCircuitBoard, pos: Vec2i, dist: u32, dir: Direction4) {
-            for (i, pos) in dir.iter_pos_along(pos, dist as i32, false).enumerate() {
-                let node = this
-                    .wire_nodes
-                    .get_or_create_mut(pos.convert(|v| v as isize));
-                node.get_dir_mut(dir.inverted()).set(Some(i as u32 + 1))
-            }
-        }
-
-        let dir_rev = Direction4::from(part.dir).inverted();
-
-        let mut dist = 0;
-        for (i, pos) in part.iter_pos(true).enumerate() {
-            let node = self
-                .wire_nodes
-                .get_or_create_mut(pos.convert(|v| v as isize));
-
-            let point = node.wire.is_some() || i == 0 || i as u32 == part.length.get();
-
-            if i > 0 {
-                node.get_dir_mut(dir_rev).set(Some(dist))
-            }
-
-            if point {
-                if i > 0 {
-                    node.wire.set(Some(wire));
-                    let node = *node;
-                    fix_pointers(self, pos, dist, dir_rev);
-
-                    if let Some(wire) = self.board.write().unwrap().wires.get_mut(wire) {
-                        wire.add_point(
-                            pos,
-                            None,
-                            WirePoint {
-                                left: node.left.is_some(),
-                                up: node.up.is_some(),
-                                pin: self.pin_at(pos),
-                            },
-                        )
-                    }
-                }
-                dist = 1;
-            } else {
-                dist += 1;
-            }
-        }
-    }
-
-    fn optimize_wire_part(&mut self, part: WirePart) -> Option<WirePart> {
+    fn optimize_wire_part(&self, part: WirePart) -> Option<WirePart> {
         let mut part_pos = part.pos;
         let mut part_len = part.length.get() as i32;
 
@@ -1073,7 +1340,7 @@ impl ActiveCircuitBoard {
                 if n.wire.is_some() {
                     None
                 } else {
-                    self.find_node_from_node(n, part_pos, part.dir.into())
+                    self.find_wire_node_from_node(n, part_pos, part.dir.into())
                 }
             });
 
@@ -1088,7 +1355,7 @@ impl ActiveCircuitBoard {
             .wire_nodes
             .get(end_pos.convert(|v| v as isize))
             .and_then(|n| {
-                self.find_node_from_node(n, end_pos, Direction4::from(part.dir).inverted())
+                self.find_wire_node_from_node(n, end_pos, Direction4::from(part.dir).inverted())
                     .map(|v| v.distance)
             });
 
@@ -1160,33 +1427,12 @@ impl ActiveCircuitBoard {
         }
     }
 
-    fn merge_wires(&mut self, wire: usize, with: usize, update_state: bool) {
-        {
-            let board = self.board.read().unwrap();
-
-            let with_wire = unwrap_option_or_return!(board.wires.get(with));
-
-            if !board.wires.exists(wire) || wire == with {
-                return;
-            }
-
-            let points: Vec<_> = with_wire.points.keys().cloned().collect();
-            drop(board);
-
-            self.set_node_wires(points.iter(), wire);
-        }
-        self.board
-            .write()
-            .unwrap()
-            .merge_wires(wire, with, update_state);
-    }
-
-    fn find_node(&self, pos: Vec2i, dir: Direction4) -> Option<FoundWireNode> {
+    fn find_wire_node(&self, pos: Vec2i, dir: Direction4) -> Option<FoundWireNode> {
         let node = self.wire_nodes.get(pos.convert(|v| v as isize))?;
-        self.find_node_from_node(node, pos, dir)
+        self.find_wire_node_from_node(node, pos, dir)
     }
 
-    fn find_node_from_node(
+    fn find_wire_node_from_node(
         &self,
         node: &WireNode,
         pos: Vec2i,
@@ -1204,72 +1450,6 @@ impl ActiveCircuitBoard {
         })
     }
 
-    fn split_wires(&mut self, id: usize, update_states: bool) {
-        let mut groups = vec![];
-
-        let mut remaining_nodes: HashSet<_> = {
-            let board = self.board.read().unwrap();
-            let wire = unwrap_option_or_return!(board.wires.get(id));
-            wire.points.keys().copied().collect()
-        };
-        let mut queue = vec![];
-
-        while !remaining_nodes.is_empty() {
-            let mut group = HashSet::new();
-            let start = *remaining_nodes.iter().next().unwrap();
-            queue.push(start);
-
-            while let Some(pos) = queue.pop() {
-                if !remaining_nodes.remove(&pos) {
-                    continue;
-                }
-
-                group.insert(pos);
-
-                let (ints, intc) = self.node_neighboring_intersections(pos, Some(id));
-                (0..intc).for_each(|inti| {
-                    let int = ints[inti];
-                    if remaining_nodes.contains(&int) {
-                        queue.push(int);
-                    }
-                });
-            }
-            groups.push(group);
-        }
-
-        if groups.len() <= 1 {
-            return;
-        }
-
-        let biggest_wire = groups
-            .iter()
-            .enumerate()
-            .max_by(|a, b| a.1.len().cmp(&b.1.len()))
-            .unwrap()
-            .0;
-
-        let mut wires = vec![];
-
-        for (groupid, group) in groups.drain(..).enumerate() {
-            if groupid != biggest_wire {
-                let new_wire = self.board.write().unwrap().split_wire(id, &group, false);
-                if let Some(wire) = new_wire {
-                    self.set_node_wires(group.iter(), wire);
-                    wires.push(wire);
-                }
-            } else {
-                wires.push(id);
-            }
-        }
-
-        if update_states {
-            let states = self.board.read().unwrap().states.clone();
-            for wire in wires {
-                states.update_wire(wire);
-            }
-        }
-    }
-
     fn node_neighboring_intersections(
         &self,
         pos: Vec2i,
@@ -1284,7 +1464,7 @@ impl ActiveCircuitBoard {
         };
 
         for dir in Direction4::iter_all() {
-            if let Some(f) = self.find_node_from_node(node, pos, dir) {
+            if let Some(f) = self.find_wire_node_from_node(node, pos, dir) {
                 if !wire.is_some_and(|v| v != f.wire) {
                     arr[arrpos] = f.pos;
                     arrpos += 1;
@@ -1292,125 +1472,5 @@ impl ActiveCircuitBoard {
             }
         }
         (arr, arrpos)
-    }
-
-    fn set_node_wires<'a>(&mut self, positions: impl Iterator<Item = &'a Vec2i>, wire: usize) {
-        for npos in positions {
-            match self.wire_nodes.get_mut(npos.convert(|v| v as isize)) {
-                None => {}
-                Some(n) => n.wire.set(Some(wire)),
-            }
-        }
-    }
-
-    /// returns previous wire id
-    fn set_wire_point(
-        &mut self,
-        pos: Vec2i,
-        wire: Option<usize>,
-        update_state: bool,
-    ) -> Option<usize> {
-        fn fix_pointers(
-            wires: &mut Chunks2D<16, WireNode>,
-            pos: Vec2i,
-            dir: Direction4,
-            start_dist: u32,
-            dist: u32,
-            possibly_remove: bool,
-        ) {
-            if dist == 0 {
-                return;
-            }
-
-            let remove = possibly_remove && start_dist == 0;
-
-            let back_dir = dir.inverted();
-
-            for (i, pos) in dir.iter_pos_along(pos, dist as i32, true).enumerate() {
-                let forward_ptr = if remove { None } else { Some(dist - i as u32) };
-                let back_ptr = if remove {
-                    None
-                } else {
-                    Some(i as u32 + start_dist)
-                };
-
-                let node = wires.get_or_create_mut(pos.convert(|v| v as isize));
-                if i > 0 {
-                    node.get_dir_mut(back_dir).set(back_ptr);
-                }
-                if (i as u32) < dist {
-                    node.get_dir_mut(dir).set(forward_ptr);
-                }
-            }
-        }
-
-        let node = self
-            .wire_nodes
-            .get_or_create_mut(pos.convert(|v| v as isize));
-        let prev_wire = node.wire.get();
-        if prev_wire == wire {
-            return prev_wire;
-        }
-
-        node.wire.set(wire);
-
-        let node = *node;
-
-        for dir in Direction4::iter_all() {
-            let dist_forward = unwrap_option_or_continue!(node.get_dir(dir).get());
-
-            if wire.is_some() {
-                fix_pointers(&mut self.wire_nodes, pos, dir, 0, dist_forward, false);
-            } else {
-                let dist_back = node.get_dir(dir.inverted()).get().unwrap_or(0);
-                fix_pointers(
-                    &mut self.wire_nodes,
-                    pos,
-                    dir,
-                    dist_back,
-                    dist_forward,
-                    true,
-                );
-            }
-        }
-
-        {
-            let pin = self.pin_at(pos);
-            if let Some(pin) = &pin {
-                pin.write().unwrap().set_wire(None, wire);
-            }
-
-            let mut board = self.board.write().unwrap();
-
-            if let Some(wire) = prev_wire.and_then(|w| board.wires.get_mut(w)) {
-                wire.remove_point(pos, None);
-            }
-
-            if let Some(wire) = wire.and_then(|w| board.wires.get_mut(w)) {
-                wire.add_point(
-                    pos,
-                    None,
-                    WirePoint {
-                        left: node.left.is_some(),
-                        up: node.up.is_some(),
-                        pin,
-                    },
-                );
-            }
-        }
-
-        if update_state {
-            let states = self.board.read().unwrap().states.clone();
-
-            if let Some(wire) = prev_wire {
-                states.update_wire(wire);
-            }
-
-            if let Some(wire) = wire {
-                states.update_wire(wire)
-            }
-        }
-
-        prev_wire
     }
 }
