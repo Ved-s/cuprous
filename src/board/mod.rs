@@ -1,5 +1,4 @@
 use std::{
-    cell::RefCell,
     collections::{hash_map::DefaultHasher, HashMap, HashSet},
     f32::consts::TAU,
     hash::Hasher,
@@ -7,7 +6,7 @@ use std::{
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
-    },
+    }, cell::RefCell,
 };
 
 use eframe::{
@@ -20,10 +19,14 @@ use crate::{
     circuits::{Circuit, CircuitNode, CircuitPin, CircuitPreview, CircuitStateContext},
     containers::{Chunks2D, ChunksLookaround, FixedVec},
     state::{State, StateCollection},
-    vector::{IsZero, Vec2f, Vec2i, Vec2u},
+    vector::{IsZero, Vec2f, Vec2i},
     wires::{FoundWireNode, TileWires, Wire, WireNode, WirePart, WirePoint},
-    Direction2, Direction4, PaintContext, RwLock, Screen,
+    Direction2, Direction4, PaintContext, RwLock, Screen, unwrap_option_or_continue, unwrap_option_or_return,
 };
+
+use self::selection::Selection;
+
+mod selection;
 
 pub struct CircuitBoard {
     pub wires: FixedVec<Wire>,
@@ -62,10 +65,7 @@ impl CircuitBoard {
             return;
         }
 
-        let with = match self.wires.remove(with) {
-            Some(w) => w,
-            None => return,
-        };
+        let with = unwrap_option_or_return!(self.wires.remove(with));
 
         let Wire { id: _, points } = with;
 
@@ -126,17 +126,11 @@ impl CircuitBoard {
         }
 
         let new_wire_id = self.wires.first_free_pos();
-        let wire = match self.wires.get_mut(id) {
-            None => return None,
-            Some(w) => w,
-        };
+        let wire = unwrap_option_or_return!(self.wires.get_mut(id), None);
 
         let mut new_points = HashMap::new();
         for pos in points.iter() {
-            let point = match wire.points.remove(pos) {
-                None => continue,
-                Some(p) => p,
-            };
+            let point = unwrap_option_or_continue!(wire.points.remove(pos));
 
             let ref_right = search_wire_point(wire.points.keys().cloned(), *pos, false, true);
             let ref_down = search_wire_point(wire.points.keys().cloned(), *pos, true, true);
@@ -205,17 +199,6 @@ impl<'a> SelectedBoardItem<'a> {
     }
 }
 
-#[derive(Hash, PartialEq, Eq)]
-enum SelectedWorldObject {
-    WirePart { pos: Vec2i, dir: Direction2 },
-    Circuit { id: usize },
-}
-
-enum SelectionMode {
-    Include,
-    Exclude,
-}
-
 pub struct ActiveCircuitBoard {
     pub board: Arc<RwLock<CircuitBoard>>,
     pub state: Arc<State>,
@@ -224,12 +207,7 @@ pub struct ActiveCircuitBoard {
     pub circuit_nodes: Chunks2D<16, CircuitNode>,
 
     wire_drag_pos: Option<Vec2i>,
-
-    selection_start_pos: Option<Vec2f>,
-    selection_rect: Option<Rect>,
-    selection: HashSet<SelectedWorldObject>,
-    selection_change: HashSet<SelectedWorldObject>,
-    selection_mode: SelectionMode,
+    selection: RefCell<Selection>,
 
     pub wires_drawn: AtomicUsize,
 }
@@ -250,20 +228,15 @@ impl ActiveCircuitBoard {
             circuit_nodes: Default::default(),
             state,
             wire_drag_pos: None,
-
-            selection_start_pos: None,
-            selection_rect: None,
-            selection: HashSet::new(),
-            selection_change: HashSet::new(),
-            selection_mode: SelectionMode::Include,
-
+            selection: RefCell::new(Selection::new()),
+            
             wires_drawn: AtomicUsize::new(0),
         })
     }
 
     pub fn update(&mut self, ctx: &PaintContext, selected: SelectedBoardItem, debug: bool) {
         self.wires_drawn.store(0, Ordering::Relaxed);
-        self.pre_update_selection(ctx, selected.none());
+        self.selection.borrow_mut().pre_update_selection(self, ctx, selected.none());
         ctx.draw_chunks(
             &self.wire_nodes,
             &self,
@@ -293,7 +266,7 @@ impl ActiveCircuitBoard {
 
         self.update_wires(ctx, selected.wire());
         self.update_circuits(ctx, selected.circuit());
-        self.update_selection(ctx);
+        self.selection.borrow_mut().update_selection(ctx);
     }
 
     fn draw_wire_node(
@@ -333,8 +306,9 @@ impl ActiveCircuitBoard {
                 },
                 Some(next_dist) => {
                     let dist = match info.dist {
-                        None => return,
                         Some(d) => d,
+                        None if info.wire.is_some() => 0,
+                        None => return,
                     };
 
                     if next_dist == dist + 1 {
@@ -358,11 +332,12 @@ impl ActiveCircuitBoard {
         }
         let wires = self.wires_at_node(pos, node);
 
+        let center_color = node.wire.get().map(|w| self.state.read_wire(w).color());
+
         for dir in Direction2::iter_all() {
-            let wire_color = match wires.dir(dir.into()) {
-                None => continue,
-                Some(w) => self.state.read_wire(w).color(),
-            };
+            let wire_color = center_color.or_else(|| wires.dir(dir.into()).map(|w| self.state.read_wire(w).color()));
+
+            let wire_color = unwrap_option_or_continue!(wire_color);
 
             let next_node_rel_pos = dir.unit_vector(false).convert(|v| v as isize);
             let next_node = lookaround.get_relative(next_node_rel_pos);
@@ -493,16 +468,10 @@ impl ActiveCircuitBoard {
         {
             return;
         }
-        let circ_id = match node.circuit.get() {
-            None => return,
-            Some(c) => c,
-        };
+        let circ_id = unwrap_option_or_return!(node.circuit.get());
 
         let board = self.board.read().unwrap();
-        let circuit = match board.circuits.get(circ_id) {
-            None => return,
-            Some(c) => c,
-        };
+        let circuit = unwrap_option_or_return!(board.circuits.get(circ_id));
 
         let circ_info = circuit.info.read().unwrap();
 
@@ -601,203 +570,8 @@ impl ActiveCircuitBoard {
         }
     }
 
-    fn pre_update_selection(&mut self, ctx: &PaintContext, selected: bool) {
-        fn draw_selection(
-            this: &ActiveCircuitBoard,
-            item: &SelectedWorldObject,
-            ctx: &PaintContext,
-            possible_points: &mut HashSet<Vec2i>,
-        ) {
-            match item {
-                SelectedWorldObject::WirePart { pos, dir } => {
-                    if let Some(w) = this.find_node(*pos, (*dir).into()) {
-                        let part = WirePart {
-                            pos: *pos,
-                            dir: *dir,
-                            length: w.distance,
-                        };
-                        let rect = ActiveCircuitBoard::calc_wire_part_rect(&ctx.screen, &part);
-                        let rect = rect.expand(2.0);
-                        ctx.paint
-                            .rect_filled(rect, Rounding::none(), Color32::WHITE);
-
-                        possible_points.insert(*pos);
-                        possible_points.insert(w.pos);
-                    }
-                }
-                SelectedWorldObject::Circuit { id } => {
-                    if let Some(circ) = this.board.read().unwrap().circuits.get(*id) {
-                        let rect_pos = ctx.screen.world_to_screen_tile(circ.pos);
-                        let rect_size =
-                            circ.info.read().unwrap().size.convert(|v| v as f32) * ctx.screen.scale;
-                        let rect = Rect::from_min_size(rect_pos.into(), rect_size.into());
-                        let rect = rect.expand(2.0);
-                        ctx.paint.rect(
-                            rect,
-                            Rounding::none(),
-                            Color32::from_rgba_unmultiplied(200, 200, 255, 20),
-                            Stroke::new(2.0, Color32::WHITE),
-                        );
-                    }
-                }
-            }
-        }
-
-        if !selected {
-            self.selection_start_pos = None;
-            self.selection_rect = None;
-        } else {
-            let mouse_tile_pos = ctx
-                .egui_ctx
-                .input(|input| input.pointer.interact_pos())
-                .map(|p| ctx.screen.screen_to_world(Vec2f::from(p)));
-
-            if let Some(selection_start_pos) = self.selection_start_pos {
-                if let Some(mouse_tile_pos) = mouse_tile_pos {
-                    let start = selection_start_pos;
-                    let end = mouse_tile_pos;
-
-                    let min = Vec2f::from([start.x().min(end.x()), start.y().min(end.y())]);
-                    let max = Vec2f::from([start.x().max(end.x()), start.y().max(end.y())]);
-
-                    let min_tile = min.convert(|v| v.floor() as i32);
-                    let max_tile = max.convert(|v| v.ceil() as i32);
-
-                    let rect_min = ctx.screen.world_to_screen(min);
-                    let rect_max = ctx.screen.world_to_screen(max);
-                    let rect = Rect::from_min_max(rect_min.into(), rect_max.into());
-                    self.selection_rect = Some(rect);
-
-                    ctx.paint.rect_filled(
-                        rect,
-                        Rounding::none(),
-                        Color32::from_rgba_unmultiplied(200, 200, 255, 10),
-                    );
-
-                    self.selection_update_changes(
-                        min_tile,
-                        (max_tile - min_tile).convert(|v| v as u32),
-                    );
-                } else {
-                    self.selection_rect = None;
-                }
-            } else {
-                self.selection_rect = None;
-            }
-
-            let interaction = ctx
-                .ui
-                .interact(ctx.rect, ctx.ui.id(), Sense::click_and_drag());
-
-            if self.selection_start_pos.is_none()
-                && interaction.drag_started_by(egui::PointerButton::Primary)
-            {
-                self.selection_start_pos = mouse_tile_pos;
-                self.selection_change.clear();
-
-                let (shift, ctrl) = ctx
-                    .egui_ctx
-                    .input(|input| (input.modifiers.shift, input.modifiers.ctrl));
-                if !shift && !ctrl {
-                    self.selection.clear();
-                }
-
-                if ctrl {
-                    self.selection_mode = SelectionMode::Exclude;
-                } else {
-                    self.selection_mode = SelectionMode::Include;
-                }
-            } else if self.selection_start_pos.is_some()
-                && interaction.drag_released_by(egui::PointerButton::Primary)
-            {
-                self.selection_start_pos = None;
-
-                match self.selection_mode {
-                    SelectionMode::Include => self.selection.extend(self.selection_change.drain()),
-                    SelectionMode::Exclude => {
-                        for i in self.selection_change.drain() {
-                            self.selection.remove(&i);
-                        }
-                    }
-                }
-                // TODO
-                self.selection_change.clear();
-            }
-        }
-
-        let mut possible_points = HashSet::new();
-
-        for item in self.selection.iter() {
-            if matches!(self.selection_mode, SelectionMode::Exclude)
-                && self.selection_change.contains(item)
-            {
-                continue;
-            }
-            draw_selection(self, item, ctx, &mut possible_points);
-        }
-        if matches!(self.selection_mode, SelectionMode::Include) {
-            for item in self.selection_change.iter() {
-                if self.selection.contains(item) {
-                    continue;
-                }
-                draw_selection(self, item, ctx, &mut possible_points);
-            }
-        }
-
-        let shift = ctx.egui_ctx.input(|input| input.modifiers.shift);
-        for point in possible_points {
-            if self.should_draw_wire_point(point, shift) {
-                let node = match self.wire_nodes.get(point.convert(|v| v as isize)) {
-                    Some(n) => n,
-                    None => continue,
-                };
-
-                let all_connections_selected = Direction4::iter_all().all(|dir| 
-                    node.get_dir(dir).is_none_or(|_| {
-                        let (part_dir, forward) = dir.into_dir2();
-
-                        let part_pos = if forward {
-                            Some(point)
-                        } else {
-                            self.find_node_from_node(node, point, dir).map(|f| f.pos)
-                        };
-
-                        match part_pos {
-                            None => false,
-                            Some(part_pos) => {
-                                let part = SelectedWorldObject::WirePart { pos: part_pos, dir: part_dir };
-
-                                match self.selection_mode {
-                                    SelectionMode::Include => self.selection.contains(&part) || self.selection_change.contains(&part),
-                                    SelectionMode::Exclude => self.selection.contains(&part) && !self.selection_change.contains(&part),
-                                }
-                            },
-                        }
-                    })
-                );
-
-                if all_connections_selected {
-                    let rect = ActiveCircuitBoard::calc_wire_point_rect(&ctx.screen, point);
-                    let rect = rect.expand(2.0);
-                    ctx.paint
-                        .rect_filled(rect, Rounding::none(), Color32::WHITE);
-                }
-            }
-        }
-    }
-
-    fn update_selection(&mut self, ctx: &PaintContext) {
-        if let Some(rect) = self.selection_rect {
-            ctx.paint
-                .rect_stroke(rect, Rounding::none(), Stroke::new(1.0, Color32::WHITE));
-        }
-    }
-
     fn should_draw_wire_point(&self, pos: Vec2i, shift: bool) -> bool {
-        let node = match self.wire_nodes.get(pos.convert(|v| v as isize)) {
-            Some(n) => n,
-            None => return false,
-        };
+        let node = unwrap_option_or_return!(self.wire_nodes.get(pos.convert(|v| v as isize)), false);
 
         if node.wire.is_none() {
             return false;
@@ -808,61 +582,6 @@ impl ActiveCircuitBoard {
         }
 
         Direction4::iter_all().all(|dir| node.get_dir(dir).is_some())
-    }
-
-    fn selection_update_changes(&mut self, pos: Vec2i, size: Vec2u) {
-        self.selection_change.clear();
-
-        for (pos, node) in self
-            .wire_nodes
-            .iter_area(pos.convert(|v| v as isize), size.convert(|v| v as usize))
-        {
-            let pos = pos.convert(|v| v as i32);
-
-            //if let Some(wire) = node.wire.get() {
-            //    self.selection_change
-            //        .insert(SelectedWorldObject::WirePoint { id: wire, pos });
-            //}
-            if node.wire.is_some() {
-                for dir in Direction4::iter_all() {
-                    let node = self.find_node_from_node(node, pos, dir);
-                    let node = match node {
-                        None => continue,
-                        Some(node) => node,
-                    };
-                    let (dir, forward) = dir.into_dir2();
-
-                    self.selection_change.insert(SelectedWorldObject::WirePart {
-                        pos: if forward { pos } else { node.pos },
-                        dir,
-                    });
-                }
-            } else {
-                for dir in [Direction4::Right, Direction4::Down] {
-                    let node = self.find_node_from_node(node, pos, dir);
-                    let node = match node {
-                        None => continue,
-                        Some(node) => node,
-                    };
-                    self.selection_change.insert(SelectedWorldObject::WirePart {
-                        pos: node.pos,
-                        dir: dir.into_dir2().0,
-                    });
-                }
-            }
-        }
-        for (_, node) in self
-            .circuit_nodes
-            .iter_area(pos.convert(|v| v as isize), size.convert(|v| v as usize))
-        {
-            let circuit = match node.circuit.get() {
-                Some(c) => c,
-                None => continue,
-            };
-
-            self.selection_change
-                .insert(SelectedWorldObject::Circuit { id: circuit });
-        }
     }
 
     fn place_circuit(&mut self, place_pos: Vec2i, preview: &dyn CircuitPreview) {
@@ -1218,18 +937,12 @@ impl ActiveCircuitBoard {
     }
 
     fn place_wire_part(&mut self, part: WirePart) {
-        let part = match self.optimize_wire_part(part) {
-            Some(p) => p,
-            None => return,
-        };
+        let part = unwrap_option_or_return!(self.optimize_wire_part(part));
 
         let wires_crossed = {
             let mut wires_crossed = HashSet::new();
             for (i, pos) in part.iter_pos(true).enumerate() {
-                let node = match self.wire_nodes.get(pos.convert(|v| v as isize)) {
-                    None => continue,
-                    Some(v) => v,
-                };
+                let node = unwrap_option_or_continue!(self.wire_nodes.get(pos.convert(|v| v as isize)));
 
                 if i == 0 || i as u32 == part.length.get() {
                     match self.wires_at(pos) {
@@ -1451,10 +1164,7 @@ impl ActiveCircuitBoard {
         {
             let board = self.board.read().unwrap();
 
-            let with_wire = match board.wires.get(with) {
-                Some(w) => w,
-                None => return,
-            };
+            let with_wire = unwrap_option_or_return!(board.wires.get(with));
 
             if !board.wires.exists(wire) || wire == with {
                 return;
@@ -1499,10 +1209,7 @@ impl ActiveCircuitBoard {
 
         let mut remaining_nodes: HashSet<_> = {
             let board = self.board.read().unwrap();
-            let wire = match board.wires.get(id) {
-                Some(w) => w,
-                None => return,
-            };
+            let wire = unwrap_option_or_return!(board.wires.get(id));
             wire.points.keys().copied().collect()
         };
         let mut queue = vec![];
@@ -1650,10 +1357,7 @@ impl ActiveCircuitBoard {
         let node = *node;
 
         for dir in Direction4::iter_all() {
-            let dist_forward = match node.get_dir(dir).get() {
-                Some(d) => d,
-                None => continue,
-            };
+            let dist_forward = unwrap_option_or_continue!(node.get_dir(dir).get());
 
             if wire.is_some() {
                 fix_pointers(&mut self.wire_nodes, pos, dir, 0, dist_forward, false);

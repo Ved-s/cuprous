@@ -4,7 +4,7 @@ use std::{
     ops::Range,
 };
 
-use crate::{vector::{Vector, Vec2isize, Vec2usize}, SizeCalc, Intersect};
+use crate::{vector::{Vector, Vec2isize, Vec2usize}, SizeCalc, Intersect, unwrap_option_or_continue};
 
 #[derive(Debug, Clone)]
 pub struct FixedVec<T> {
@@ -144,7 +144,7 @@ impl<T> FixedVec<T> {
     fn update_first_free_set(&mut self, into: usize) {
         if let Some(ff) = self.first_free {
             if ff == into {
-                self.first_free = (ff + 1..self.vec.len()).find(|i| matches!(self.vec[*i], None));
+                self.first_free = (ff + 1..self.vec.len()).find(|i| self.vec[*i].is_none());
             }
         }
     }
@@ -372,7 +372,7 @@ impl<const CHUNK_SIZE: usize, T: Default> Chunks2D<CHUNK_SIZE, T> {
     }
 
     pub fn chunk_exists_at(&self, pos: impl Into<Vec2isize>) -> bool {
-        let (chunk_pos, pos) = Self::to_chunk_pos(pos.into());
+        let (chunk_pos, _) = Self::to_chunk_pos(pos.into());
 
         self.get_chunk(chunk_pos).is_some()
     }
@@ -453,11 +453,7 @@ impl<const CHUNK_SIZE: usize, T: Default> Chunks2D<CHUNK_SIZE, T> {
             for cx in (chunks_tl.x()..chunks_br.x() + 1).intersect(&rowrange) {
                 let chunk_coord: Vector<2, isize> = [cx, cy].into();
                 let chunk_tl = chunk_coord * 16;
-                let chunk =
-                    match self.get_chunk(chunk_coord) {
-                        Some(v) => v,
-                        None => continue,
-                    };
+                let chunk = unwrap_option_or_continue!(self.get_chunk(chunk_coord));
 
                 let chunk_start = tl - chunk_tl;
                 let chunk_wnd = br - chunk_tl;

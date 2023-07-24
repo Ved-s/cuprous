@@ -30,6 +30,9 @@ use state::State;
 
 mod board;
 
+#[macro_use]
+mod macros;
+
 #[cfg(debug_assertions)]
 mod debug;
 
@@ -114,11 +117,7 @@ impl PaintContext<'_> {
             for cx in (chunks_tl.x()..chunks_br.x() + 1).intersect(&rowrange) {
                 let chunk_coord: Vec2i = [cx, cy].into();
                 let chunk_tl = chunk_coord * 16;
-                let chunk = match chunks.get_chunk(chunk_coord.convert(|v| v as isize)) {
-                    Some(v) => v,
-                    None => continue,
-                };
-
+                let chunk = unwrap_option_or_continue!(chunks.get_chunk(chunk_coord.convert(|v| v as isize)));
                 let chunk_viewport_tl = tiles_tl - chunk_tl;
                 let chunk_viewport_br = tiles_br - chunk_tl;
 
