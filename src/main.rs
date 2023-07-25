@@ -3,7 +3,7 @@
 #![feature(int_roundings)]
 #![feature(lazy_cell)]
 
-use std::{mem::size_of, ops::Range, sync::Arc, time::Instant};
+use std::{mem::size_of, ops::Range, sync::Arc, time::Instant, any::{Any, TypeId}};
 
 use board::{ActiveCircuitBoard, CircuitBoard, SelectedBoardItem};
 use eframe::{
@@ -297,15 +297,34 @@ impl eframe::App for App {
 
         self.board.state.update(&self.board.board.read().unwrap());
 
-        if ctx.input(|input| input.key_pressed(Key::F1)) {
+        if ctx.input(|input| input.key_pressed(Key::Num1)) {
             self.selected = match &self.selected {
-                SelectedItem::None => SelectedItem::Wires,
-                SelectedItem::Wires => {
-                    SelectedItem::Circuit(Box::new(circuits::TestCircuitPreview { a: 10, b: 20 }))
-                }
-                SelectedItem::Circuit(_) => SelectedItem::None,
+                SelectedItem::Wires => SelectedItem::None,
+                _ => SelectedItem::Wires,
             }
         }
+
+        if ctx.input(|input| input.key_pressed(Key::Num2)) {
+            self.selected = match &self.selected {
+                SelectedItem::Circuit(c) if (**c).type_id() == TypeId::of::<circuits::test::Preview>() => SelectedItem::None,
+                _ => SelectedItem::Circuit(Box::new(circuits::test::Preview {})),
+            }
+        }
+
+        if ctx.input(|input| input.key_pressed(Key::Num3)) {
+            self.selected = match &self.selected {
+                SelectedItem::Circuit(c) if (**c).type_id() == TypeId::of::<circuits::button::Preview>() => SelectedItem::None,
+                _ => SelectedItem::Circuit(Box::new(circuits::button::Preview {})),
+            }
+        }
+
+        if ctx.input(|input| input.key_pressed(Key::Num4)) {
+            self.selected = match &self.selected {
+                SelectedItem::Circuit(c) if (**c).type_id() == TypeId::of::<circuits::gates::or::Preview>() => SelectedItem::None,
+                _ => SelectedItem::Circuit(Box::new(circuits::gates::or::Preview {})),
+            }
+        }
+
         if ctx.input(|input| input.key_pressed(Key::F9)) {
             self.debug = !self.debug;
         }

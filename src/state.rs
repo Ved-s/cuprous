@@ -29,8 +29,8 @@ pub enum WireState {
 }
 
 impl WireState {
-    pub fn combine(&self, state: WireState) -> WireState {
-        match (*self, state) {
+    pub fn combine(self, state: WireState) -> WireState {
+        match (self, state) {
             (WireState::None, other) => other,
             (other, WireState::None) => other,
             (WireState::Error, _) => WireState::Error,
@@ -43,7 +43,7 @@ impl WireState {
         }
     }
 
-    pub fn color(&self) -> Color32 {
+    pub fn color(self) -> Color32 {
         let rgb = match self {
             Self::None => [0, 0, 200],
             Self::True => [0, 255, 0],
@@ -51,6 +51,19 @@ impl WireState {
             Self::Error => [200, 0, 0],
         };
         Color32::from_rgb(rgb[0], rgb[1], rgb[2])
+    }
+
+    pub fn combine_boolean(self, other: WireState, combiner: impl FnOnce(bool, bool) -> bool) -> WireState {
+        match (self, other) {
+            (WireState::None, o) => o,
+            (o, WireState::None) => o,
+            (WireState::Error, _) => WireState::Error,
+            (_, WireState::Error) => WireState::Error,
+            (WireState::False, WireState::False) => combiner(false, false).into(),
+            (WireState::True, WireState::False) => combiner(true, false).into(),
+            (WireState::False, WireState::True) => combiner(false, true).into(),
+            (WireState::True, WireState::True) => combiner(true, true).into()
+        }
     }
 }
 

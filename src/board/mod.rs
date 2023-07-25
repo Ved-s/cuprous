@@ -259,7 +259,7 @@ impl ActiveCircuitBoard {
                 match obj {
                     SelectedWorldObject::Circuit { id } => {
                         self.remove_circuit(id, &mut affected_wires);
-                    },
+                    }
                     SelectedWorldObject::WirePart { pos, dir } => {
                         if let Some(wire) = self.remove_wire_part(pos, dir.into(), true, false) {
                             affected_wires.insert(wire);
@@ -566,9 +566,25 @@ impl ActiveCircuitBoard {
         let rect = Rect::from_min_size(screen_pos.into(), screen_size.into());
         let circ_ctx = ctx.with_rect(rect);
 
+        let imp = circuit.imp.read().unwrap();
         let state_ctx = CircuitStateContext::new(&self.state, circuit);
 
-        circuit.imp.read().unwrap().draw(&state_ctx, &circ_ctx);
+        if imp.draw_pin_points() {
+            for pin in circ_info.pins.iter() {
+                let pos = circuit.pos + pin.pos.convert(|v| v as i32);
+                let pin = pin.pin.read().unwrap();
+                if pin.connected_wire().is_some() {
+                    continue;
+                }
+                let color = pin.get_state(state_ctx.global_state).color();
+                let pos = circ_ctx.screen.world_to_screen_tile(pos) + circ_ctx.screen.scale / 2.0;
+                circ_ctx
+                    .paint
+                    .circle_filled(pos.into(), circ_ctx.screen.scale * 0.1, color);
+            }
+        }
+
+        imp.draw(&state_ctx, &circ_ctx);
     }
 
     /* #endregion */
@@ -848,6 +864,7 @@ impl ActiveCircuitBoard {
                     node.wire.set(Some(wire));
                     let node = *node;
                     fix_pointers(self, pos, dist, dir_rev);
+                    let pin = self.pin_at(pos);
 
                     if let Some(wire) = self.board.write().unwrap().wires.get_mut(wire) {
                         wire.add_point(
@@ -856,7 +873,7 @@ impl ActiveCircuitBoard {
                             WirePoint {
                                 left: node.left.is_some(),
                                 up: node.up.is_some(),
-                                pin: self.pin_at(pos),
+                                pin,
                             },
                         )
                     }
@@ -1113,17 +1130,22 @@ impl ActiveCircuitBoard {
                 {
                     return;
                 }
-                (wire, left && up && right && down, !(left || up || right || down))
+                (
+                    wire,
+                    left && up && right && down,
+                    !(left || up || right || down),
+                )
             }
         };
 
-        if !int_none && self
-            .board
-            .read()
-            .unwrap()
-            .wires
-            .get(wire)
-            .is_some_and(|w| w.points.get(&pos).is_some_and(|p| p.pin.is_some()))
+        if !int_none
+            && self
+                .board
+                .read()
+                .unwrap()
+                .wires
+                .get(wire)
+                .is_some_and(|w| w.points.get(&pos).is_some_and(|p| p.pin.is_some()))
         {
             return;
         }
@@ -1623,13 +1645,20 @@ impl ActiveCircuitBoard {
         let pos = circuit.pos;
         let circuit_info = circuit.info.read().unwrap();
         let size = circuit_info.size;
-        let pins: Vec<_> = circuit.info.read().unwrap().pins.iter().map(|p| (p.pos.convert(|v| v as i32) + pos, p.pin.clone())).collect();
+        let pins: Vec<_> = circuit
+            .info
+            .read()
+            .unwrap()
+            .pins
+            .iter()
+            .map(|p| (p.pos.convert(|v| v as i32) + pos, p.pin.clone()))
+            .collect();
 
         drop(circuit_info);
         drop(board);
 
-        for y in pos.y()..(pos.y()+size.y() as i32) {
-            for x in pos.x()..(pos.x()+size.x() as i32) {
+        for y in pos.y()..(pos.y() + size.y() as i32) {
+            for x in pos.x()..(pos.x() + size.x() as i32) {
                 let node = self.circuit_nodes.get_mut([x as isize, y as isize]);
                 let node = unwrap_option_or_continue!(node);
 
