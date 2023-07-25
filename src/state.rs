@@ -352,6 +352,7 @@ impl State {
 
     pub fn reset_circuit(&self, circuit: usize) {
         self.circuits.write().unwrap().remove(circuit);
+        self.set_circuit_update_interval(circuit, None);
     }
 
     fn schedule_update(&self, task: UpdateTask) {

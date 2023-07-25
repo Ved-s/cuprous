@@ -169,7 +169,7 @@ impl Selection {
                         }
                     }
                 }
-                // TODO
+
                 self.change.clear();
             }
         }

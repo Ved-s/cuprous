@@ -4,7 +4,6 @@ use eframe::epaint::{Color32, Rounding};
 use emath::Align2;
 
 use crate::{
-    board::CircuitBoard,
     state::{CircuitState, InternalCircuitState, State, StateCollection, WireState},
     vector::{Vec2i, Vec2u, Vector},
     OptionalInt, PaintContext, RwLock,
@@ -104,7 +103,7 @@ impl CircuitPin {
         states: &StateCollection,
         wire: Option<usize>,
         update_wire: bool,
-        update_circuit: bool,
+        update_input: bool,
     ) {
         if self.wire == wire {
             return;
@@ -122,14 +121,15 @@ impl CircuitPin {
                 states.update_wire(wire);
             }
         }
-
-        match self.dir {
-            InternalPinDirection::StateDependent { default: _ } => {
-                states.update_pin_input(self.id.circuit_id, self.id.id);
-            }
-            InternalPinDirection::Outside => {}
-            InternalPinDirection::Inside => {
-                states.update_pin_input(self.id.circuit_id, self.id.id);
+        if update_input {
+            match self.dir {
+                InternalPinDirection::StateDependent { default: _ } => {
+                    states.update_pin_input(self.id.circuit_id, self.id.id);
+                }
+                InternalPinDirection::Outside => {}
+                InternalPinDirection::Inside => {
+                    states.update_pin_input(self.id.circuit_id, self.id.id);
+                }
             }
         }
     }

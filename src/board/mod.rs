@@ -257,7 +257,9 @@ impl ActiveCircuitBoard {
             };
             for obj in drain {
                 match obj {
-                    SelectedWorldObject::Circuit { id } => todo!(),
+                    SelectedWorldObject::Circuit { id } => {
+                        self.remove_circuit(id, &mut affected_wires);
+                    },
                     SelectedWorldObject::WirePart { pos, dir } => {
                         if let Some(wire) = self.remove_wire_part(pos, dir.into(), true, false) {
                             affected_wires.insert(wire);
@@ -488,8 +490,6 @@ impl ActiveCircuitBoard {
             let correct = match node.get_dir(dir).get() {
                 None => true,
                 Some(dist) => 'm: {
-                    // TODO: something wrong here
-
                     let back_dir = dir.inverted();
                     let backptr_start = if node.wire.is_some() {
                         0
@@ -1614,5 +1614,47 @@ impl ActiveCircuitBoard {
             dir: part.dir,
         };
         Some(part)
+    }
+
+    fn remove_circuit(&mut self, id: usize, affected_wires: &mut HashSet<usize>) {
+        let board = self.board.read().unwrap();
+        let circuit = unwrap_option_or_return!(board.circuits.get(id));
+
+        let pos = circuit.pos;
+        let circuit_info = circuit.info.read().unwrap();
+        let size = circuit_info.size;
+        let pins: Vec<_> = circuit.info.read().unwrap().pins.iter().map(|p| (p.pos.convert(|v| v as i32) + pos, p.pin.clone())).collect();
+
+        drop(circuit_info);
+        drop(board);
+
+        for y in pos.y()..(pos.y()+size.y() as i32) {
+            for x in pos.x()..(pos.x()+size.x() as i32) {
+                let node = self.circuit_nodes.get_mut([x as isize, y as isize]);
+                let node = unwrap_option_or_continue!(node);
+
+                if node.circuit.get() != Some(id) {
+                    continue;
+                }
+
+                node.circuit.set(None);
+                node.origin_dist = Default::default();
+            }
+        }
+
+        let mut board = self.board.write().unwrap();
+
+        for (pos, pin) in pins {
+            let wire_id = pin.read().unwrap().connected_wire();
+            let wire_id = unwrap_option_or_continue!(wire_id);
+            let wire = unwrap_option_or_continue!(board.wires.get_mut(wire_id));
+            let point = unwrap_option_or_continue!(wire.points.get_mut(&pos));
+            point.pin = None;
+
+            affected_wires.insert(wire_id);
+        }
+
+        board.circuits.remove(id);
+        board.states.reset_circuit(id);
     }
 }
