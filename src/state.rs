@@ -9,13 +9,14 @@ use eframe::epaint::Color32;
 use crate::{
     circuits::*,
     containers::{FixedVec, RandomQueue},
-    wires::*, board::CircuitBoard, RwLock, Mutex,
+    wires::*, board::CircuitBoard, RwLock, Mutex, unwrap_option_or_return,
 };
 
 #[derive(Debug)]
 pub enum UpdateTask {
-    UpdateCircuitSignals { id: usize, pin: Option<usize> },
-    UpdateWireState(usize),
+    CircuitSignals { id: usize, pin: Option<usize> },
+    WireState(usize),
+    PinInput { circuit: usize, id: usize },
 }
 
 #[derive(Default, Clone, Copy, Eq, PartialEq)]
@@ -106,6 +107,12 @@ impl StateCollection {
         (id, state)
     }
 
+    pub fn update_pin_input(&self, circuit_id: usize, id: usize) {
+        for state in self.states.read().unwrap().iter() {
+            state.update_pin_input(circuit_id, id);
+        }
+    } 
+
     pub fn update_wire(&self, wire: usize) {
         for state in self.states.read().unwrap().iter() {
             state.update_wire(wire);
@@ -118,6 +125,18 @@ impl StateCollection {
         }
     }
 
+    pub fn reset_wire(&self, wire: usize) {
+        for state in self.states.read().unwrap().iter() {
+            state.reset_wire(wire);
+        }
+    }
+
+    pub fn reset_circuit(&self, circuit: usize) {
+        for state in self.states.read().unwrap().iter() {
+            state.reset_circuit(circuit);
+        }
+    }
+
     pub fn get(&self, state: usize) -> Option<Arc<State>> {
         self.states.read().unwrap().get(state).cloned()
     }
@@ -126,7 +145,7 @@ impl StateCollection {
         for state in self.states.read().unwrap().iter() {
             state.init_circuit(circuit);
         }
-    } 
+    }
 }
 
 pub struct State {
@@ -198,16 +217,21 @@ impl State {
 
             if let Some(task) = queue_item {
                 match task {
-                    UpdateTask::UpdateWireState(wire) => {
+                    UpdateTask::WireState(wire) => {
                         if let Some(wire) = board.wires.get(wire) {
                             self.update_wire_now(wire);
                         }
                     }
-                    UpdateTask::UpdateCircuitSignals { id, pin } => {
+                    UpdateTask::CircuitSignals { id, pin } => {
                         if let Some(circuit) = board.circuits.get(id) {
                             self.update_circuit_signals_now(circuit, pin);
                         }
                     }
+                    UpdateTask::PinInput { circuit, id } => {
+                        if let Some(circuit) = board.circuits.get(circuit) {
+                            self.update_pin_input_now(circuit, id);
+                        }
+                    },
                 }
                 continue;
             }
@@ -277,12 +301,57 @@ impl State {
         )
     }
 
+    fn update_pin_input_now(&self, circuit: &Circuit, id: usize) {
+        let info = circuit.info.read().unwrap();
+        let pin_info = unwrap_option_or_return!(info.pins.get(id));
+
+        let ctx = CircuitStateContext::new(self, circuit);
+        let old_state = pin_info.get_input(&ctx);
+
+        let pin = pin_info.pin.clone();
+        let pin = pin.write().unwrap();
+
+        if !matches!(pin.direction(self), PinDirection::Inside) {
+            return;
+        }
+
+        drop(info);
+
+        let pin_wire = pin.connected_wire();
+        
+        let new_state = match pin_wire {
+            None => WireState::default(),
+            Some(id) => self.read_wire(id),
+        };
+
+        if old_state == new_state {
+            return;
+        }
+
+        pin.set_input(self, new_state);
+        drop(pin);
+
+        self.update_circuit_signals_now(circuit, Some(id));
+    }
+
     pub fn update_wire(&self, wire: usize) {
-        self.schedule_update(UpdateTask::UpdateWireState(wire));
+        self.schedule_update(UpdateTask::WireState(wire));
     }
 
     pub fn update_circuit_signals(&self, circuit: usize, pin: Option<usize>) {
-        self.schedule_update(UpdateTask::UpdateCircuitSignals { id: circuit, pin });
+        self.schedule_update(UpdateTask::CircuitSignals { id: circuit, pin });
+    }
+
+    pub fn update_pin_input(&self, circuit: usize, id: usize) {
+        self.schedule_update(UpdateTask::PinInput { circuit, id });
+    }
+
+    pub fn reset_wire(&self, wire: usize) {
+        self.wires.write().unwrap().remove(wire);
+    }
+
+    pub fn reset_circuit(&self, circuit: usize) {
+        self.circuits.write().unwrap().remove(circuit);
     }
 
     fn schedule_update(&self, task: UpdateTask) {

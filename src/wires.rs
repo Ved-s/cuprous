@@ -20,13 +20,13 @@ impl Wire {
         state.read_wire(self.id).color()
     }
 
-    pub fn remove_point(&mut self, pos: Vector<2, i32>, states: Option<StateCollection>) {
+    pub fn remove_point(&mut self, pos: Vector<2, i32>, states: &StateCollection, update_wire: bool) {
         if let Some(point) = self.points.remove(&pos) {
             if let Some(pin) = point.pin {
-                pin.write().unwrap().set_wire(None, None)
+                pin.write().unwrap().set_wire(states, None, false, true)
             }
         }
-        if let Some(states) = states {
+        if update_wire {
             states.update_wire(self.id);
         }
     }

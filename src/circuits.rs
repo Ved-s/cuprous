@@ -5,7 +5,7 @@ use emath::Align2;
 
 use crate::{
     board::CircuitBoard,
-    state::{CircuitState, InternalCircuitState, State, WireState},
+    state::{CircuitState, InternalCircuitState, State, StateCollection, WireState},
     vector::{Vec2i, Vec2u, Vector},
     OptionalInt, PaintContext, RwLock,
 };
@@ -99,7 +99,13 @@ impl CircuitPin {
         self.wire
     }
 
-    pub fn set_wire(&mut self, board: Option<&CircuitBoard>, wire: Option<usize>) {
+    pub fn set_wire(
+        &mut self,
+        states: &StateCollection,
+        wire: Option<usize>,
+        update_wire: bool,
+        update_circuit: bool,
+    ) {
         if self.wire == wire {
             return;
         }
@@ -108,12 +114,22 @@ impl CircuitPin {
 
         self.wire = wire;
 
-        if let Some(board) = board {
+        if update_wire {
             if let Some(prev) = prev {
-                board.states.update_wire(prev);
+                states.update_wire(prev);
             }
             if let Some(wire) = wire {
-                board.states.update_wire(wire);
+                states.update_wire(wire);
+            }
+        }
+
+        match self.dir {
+            InternalPinDirection::StateDependent { default: _ } => {
+                states.update_pin_input(self.id.circuit_id, self.id.id);
+            }
+            InternalPinDirection::Outside => {}
+            InternalPinDirection::Inside => {
+                states.update_pin_input(self.id.circuit_id, self.id.id);
             }
         }
     }
@@ -126,7 +142,7 @@ pub struct CircuitPinInfo {
 }
 
 impl CircuitPinInfo {
-    fn get_input(&self, state_ctx: &CircuitStateContext) -> WireState {
+    pub fn get_input(&self, state_ctx: &CircuitStateContext) -> WireState {
         state_ctx
             .read_circuit_state()
             .map(|cs| {
@@ -139,7 +155,7 @@ impl CircuitPinInfo {
             .unwrap_or_default()
     }
 
-    fn set_output(&self, state_ctx: &CircuitStateContext, value: WireState) {
+    pub fn set_output(&self, state_ctx: &CircuitStateContext, value: WireState) {
         let CircuitPin {
             id: CircuitPinId { circuit_id: _, id },
             wire,
@@ -165,7 +181,7 @@ impl CircuitPinInfo {
         }
     }
 
-    fn set_direction(&self, state_ctx: &CircuitStateContext, dir: PinDirection) {
+    pub fn set_direction(&self, state_ctx: &CircuitStateContext, dir: PinDirection) {
         let (pin_id, wire) = {
             let pin = self.pin.read().unwrap();
             (pin.id, pin.wire)
@@ -183,15 +199,16 @@ impl CircuitPinInfo {
 
         match dir {
             PinDirection::Inside => match wire {
-                Some(wire) => state_ctx
-                    .global_state.update_wire(wire),
+                Some(wire) => state_ctx.global_state.update_wire(wire),
                 None => self
                     .pin
                     .read()
                     .unwrap()
                     .set_input(state_ctx.global_state, Default::default()),
             },
-            PinDirection::Outside => state_ctx.global_state.update_circuit_signals(pin_id.circuit_id, Some(pin_id.id)),
+            PinDirection::Outside => state_ctx
+                .global_state
+                .update_circuit_signals(pin_id.circuit_id, Some(pin_id.id)),
         }
     }
 }
@@ -284,7 +301,8 @@ impl<'a> CircuitStateContext<'a> {
     }
 
     pub fn set_update_interval(&self, interval: Option<Duration>) {
-        self.global_state.set_circuit_update_interval(self.circuit.id, interval);
+        self.global_state
+            .set_circuit_update_interval(self.circuit.id, interval);
     }
 }
 
