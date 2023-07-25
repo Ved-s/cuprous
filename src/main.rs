@@ -10,7 +10,7 @@ use eframe::{
     egui::{self, Context, Frame, Key, Margin, Sense, TextStyle, Ui},
     epaint::{Color32, Stroke},
 };
-use emath::{pos2, vec2, Align2, Pos2, Rect};
+use emath::{pos2, vec2, Align2, Pos2, Rect, Vec2};
 
 mod r#const;
 
@@ -117,7 +117,9 @@ impl PaintContext<'_> {
             for cx in (chunks_tl.x()..chunks_br.x() + 1).intersect(&rowrange) {
                 let chunk_coord: Vec2i = [cx, cy].into();
                 let chunk_tl = chunk_coord * 16;
-                let chunk = unwrap_option_or_continue!(chunks.get_chunk(chunk_coord.convert(|v| v as isize)));
+                let chunk = unwrap_option_or_continue!(
+                    chunks.get_chunk(chunk_coord.convert(|v| v as isize))
+                );
                 let chunk_viewport_tl = tiles_tl - chunk_tl;
                 let chunk_viewport_br = tiles_br - chunk_tl;
 
@@ -268,6 +270,7 @@ enum SelectedItem {
 
 struct App {
     last_win_pos: Option<Pos2>,
+    last_win_size: Vec2,
 
     pub pan_zoom: PanAndZoom,
     pub board: ActiveCircuitBoard,
@@ -281,7 +284,8 @@ impl eframe::App for App {
         let int_info = frame.info();
         if let Some(win_pos) = int_info.window_info.position {
             if let Some(last_win_pos) = self.last_win_pos {
-                if win_pos != last_win_pos {
+                let win_size = int_info.window_info.size;
+                if win_size != self.last_win_size {
                     let diff: Vec2f = (win_pos - last_win_pos).into();
                     self.pan_zoom.pos += diff / self.pan_zoom.scale;
                 }
@@ -289,6 +293,7 @@ impl eframe::App for App {
         }
         ctx.request_repaint();
         self.last_win_pos = int_info.window_info.position;
+        self.last_win_size = int_info.window_info.size;
 
         self.board.state.update(&self.board.board.read().unwrap());
 
@@ -320,9 +325,10 @@ impl App {
         Self {
             pan_zoom: PanAndZoom::new(0.0.into(), 16.0),
             last_win_pos: None,
+            last_win_size: Default::default(),
             selected: SelectedItem::None,
             board: ActiveCircuitBoard::new(board, state_id).unwrap(),
-            debug: true
+            debug: true,
         }
     }
 
@@ -491,7 +497,7 @@ impl App {
                 SelectedItem::Wires => SelectedBoardItem::Wire,
                 SelectedItem::Circuit(p) => SelectedBoardItem::Circuit(p.as_ref()),
             },
-            self.debug
+            self.debug,
         );
         let update_time = Instant::now() - start_time;
         paint.text(
@@ -516,8 +522,9 @@ Wire parts drawn: {}
                 update_time.as_secs_f64() * 1000.0,
                 self.selected,
                 self.debug,
-
-                self.board.wires_drawn.load(std::sync::atomic::Ordering::Relaxed)
+                self.board
+                    .wires_drawn
+                    .load(std::sync::atomic::Ordering::Relaxed)
             ),
             font_id,
             Color32::WHITE,
@@ -790,8 +797,16 @@ impl Direction4 {
         let dir = self.unit_vector() * if dist >= 0 { 1 } else { -1 };
         let dist = dist.unsigned_abs();
 
-        let (pos, dist) = if include_start { (pos, dist + 1) } else { (pos + dir, dist) };
-        DirectionPosItreator { pos, remaining: dist, dir }
+        let (pos, dist) = if include_start {
+            (pos, dist + 1)
+        } else {
+            (pos + dir, dist)
+        };
+        DirectionPosItreator {
+            pos,
+            remaining: dist,
+            dir,
+        }
     }
 }
 
@@ -839,8 +854,16 @@ impl Direction2 {
         let dir = self.unit_vector(dist >= 0);
         let dist = dist.unsigned_abs();
 
-        let (pos, dist) = if include_start { (pos, dist + 1) } else { (pos + dir, dist) };
-        DirectionPosItreator { pos, remaining: dist, dir }
+        let (pos, dist) = if include_start {
+            (pos, dist + 1)
+        } else {
+            (pos + dir, dist)
+        };
+        DirectionPosItreator {
+            pos,
+            remaining: dist,
+            dir,
+        }
     }
 }
 
