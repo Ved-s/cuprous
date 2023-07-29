@@ -429,7 +429,7 @@ impl ActiveCircuitBoard {
         if node.is_empty() {
             return;
         }
-        let incorrect_font = TextStyle::Monospace.resolve(ctx.ui.style());
+        let font = TextStyle::Monospace.resolve(ctx.ui.style());
 
         if let Some(wire_id) = node.wire.get() {
             let board = self.board.read().unwrap();
@@ -477,7 +477,7 @@ impl ActiveCircuitBoard {
                 screen_pos.into(),
                 Align2::CENTER_CENTER,
                 wire_id.to_string(),
-                incorrect_font.clone(),
+                font.clone(),
                 if wire.is_some() {
                     Color32::WHITE
                 } else {
@@ -487,62 +487,61 @@ impl ActiveCircuitBoard {
         }
 
         for dir in Direction4::iter_all() {
-            let correct = match node.get_dir(dir).get() {
-                None => true,
-                Some(dist) => 'm: {
-                    let back_dir = dir.inverted();
-                    let backptr_start = if node.wire.is_some() {
-                        0
-                    } else {
-                        node.get_dir(back_dir).get().unwrap_or(0)
+            let dist = node.get_dir(dir).get();
+            let dist = unwrap_option_or_continue!(dist);
+
+            let correct = 'm: {
+                let back_dir = dir.inverted();
+                let backptr_start = if node.wire.is_some() {
+                    0
+                } else {
+                    node.get_dir(back_dir).get().unwrap_or(0)
+                };
+                for i in 1..=dist {
+                    let rel_pos = dir.unit_vector().convert(|v| v as isize) * i as isize;
+
+                    let target = lookaround.get_relative(rel_pos);
+                    let target = match target {
+                        Some(t) => t,
+                        None => break 'm false,
                     };
-                    for i in 1..=dist {
-                        let rel_pos = dir.unit_vector().convert(|v| v as isize) * i as isize;
-
-                        let target = lookaround.get_relative(rel_pos);
-                        let target = match target {
-                            Some(t) => t,
-                            None => break 'm false,
-                        };
-                        let back_ptr = target.get_dir(back_dir);
-                        if back_ptr.get() != Some(backptr_start + i) {
-                            break 'm false;
-                        }
-
-                        if i == dist {
-                            // Target node wire should be not None and match current node wire, if it exists
-                            if target
-                                .wire
-                                .is_some_and(|w| node.wire.is_some_and(|node_wire| node_wire != w))
-                            {
-                                break 'm false;
-                            }
-                        } else if target.wire.is_some() && i != dist {
-                            break 'm false;
-                        }
+                    let back_ptr = target.get_dir(back_dir);
+                    if back_ptr.get() != Some(backptr_start + i) {
+                        break 'm false;
                     }
-                    true
+
+                    if i == dist {
+                        // Target node wire should be not None and match current node wire, if it exists
+
+                        match target.wire.get() {
+                            None => break 'm false,
+                            Some(wire) => {
+                                if node.wire.is_some_and(|nw| nw != wire) {
+                                    break 'm false;
+                                }
+                            }
+                        }
+                    } else if target.wire.is_some() && i != dist {
+                        break 'm false;
+                    }
                 }
+                true
             };
 
-            if !correct {
-                if let Some(dist) = node.get_dir(dir).get() {
-                    let world_pos = pos.convert(|v| v as f32 + 0.5);
-                    let world_pos = world_pos + dir.unit_vector().convert(|v| v as f32 * 0.25);
-                    let screen_pos = ctx.screen.world_to_screen(world_pos);
-                    ctx.paint.text(
-                        screen_pos.into(),
-                        Align2::CENTER_CENTER,
-                        dist.to_string(),
-                        incorrect_font.clone(),
-                        if correct {
-                            Color32::WHITE
-                        } else {
-                            Color32::RED
-                        },
-                    );
-                }
-            }
+            let world_pos = pos.convert(|v| v as f32 + 0.5);
+            let world_pos = world_pos + dir.unit_vector().convert(|v| v as f32 * 0.25);
+            let screen_pos = ctx.screen.world_to_screen(world_pos);
+            ctx.paint.text(
+                screen_pos.into(),
+                Align2::CENTER_CENTER,
+                dist.to_string(),
+                font.clone(),
+                if correct {
+                    Color32::WHITE
+                } else {
+                    Color32::RED
+                },
+            );
         }
     }
 
@@ -847,7 +846,7 @@ impl ActiveCircuitBoard {
 
         let dir_rev = Direction4::from(part.dir).inverted();
 
-        let mut dist = 0;
+        let mut dist = 1;
         for (i, pos) in part.iter_pos(true).enumerate() {
             let node = self
                 .wire_nodes
@@ -860,27 +859,39 @@ impl ActiveCircuitBoard {
             }
 
             if point {
+                node.wire.set(Some(wire));
                 if i > 0 {
-                    node.wire.set(Some(wire));
-                    let node = *node;
                     fix_pointers(self, pos, dist, dir_rev);
-                    let pin = self.pin_at(pos);
-
-                    if let Some(wire) = self.board.write().unwrap().wires.get_mut(wire) {
-                        wire.add_point(
-                            pos,
-                            None,
-                            WirePoint {
-                                left: node.left.is_some(),
-                                up: node.up.is_some(),
-                                pin,
-                            },
-                        )
-                    }
                 }
                 dist = 1;
-            } else {
+            }
+            else {
                 dist += 1;
+            }
+        }
+
+        for (i, pos) in part.iter_pos(true).enumerate() {
+            let node = self.wire_nodes.get(pos.convert(|v| v as isize));
+            let node = unwrap_option_or_continue!(node);
+
+            let point = node.wire.is_some() || i == 0 || i as u32 == part.length.get();
+            if point {
+                let pin = self.pin_at(pos);
+
+                let mut board = self.board.write().unwrap();
+                let states = board.states.clone();
+                if let Some(wire) = board.wires.get_mut(wire) {
+                    wire.set_point(
+                        pos,
+                        &states,
+                        Some(WirePoint {
+                            left: node.left.is_some(),
+                            up: node.up.is_some(),
+                            pin,
+                        }),
+                        false,
+                    )
+                }
             }
         }
     }
@@ -968,18 +979,19 @@ impl ActiveCircuitBoard {
             let states = board.states.clone();
 
             if let Some(wire) = prev_wire.and_then(|w| board.wires.get_mut(w)) {
-                wire.remove_point(pos, &states, false);
+                wire.set_point(pos, &states, None, false);
             }
 
             if let Some(wire) = wire.and_then(|w| board.wires.get_mut(w)) {
-                wire.add_point(
+                wire.set_point(
                     pos,
-                    None,
-                    WirePoint {
+                    &states,
+                    Some(WirePoint {
                         left: node.left.is_some(),
                         up: node.up.is_some(),
                         pin,
-                    },
+                    }),
+                    false,
                 );
             }
         }
