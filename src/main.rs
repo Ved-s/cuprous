@@ -3,18 +3,26 @@
 #![feature(int_roundings)]
 #![feature(lazy_cell)]
 
-use std::{mem::size_of, ops::Range, sync::Arc, time::Instant, any::{Any, TypeId}};
+use std::{
+    any::{Any, TypeId},
+    f32::consts::PI,
+    mem::size_of,
+    ops::Range,
+    sync::Arc,
+    time::Instant,
+};
 
-use board::{ActiveCircuitBoard, CircuitBoard, SelectedBoardItem};
+use board::{selection::Selection, ActiveCircuitBoard, CircuitBoard, SelectedBoardItem};
 use eframe::{
     egui::{self, Context, Frame, Key, Margin, Sense, TextStyle, Ui},
-    epaint::{Color32, Stroke},
+    epaint::{Color32, PathShape, Rounding, Shape, Stroke, ahash::HashMap},
 };
 use emath::{pos2, vec2, Align2, Pos2, Rect, Vec2};
 
 mod r#const;
 
 mod vector;
+use ui::{Inventory, InventoryItem, InventoryItemGroup};
 use vector::{Vec2f, Vec2i, Vector};
 
 mod containers;
@@ -26,7 +34,7 @@ use circuits::CircuitPreview;
 mod wires;
 
 mod state;
-use state::State;
+use state::{State, WireState};
 
 mod board;
 
@@ -35,6 +43,8 @@ mod macros;
 
 #[cfg(debug_assertions)]
 mod debug;
+
+mod ui;
 
 #[cfg(debug_assertions)]
 type RwLock<T> = debug::DebugRwLock<T>;
@@ -55,9 +65,6 @@ fn main() {
 #[allow(unused)]
 #[derive(Debug, Clone, Copy)]
 struct TileDrawBounds {
-    pub tile_size: Vec2f,
-    pub chunk_size: Vec2f,
-
     pub screen_tl: Vec2f,
     pub screen_br: Vec2f,
 
@@ -68,21 +75,47 @@ struct TileDrawBounds {
     pub chunks_br: Vec2i,
 }
 
+impl TileDrawBounds {
+    pub const EVERYTHING: TileDrawBounds = TileDrawBounds {
+        screen_tl: Vec2f::single_value(f32::NEG_INFINITY),
+        screen_br: Vec2f::single_value(f32::INFINITY),
+        tiles_tl: Vec2i::single_value(i32::MIN),
+        tiles_br: Vec2i::single_value(i32::MAX),
+        chunks_tl: Vec2i::single_value(i32::MIN),
+        chunks_br: Vec2i::single_value(i32::MAX),
+    };
+}
+
 #[allow(clippy::redundant_allocation)]
 pub struct PaintContext<'a> {
     screen: Screen,
     paint: &'a egui::Painter,
     rect: Rect,
     bounds: TileDrawBounds,
-    ui: Arc<&'a mut Ui>,
+    ui: &'a Ui,
     egui_ctx: &'a Context,
 }
 
-impl PaintContext<'_> {
-    fn with_rect(&self, rect: Rect) -> PaintContext<'_> {
+impl<'a> PaintContext<'a> {
+    pub fn new_on_ui(ui: &'a Ui, rect: Rect) -> Self {
+        Self {
+            screen: Screen {
+                offset: rect.left_top().into(),
+                pos: 0.0.into(),
+                scale: 1.0,
+            },
+            paint: ui.painter(),
+            rect,
+            bounds: TileDrawBounds::EVERYTHING,
+            ui,
+            egui_ctx: ui.ctx(),
+        }
+    }
+
+    pub fn with_rect(&self, rect: Rect) -> PaintContext<'a> {
         Self {
             rect,
-            ui: self.ui.clone(),
+            ui: self.ui,
             ..*self
         }
     }
@@ -95,8 +128,6 @@ impl PaintContext<'_> {
         drawer: impl Fn(&T, Vec2i, &Self, &P, &ChunksLookaround<CHUNK_SIZE, T>),
     ) {
         let TileDrawBounds {
-            tile_size: _,
-            chunk_size: _,
             screen_tl: _,
             screen_br: _,
             tiles_tl,
@@ -154,11 +185,7 @@ impl PaintContext<'_> {
                             [i as usize, j as usize].into(),
                         );
 
-                        let drawer_ctx = Self {
-                            rect,
-                            ui: self.ui.clone(),
-                            ..*self
-                        };
+                        let drawer_ctx = self.with_rect(rect);
 
                         drawer(tile, pos, &drawer_ctx, pass, &lookaround)
                     }
@@ -261,22 +288,138 @@ impl Screen {
     }
 }
 
-#[derive(Debug)]
-enum SelectedItem {
-    None,
-    Wires,
-    Circuit(Box<dyn CircuitPreview>),
-}
-
 struct App {
     last_win_pos: Option<Pos2>,
     last_win_size: Vec2,
 
     pub pan_zoom: PanAndZoom,
     pub board: ActiveCircuitBoard,
-    pub selected: SelectedItem,
 
     pub debug: bool,
+
+    inventory_items: Vec<InventoryItemGroup>,
+    selected_id: Option<String>,
+    circuit_previews: HashMap<String, Box<dyn CircuitPreview>>
+}
+
+struct SelectionInventoryItem {}
+impl InventoryItem for SelectionInventoryItem {
+    fn id(&self) -> &str {
+        "selection"
+    }
+
+    fn draw(&self, ctx: &PaintContext) {
+        let rect = ctx.rect.shrink2(ctx.rect.size() / 5.0);
+        ctx.paint
+            .rect_filled(rect, Rounding::none(), Selection::fill_color());
+        let rect_corners = [
+            rect.left_top(),
+            rect.right_top(),
+            rect.right_bottom(),
+            rect.left_bottom(),
+            rect.left_top(),
+        ];
+
+        let mut shapes = vec![];
+        Shape::dashed_line_many(
+            &rect_corners,
+            Stroke::new(1.0, Selection::border_color()),
+            3.0,
+            2.0,
+            &mut shapes,
+        );
+
+        shapes.into_iter().for_each(|s| {
+            ctx.paint.add(s);
+        });
+    }
+}
+
+struct WireInventoryItem {}
+impl InventoryItem for WireInventoryItem {
+    fn id(&self) -> &str {
+        "wire"
+    }
+
+    fn draw(&self, ctx: &PaintContext) {
+
+        let color = WireState::False.color();
+
+        let rect1 = Rect::from_center_size(
+            ctx.rect.lerp_inside([0.2, 0.2].into()),
+            ctx.rect.size() * 0.2,
+        );
+        let rect2 = Rect::from_center_size(
+            ctx.rect.lerp_inside([0.8, 0.8].into()),
+            ctx.rect.size() * 0.2,
+        );
+
+        ctx.paint.line_segment([rect1.center(), rect2.center()], Stroke::new(2.5, color));
+
+        ctx.paint.add(Shape::Path(PathShape {
+            points: rotated_rect_shape(rect1, PI * 0.25, rect1.center()),
+            closed: true,
+            fill: color,
+            stroke: Stroke::NONE,
+        }));
+
+        ctx.paint.add(Shape::Path(PathShape {
+            points: rotated_rect_shape(rect2, PI * 0.25, rect2.center()),
+            closed: true,
+            fill: color,
+            stroke: Stroke::NONE,
+        }));
+    }
+}
+
+struct CircuitInventoryItem {
+    preview: Box<dyn CircuitPreview>,
+    id: String
+}
+impl InventoryItem for CircuitInventoryItem {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn draw(&self, ctx: &PaintContext) {
+        let size = self.preview.size().convert(|v| v as f32);
+        let scale = Vec2f::from(ctx.rect.size()) / size;
+        let scale = scale.x().min(scale.y());
+        let size = size * scale;
+        let rect = Rect::from_center_size(ctx.rect.center(), size.into());
+
+        let circ_ctx = PaintContext {
+            screen: Screen {
+                scale,
+                ..ctx.screen
+            },
+            rect,
+            ..*ctx
+        };
+        self.preview.draw_preview(&circ_ctx);
+    }
+}
+
+fn rotated_rect_shape(rect: Rect, angle: f32, origin: Pos2) -> Vec<Pos2> {
+    let mut points = vec![
+        rect.left_top(),
+        rect.right_top(),
+        rect.right_bottom(),
+        rect.left_bottom(),
+    ];
+
+    let cos = angle.cos();
+    let sin = angle.sin();
+
+    for p in points.iter_mut() {
+        let pl = *p - origin;
+
+        let x = cos * pl.x - sin * pl.y;
+        let y = sin * pl.x + cos * pl.y;
+        *p = pos2(x, y) + origin.to_vec2();
+    }
+
+    points
 }
 
 impl eframe::App for App {
@@ -297,41 +440,27 @@ impl eframe::App for App {
 
         self.board.state.update(&self.board.board.read().unwrap());
 
-        if ctx.input(|input| input.key_pressed(Key::Num1)) {
-            self.selected = match &self.selected {
-                SelectedItem::Wires => SelectedItem::None,
-                _ => SelectedItem::Wires,
-            }
-        }
-
-        if ctx.input(|input| input.key_pressed(Key::Num2)) {
-            self.selected = match &self.selected {
-                SelectedItem::Circuit(c) if (**c).type_id() == TypeId::of::<circuits::test::Preview>() => SelectedItem::None,
-                _ => SelectedItem::Circuit(Box::new(circuits::test::Preview {})),
-            }
-        }
-
-        if ctx.input(|input| input.key_pressed(Key::Num3)) {
-            self.selected = match &self.selected {
-                SelectedItem::Circuit(c) if (**c).type_id() == TypeId::of::<circuits::button::Preview>() => SelectedItem::None,
-                _ => SelectedItem::Circuit(Box::new(circuits::button::Preview {})),
-            }
-        }
-
-        if ctx.input(|input| input.key_pressed(Key::Num4)) {
-            self.selected = match &self.selected {
-                SelectedItem::Circuit(c) if (**c).type_id() == TypeId::of::<circuits::gates::or::Preview>() => SelectedItem::None,
-                _ => SelectedItem::Circuit(Box::new(circuits::gates::or::Preview {})),
-            }
-        }
-
         if ctx.input(|input| input.key_pressed(Key::F9)) {
             self.debug = !self.debug;
         }
 
         egui::CentralPanel::default()
             .frame(Frame::central_panel(ctx.style().as_ref()).inner_margin(Margin::same(0.0)))
-            .show(ctx, |ui| self.main_update(ui, ctx));
+            .show(ctx, |ui| {
+                self.main_update(ui, ctx);
+
+                let mut selected = self.selected_id.take();
+
+                ui.add(Inventory {
+                    selected: &mut selected,
+                    groups: &self.inventory_items,
+                    item_size: [28.0, 28.0].into(),
+                    item_margin: Margin::same(6.0),
+                    margin: Margin::same(10.0),
+                });
+
+                self.selected_id = selected;
+            });
     }
 }
 
@@ -345,9 +474,24 @@ impl App {
             pan_zoom: PanAndZoom::new(0.0.into(), 16.0),
             last_win_pos: None,
             last_win_size: Default::default(),
-            selected: SelectedItem::None,
             board: ActiveCircuitBoard::new(board, state_id).unwrap(),
             debug: true,
+
+            selected_id: None,
+            inventory_items: vec![
+                InventoryItemGroup::SingleItem(Box::new(SelectionInventoryItem {})),
+                InventoryItemGroup::SingleItem(Box::new(WireInventoryItem {})),
+                InventoryItemGroup::Group(vec![
+                    Box::new(CircuitInventoryItem { preview: Box::new(circuits::test::Preview {}), id: "test".to_owned() }),
+                    Box::new(CircuitInventoryItem { preview: Box::new(circuits::button::Preview {}), id: "button".to_owned() }),
+                    Box::new(CircuitInventoryItem { preview: Box::new(circuits::gates::or::Preview {}), id: "or".to_owned() }),
+                ])
+            ],
+            circuit_previews: HashMap::from_iter([
+                ("test".to_owned(), Box::new(circuits::test::Preview {}) as Box<dyn CircuitPreview>),
+                ("button".to_owned(), Box::new(circuits::button::Preview {})),
+                ("or".to_owned(), Box::new(circuits::gates::or::Preview {})),
+            ].into_iter())
         }
     }
 
@@ -460,16 +604,12 @@ impl App {
 
     fn calc_draw_bounds(&self, rect: Rect) -> TileDrawBounds {
         let screen = &self.pan_zoom;
-        let tile_size: Vec2f = screen.scale.into();
         let chunk_size: Vec2f = (screen.scale * 16.0).into();
 
         let screen_tl = screen.pos * screen.scale;
         let screen_br = screen_tl + rect.size();
 
         TileDrawBounds {
-            tile_size,
-            chunk_size,
-
             screen_tl,
             screen_br,
 
@@ -506,29 +646,38 @@ impl App {
             paint: &paint,
             rect,
             bounds,
-            ui: Arc::new(ui),
+            ui,
             egui_ctx: ctx,
         };
+
+        let selected_item = match self.selected_id.as_ref().map(|s| s.as_str()) {
+            None => SelectedBoardItem::None,
+            Some("selection") => SelectedBoardItem::Selection,
+            Some("wire") => SelectedBoardItem::Wire,
+            Some(circ) => {
+                match self.circuit_previews.get(circ) {
+                    Some(p) => SelectedBoardItem::Circuit(&**p),
+                    None => SelectedBoardItem::None,
+                }
+            }
+        };
+
         self.board.update(
             &ctx,
-            match &self.selected {
-                SelectedItem::None => SelectedBoardItem::None,
-                SelectedItem::Wires => SelectedBoardItem::Wire,
-                SelectedItem::Circuit(p) => SelectedBoardItem::Circuit(p.as_ref()),
-            },
+            selected_item,
             self.debug,
         );
         let update_time = Instant::now() - start_time;
         paint.text(
-            rect.left_top() + vec2(10.0, 10.0),
+            rect.left_top() + vec2(10.0, 80.0),
             Align2::LEFT_TOP,
             format!(
                 r#"Pos: {}
 Tile draw bounds: {} - {}
 Chunk draw bounds: {} - {}
 Time: {:.4} ms
+Selected: {:?}
 
-[F1] Selected: {:?}
 [F9] Debug: {}
 
 Wire parts drawn: {}
@@ -539,7 +688,7 @@ Wire parts drawn: {}
                 bounds.chunks_tl,
                 bounds.chunks_br,
                 update_time.as_secs_f64() * 1000.0,
-                self.selected,
+                self.selected_id,
                 self.debug,
                 self.board
                     .wires_drawn

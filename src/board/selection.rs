@@ -7,9 +7,10 @@ use eframe::{
 use emath::Rect;
 
 use crate::{
+    unwrap_option_or_continue,
     vector::{Vec2f, Vec2i, Vec2u},
     wires::WirePart,
-    Direction2, Direction4, PaintContext, unwrap_option_or_continue,
+    Direction2, Direction4, PaintContext,
 };
 
 use super::ActiveCircuitBoard;
@@ -34,6 +35,14 @@ pub struct Selection {
 }
 
 impl Selection {
+    pub fn fill_color() -> Color32 {
+        Color32::from_rgba_unmultiplied(200, 200, 255, 10)
+    }
+
+    pub fn border_color() -> Color32 {
+        Color32::WHITE
+    }
+
     pub fn new() -> Self {
         Self {
             start_pos: None,
@@ -83,8 +92,8 @@ impl Selection {
                         ctx.paint.rect(
                             rect,
                             Rounding::none(),
-                            Color32::from_rgba_unmultiplied(200, 200, 255, 20),
-                            Stroke::new(2.0, Color32::WHITE),
+                            Selection::fill_color(),
+                            Stroke::new(2.0, Selection::border_color()),
                         );
                     }
                 }
@@ -138,8 +147,7 @@ impl Selection {
                 .ui
                 .interact(ctx.rect, ctx.ui.id(), Sense::click_and_drag());
 
-            if self.start_pos.is_none()
-                && interaction.drag_started_by(egui::PointerButton::Primary)
+            if self.start_pos.is_none() && interaction.drag_started_by(egui::PointerButton::Primary)
             {
                 self.start_pos = mouse_tile_pos;
                 self.change.clear();
@@ -177,9 +185,7 @@ impl Selection {
         let mut possible_points = HashSet::new();
 
         for item in self.selection.iter() {
-            if matches!(self.mode, SelectionMode::Exclude)
-                && self.change.contains(item)
-            {
+            if matches!(self.mode, SelectionMode::Exclude) && self.change.contains(item) {
                 continue;
             }
             draw_selection(board, item, ctx, &mut possible_points);
@@ -196,7 +202,8 @@ impl Selection {
         let shift = ctx.egui_ctx.input(|input| input.modifiers.shift);
         for point in possible_points {
             if board.should_draw_wire_point(point, shift) {
-                let node = unwrap_option_or_continue!(board.wire_nodes.get(point.convert(|v| v as isize)));
+                let node =
+                    unwrap_option_or_continue!(board.wire_nodes.get(point.convert(|v| v as isize)));
                 let all_connections_selected = Direction4::iter_all().all(|dir| {
                     node.get_dir(dir).is_none_or(|_| {
                         let (part_dir, forward) = dir.into_dir2();
@@ -204,7 +211,9 @@ impl Selection {
                         let part_pos = if forward {
                             Some(point)
                         } else {
-                            board.find_wire_node_from_node(node, point, dir).map(|f| f.pos)
+                            board
+                                .find_wire_node_from_node(node, point, dir)
+                                .map(|f| f.pos)
                         };
 
                         match part_pos {

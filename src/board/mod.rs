@@ -28,7 +28,7 @@ use crate::{
 
 use self::selection::{SelectedWorldObject, Selection};
 
-mod selection;
+pub mod selection;
 
 pub struct CircuitBoard {
     pub wires: FixedVec<Wire>,
@@ -185,6 +185,7 @@ impl CircuitBoard {
 
 pub enum SelectedBoardItem<'a> {
     None,
+    Selection,
     Wire,
     Circuit(&'a dyn CircuitPreview),
 }
@@ -192,6 +193,10 @@ pub enum SelectedBoardItem<'a> {
 impl<'a> SelectedBoardItem<'a> {
     pub fn none(&self) -> bool {
         matches!(self, SelectedBoardItem::None)
+    }
+
+    pub fn selection(&self) -> bool {
+        matches!(self, SelectedBoardItem::Selection)
     }
 
     pub fn wire(&self) -> bool {
@@ -245,7 +250,7 @@ impl ActiveCircuitBoard {
         self.wires_drawn.store(0, Ordering::Relaxed);
         self.selection
             .borrow_mut()
-            .pre_update_selection(self, ctx, selected.none());
+            .pre_update_selection(self, ctx, selected.selection());
 
         if ctx.egui_ctx.input(|input| {
             input.key_pressed(egui::Key::Delete) || input.key_pressed(egui::Key::Backspace)

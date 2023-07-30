@@ -43,7 +43,7 @@ impl WireState {
         }
     }
 
-    pub fn color(self) -> Color32 {
+    pub const fn color(self) -> Color32 {
         let rgb = match self {
             Self::None => [0, 0, 200],
             Self::True => [0, 255, 0],

@@ -29,7 +29,7 @@ pub type Vec2usize = Vector<2, usize>;
 pub type Vec3usize = Vector<3, usize>;
 
 impl<const SIZE: usize, T: VectorValue> Vector<SIZE, T> {
-    pub fn single_value(value: T) -> Self {
+    pub const fn single_value(value: T) -> Self {
         Self([value; SIZE])
     }
 
