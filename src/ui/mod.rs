@@ -1,4 +1,4 @@
-use std::{borrow::BorrowMut, collections::HashSet, rc::Rc, sync::Arc, ops::DerefMut, cell::RefCell};
+use std::{collections::HashSet, sync::Arc};
 
 use eframe::{
     egui::{Margin, PointerButton, Sense, Widget},
@@ -14,7 +14,7 @@ pub enum InventoryItemGroup {
 }
 
 pub trait InventoryItem {
-    fn id<'a>(&'a self) -> &'a str;
+    fn id(&self) -> &str;
     fn draw(&self, ctx: &PaintContext);
 }
 

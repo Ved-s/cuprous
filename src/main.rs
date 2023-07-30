@@ -4,7 +4,6 @@
 #![feature(lazy_cell)]
 
 use std::{
-    any::{Any, TypeId},
     f32::consts::PI,
     mem::size_of,
     ops::Range,
@@ -650,7 +649,7 @@ impl App {
             egui_ctx: ctx,
         };
 
-        let selected_item = match self.selected_id.as_ref().map(|s| s.as_str()) {
+        let selected_item = match self.selected_id.as_deref() {
             None => SelectedBoardItem::None,
             Some("selection") => SelectedBoardItem::Selection,
             Some("wire") => SelectedBoardItem::Wire,
