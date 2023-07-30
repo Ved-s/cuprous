@@ -1,7 +1,7 @@
-use eframe::epaint::{Color32, QuadraticBezierShape, Shape, Stroke};
-use emath::pos2;
+use eframe::epaint::{Color32, PathShape, QuadraticBezierShape, Shape, Stroke};
+use emath::{pos2, Pos2};
 
-use crate::circuits::*;
+use crate::{circuits::*, vector::Vec2f};
 
 struct Circuit {
     inputs: Box<[CircuitPinInfo]>,
@@ -20,65 +20,48 @@ impl Circuit {
         }
     }
 
-    fn draw(ctx: &PaintContext, preview: bool) {
-        ctx.paint.add(Shape::QuadraticBezier(QuadraticBezierShape {
-            closed: false,
-            fill: Color32::TRANSPARENT,
-            stroke: Stroke::new(2.0, Color32::BLACK),
-            points: [
-                pos2(
-                    ctx.rect.left() + ctx.rect.width() * 0.05,
-                    ctx.rect.top(),
-                ),
-                pos2(
-                    ctx.rect.left() + ctx.rect.width() * 0.5,
-                    ctx.rect.center().y,
-                ),
-                pos2(
-                    ctx.rect.left() + ctx.rect.width() * 0.05,
-                    ctx.rect.bottom(),
-                ),
-            ],
-        }));
+    fn draw(ctx: &PaintContext, semi_transparent: bool) {
+        let opacity = if semi_transparent { 0.6 } else { 1.0 };
 
-        ctx.paint.add(Shape::QuadraticBezier(QuadraticBezierShape {
-            closed: false,
-            fill: Color32::TRANSPARENT,
-            stroke: Stroke::new(2.0, Color32::BLACK),
-            points: [
-                pos2(
-                    ctx.rect.left() + ctx.rect.width() * 0.05,
-                    ctx.rect.top(),
-                ),
-                pos2(
-                    ctx.rect.left() + ctx.rect.width() * 0.5,
-                    ctx.rect.top(),
-                ),
-                pos2(
-                    ctx.rect.left() + ctx.rect.width() * 0.83,
-                    ctx.rect.center().y,
-                ),
-            ],
-        }));
+        let border_color = Color32::BLACK.linear_multiply(opacity);
+        let fill_color = Color32::from_gray(200).linear_multiply(opacity);
 
-        ctx.paint.add(Shape::QuadraticBezier(QuadraticBezierShape {
-            closed: false,
-            fill: Color32::TRANSPARENT,
-            stroke: Stroke::new(2.0, Color32::BLACK),
-            points: [
-                pos2(
-                    ctx.rect.left() + ctx.rect.width() * 0.05,
-                    ctx.rect.bottom(),
-                ),
-                pos2(
-                    ctx.rect.left() + ctx.rect.width() * 0.5,
-                    ctx.rect.bottom(),
-                ),
-                pos2(
-                    ctx.rect.left() + ctx.rect.width() * 0.83,
-                    ctx.rect.center().y,
-                ),
-            ],
+        let points = [
+            Vec2f::from([ctx.rect.left() + ctx.rect.width() * 0.05, ctx.rect.top()]),
+            Vec2f::from([
+                ctx.rect.left() + ctx.rect.width() * 0.5,
+                ctx.rect.center().y,
+            ]),
+            Vec2f::from([ctx.rect.left() + ctx.rect.width() * 0.05, ctx.rect.bottom()]),
+            Vec2f::from([ctx.rect.left() + ctx.rect.width() * 0.5, ctx.rect.bottom()]),
+            Vec2f::from([
+                ctx.rect.left() + ctx.rect.width() * 0.83,
+                ctx.rect.center().y,
+            ]),
+            Vec2f::from([ctx.rect.left() + ctx.rect.width() * 0.5, ctx.rect.top()]),
+        ];
+
+        let mut poly_points = vec![];
+
+        for i in 0..3 {
+            let start = i * 2;
+
+            let a = points[start];
+            let b = points[start + 1];
+            let c = points[(start + 2) % points.len()];
+
+            poly_points.extend(
+                bezier_nd::Bezier::quadratic(&a, &b, &c)
+                    .as_points(0.1)
+                    .map(Into::<Pos2>::into),
+            );
+        }
+
+        ctx.paint.add(Shape::Path(PathShape {
+            points: poly_points,
+            closed: true,
+            fill: fill_color,
+            stroke: Stroke::new(2.0, border_color),
         }));
     }
 }
@@ -109,8 +92,8 @@ impl CircuitImpl for Circuit {
 pub struct Preview {}
 
 impl CircuitPreview for Preview {
-    fn draw_preview(&self, ctx: &PaintContext) {
-        Circuit::draw(ctx, true);
+    fn draw_preview(&self, ctx: &PaintContext, in_world: bool) {
+        Circuit::draw(ctx, in_world);
     }
 
     fn size(&self) -> Vec2u {

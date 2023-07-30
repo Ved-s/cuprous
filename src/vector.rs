@@ -1,14 +1,18 @@
 #![allow(dead_code)]
 
-use std::{ops::{Add, Mul, Div}, fmt::Display, f32::consts::TAU};
+use std::{
+    f32::consts::TAU,
+    fmt::Display,
+    ops::{Add, Div, Mul},
+};
 
 use crate::{r#const::*, SizeCalc};
 
 pub trait VectorValue: Sized + Copy + Default {}
-impl<T> VectorValue for T where T: Sized + Copy + Default{}
+impl<T> VectorValue for T where T: Sized + Copy + Default {}
 
 #[derive(PartialEq, Eq, Copy, Clone, Debug, Hash)]
-pub struct Vector<const SIZE: usize, T: VectorValue> (pub [T; SIZE]);
+pub struct Vector<const SIZE: usize, T: VectorValue>(pub [T; SIZE]);
 
 pub type Vec2f = Vector<2, f32>;
 pub type Vec3f = Vector<3, f32>;
@@ -33,7 +37,10 @@ impl<const SIZE: usize, T: VectorValue> Vector<SIZE, T> {
         Self([value; SIZE])
     }
 
-    pub fn length_squared(&self) -> T where T: Add<Output = T> + Mul<Output = T> + Default {
+    pub fn length_squared(&self) -> T
+    where
+        T: Add<Output = T> + Mul<Output = T> + Default,
+    {
         let mut len_sq = T::default();
 
         for i in 0..SIZE {
@@ -44,21 +51,34 @@ impl<const SIZE: usize, T: VectorValue> Vector<SIZE, T> {
         len_sq
     }
 
-    pub fn length(&self) -> T where T: Add<Output = T> + Mul<Output = T> + Default + FloatMath {
+    pub fn length(&self) -> T
+    where
+        T: Add<Output = T> + Mul<Output = T> + Default + FloatMath,
+    {
         self.length_squared().sqrt()
     }
 
-    pub fn at<const INDEX: usize>(&self) -> T where Bool<{SIZE > INDEX}>: True {
+    pub fn at<const INDEX: usize>(&self) -> T
+    where
+        Bool<{ SIZE > INDEX }>: True,
+    {
         self.0[INDEX]
     }
 
-    pub fn with<const INDEX: usize>(&self, value: T) -> Self where Bool<{SIZE > INDEX}>: True {
+    pub fn with<const INDEX: usize>(&self, value: T) -> Self
+    where
+        Bool<{ SIZE > INDEX }>: True,
+    {
         let mut c = *self;
         c.0[INDEX] = value;
         c
     }
 
-    pub fn into_type<I>(self) -> Vector<SIZE, I> where T: Into<I>, I: VectorValue {
+    pub fn into_type<I>(self) -> Vector<SIZE, I>
+    where
+        T: Into<I>,
+        I: VectorValue,
+    {
         let mut v = [I::default(); SIZE];
         (0..SIZE).for_each(|i| {
             v[i] = self.0[i].into();
@@ -74,7 +94,11 @@ impl<const SIZE: usize, T: VectorValue> Vector<SIZE, T> {
         v.into()
     }
 
-    pub fn combine_with<I: VectorValue, O: VectorValue>(&self, other: Vector<SIZE, I>, combiner: impl Fn(T, I) -> O) -> Vector<SIZE, O> {
+    pub fn combine_with<I: VectorValue, O: VectorValue>(
+        &self,
+        other: Vector<SIZE, I>,
+        combiner: impl Fn(T, I) -> O,
+    ) -> Vector<SIZE, O> {
         let mut v = [O::default(); SIZE];
         (0..SIZE).for_each(|i| {
             v[i] = combiner(self.0[i], other.0[i]);
@@ -83,25 +107,32 @@ impl<const SIZE: usize, T: VectorValue> Vector<SIZE, T> {
     }
 }
 
-impl<const SIZE: usize, T: VectorValue + FloatMath + Add<Output = T> + Mul<Output = T> + Div<Output = T>> Vector<SIZE, T> {
+impl<
+        const SIZE: usize,
+        T: VectorValue + FloatMath + Add<Output = T> + Mul<Output = T> + Div<Output = T>,
+    > Vector<SIZE, T>
+{
     pub fn angle_to(&self, other: Self) -> T {
         let mut a = T::default();
         for i in 0..SIZE {
             a = a + self.0[i] * other.0[i];
         }
         let b = self.length() * other.length();
-        (a/b).acos()
+        (a / b).acos()
     }
 }
 
 macro_rules! impl_vec_component {
     ($name:ident, $index:literal) => {
-        impl<const SIZE: usize, T: VectorValue> Vector<SIZE, T> where Bool<{SIZE > $index}>: True {
+        impl<const SIZE: usize, T: VectorValue> Vector<SIZE, T>
+        where
+            Bool<{ SIZE > $index }>: True,
+        {
             #[inline]
             pub fn $name(&self) -> T {
                 self.0[$index]
             }
-            
+
             paste::paste! {
                 #[inline]
                 pub fn [< with_ $name >](&self, x: T) -> Self {
@@ -115,8 +146,6 @@ macro_rules! impl_vec_component {
                     &mut self.0[$index]
                 }
             }
-
-
         }
     };
 }
@@ -134,11 +163,14 @@ impl<const SIZE: usize, T: VectorValue> Default for Vector<SIZE, T> {
 
 impl<const SIZE: usize, T: VectorValue + SizeCalc> SizeCalc for Vector<SIZE, T> {
     fn calc_size_inner(&self) -> usize {
-        (0..SIZE).map(|i| self.0[i].calc_size_inner() ).sum()
+        (0..SIZE).map(|i| self.0[i].calc_size_inner()).sum()
     }
 }
 
-impl<const SIZE: usize, T: VectorValue + std::fmt::Display> std::fmt::Display for Vector<SIZE, T> where T: Display {
+impl<const SIZE: usize, T: VectorValue + std::fmt::Display> std::fmt::Display for Vector<SIZE, T>
+where
+    T: Display,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("{ ")?;
         for i in 0..SIZE {
@@ -151,12 +183,11 @@ impl<const SIZE: usize, T: VectorValue + std::fmt::Display> std::fmt::Display fo
     }
 }
 
-
 macro_rules! impl_op {
     ($trait:ident, $fn:ident, $op:tt) => {
         impl<const SIZE: usize, T: VectorValue + std::ops::$trait<Output = O>, O: VectorValue, R: Into<Vector<SIZE, T>>> std::ops::$trait<R> for Vector<SIZE, T> {
             type Output = Vector::<SIZE, O>;
-        
+
             fn $fn(self, rhs: R) -> Self::Output {
                 let mut res = Vector::<SIZE, O>::default();
                 let rhs_v = rhs.into();
@@ -185,8 +216,10 @@ impl_op!(Mul, mul, *);
 impl_op!(Div, div, /);
 impl_op!(Rem, rem, %);
 
-impl<const SIZE: usize, T: VectorValue + std::ops::Neg<Output = O>, O: VectorValue> std::ops::Neg for Vector<SIZE, T> {
-    type Output = Vector::<SIZE, O>;
+impl<const SIZE: usize, T: VectorValue + std::ops::Neg<Output = O>, O: VectorValue> std::ops::Neg
+    for Vector<SIZE, T>
+{
+    type Output = Vector<SIZE, O>;
 
     fn neg(self) -> Self::Output {
         let mut res = Vector::<SIZE, O>::default();
@@ -238,14 +271,12 @@ macro_rules! float_math_trait {
 float_math_trait!(sqrt, sin, cos, asin, acos);
 
 impl Vector<2, f32> {
-
     /// 0 -> 2PI countercloclwise from +X axis
     pub fn angle_to_x(&self) -> f32 {
         let v = (-self.y()).atan2(self.x());
         if v < 0.0 {
             TAU + v
-        }
-        else {
+        } else {
             v.abs() // remove weird -0.0
         }
     }
@@ -300,5 +331,102 @@ impl<const SIZE: usize, T: VectorValue + IsZero> IsZero for Vector<SIZE, T> {
             }
         }
         true
+    }
+}
+
+/*
+std::convert::AsRef<[F; D]>
+std::convert::AsMut<[F; D]>
+std::convert::AsRef<[F]>
+std::convert::AsMut<[F]>
+std::ops::Index<usize, Output = F>
+std::ops::IndexMut<usize>
+ */
+
+impl<T: VectorValue, const SIZE: usize> std::convert::AsRef<[T; SIZE]> for Vector<SIZE, T> {
+    fn as_ref(&self) -> &[T; SIZE] {
+        &self.0
+    }
+}
+
+impl<T: VectorValue, const SIZE: usize> std::convert::AsMut<[T; SIZE]> for Vector<SIZE, T> {
+    fn as_mut(&mut self) -> &mut [T; SIZE] {
+        &mut self.0
+    }
+}
+
+impl<T: VectorValue, const SIZE: usize> std::convert::AsRef<[T]> for Vector<SIZE, T> {
+    fn as_ref(&self) -> &[T] {
+        &self.0
+    }
+}
+
+impl<T: VectorValue, const SIZE: usize> std::convert::AsMut<[T]> for Vector<SIZE, T> {
+    fn as_mut(&mut self) -> &mut [T] {
+        &mut self.0
+    }
+}
+impl<T: VectorValue, const SIZE: usize> std::ops::Index<usize> for Vector<SIZE, T> {
+    type Output = T;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.0[index]
+    }
+}
+impl<T: VectorValue, const SIZE: usize> std::ops::IndexMut<usize> for Vector<SIZE, T> {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.0[index]
+    }
+}
+
+impl<T: geo_nd::Float + VectorValue + FloatMath + IsZero, const SIZE: usize> geo_nd::Vector<T, SIZE>
+    for Vector<SIZE, T>
+{
+    fn from_array(data: [T; SIZE]) -> Self {
+        Self(data)
+    }
+
+    fn zero() -> Self {
+        Self::single_value(T::zero())
+    }
+
+    fn into_array(self) -> [T; SIZE] {
+        self.0
+    }
+
+    fn is_zero(&self) -> bool {
+        IsZero::is_zero(self)
+    }
+
+    fn set_zero(&mut self) {
+        let zero = T::zero();
+        for i in 0..SIZE {
+            self.0[i] = zero;
+        }
+    }
+
+    fn reduce_sum(&self) -> T {
+        let mut sum = T::zero();
+        for i in 0..SIZE {
+            sum += self.0[i];
+        }
+        sum
+    }
+
+    fn mix(self, other: &Self, t: T) -> Self {
+        let mut v = [T::zero(); SIZE];
+        (0..SIZE).for_each(|i| {
+            let diff = other.0[i] - self.0[i];
+            v[i] = self.0[i] + diff * t;
+        });
+        v.into()
+    }
+
+    fn dot(&self, other: &Self) -> T {
+        let mut sum = T::zero();
+        (0..SIZE).for_each(|i| {
+            sum += self.0[i] * other.0[i];
+        });
+        sum
     }
 }

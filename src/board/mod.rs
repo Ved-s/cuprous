@@ -670,7 +670,7 @@ impl ActiveCircuitBoard {
                 ctx.screen.world_to_screen_tile(place_pos).into(),
                 (size.convert(|v| v as f32) * ctx.screen.scale).into(),
             );
-            p.draw_preview(&ctx.with_rect(rect));
+            p.draw_preview(&ctx.with_rect(rect), true);
             let interaction = ctx.ui.interact(ctx.rect, ctx.ui.id(), Sense::click());
 
             if interaction.clicked_by(eframe::egui::PointerButton::Primary) {

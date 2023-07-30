@@ -395,7 +395,7 @@ impl InventoryItem for CircuitInventoryItem {
             rect,
             ..*ctx
         };
-        self.preview.draw_preview(&circ_ctx);
+        self.preview.draw_preview(&circ_ctx, false);
     }
 }
 

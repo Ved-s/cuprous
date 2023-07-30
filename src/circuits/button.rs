@@ -14,8 +14,8 @@ impl Circuit {
         }
     }
 
-    fn draw(state: Option<&CircuitStateContext>, ctx: &PaintContext, preview: bool) {
-        let color_mul = if preview { 0.5 } else { 1.0 };
+    fn draw(state: Option<&CircuitStateContext>, ctx: &PaintContext, semi_transparent: bool) {
+        let color_mul = if semi_transparent { 0.5 } else { 1.0 };
         ctx.paint.rect_filled(
             ctx.rect.expand(ctx.screen.scale * -0.5),
             Rounding::same(ctx.screen.scale * 0.25),
@@ -79,8 +79,8 @@ impl InternalCircuitState for State {}
 pub struct Preview {}
 
 impl CircuitPreview for Preview {
-    fn draw_preview(&self, ctx: &PaintContext) {
-        Circuit::draw(None, ctx, true);
+    fn draw_preview(&self, ctx: &PaintContext, in_world: bool) {
+        Circuit::draw(None, ctx, in_world);
     }
 
     fn size(&self) -> Vec2u {

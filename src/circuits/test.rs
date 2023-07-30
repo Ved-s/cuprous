@@ -150,7 +150,7 @@ impl CircuitImpl for Circuit {
 pub struct Preview {}
 
 impl CircuitPreview for Preview {
-    fn draw_preview(&self, ctx: &PaintContext) {
+    fn draw_preview(&self, ctx: &PaintContext, _: bool) {
         ctx.paint.rect_filled(
             ctx.rect,
             Rounding::none(),
