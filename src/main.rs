@@ -3,18 +3,12 @@
 #![feature(int_roundings)]
 #![feature(lazy_cell)]
 
-use std::{
-    f32::consts::PI,
-    mem::size_of,
-    ops::Range,
-    sync::Arc,
-    time::Instant,
-};
+use std::{f32::consts::PI, mem::size_of, ops::Range, sync::Arc, time::Instant};
 
 use board::{selection::Selection, ActiveCircuitBoard, CircuitBoard, SelectedBoardItem};
 use eframe::{
     egui::{self, Context, Frame, Key, Margin, Sense, TextStyle, Ui},
-    epaint::{Color32, PathShape, Rounding, Shape, Stroke, ahash::HashMap},
+    epaint::{ahash::HashMap, Color32, PathShape, Rounding, Shape, Stroke},
 };
 use emath::{pos2, vec2, Align2, Pos2, Rect, Vec2};
 
@@ -298,7 +292,7 @@ struct App {
 
     inventory_items: Vec<InventoryItemGroup>,
     selected_id: Option<String>,
-    circuit_previews: HashMap<String, Box<dyn CircuitPreview>>
+    circuit_previews: HashMap<String, Box<dyn CircuitPreview>>,
 }
 
 struct SelectionInventoryItem {}
@@ -341,7 +335,6 @@ impl InventoryItem for WireInventoryItem {
     }
 
     fn draw(&self, ctx: &PaintContext) {
-
         let color = WireState::False.color();
 
         let rect1 = Rect::from_center_size(
@@ -353,7 +346,8 @@ impl InventoryItem for WireInventoryItem {
             ctx.rect.size() * 0.2,
         );
 
-        ctx.paint.line_segment([rect1.center(), rect2.center()], Stroke::new(2.5, color));
+        ctx.paint
+            .line_segment([rect1.center(), rect2.center()], Stroke::new(2.5, color));
 
         ctx.paint.add(Shape::Path(PathShape {
             points: rotated_rect_shape(rect1, PI * 0.25, rect1.center()),
@@ -373,7 +367,7 @@ impl InventoryItem for WireInventoryItem {
 
 struct CircuitInventoryItem {
     preview: Box<dyn CircuitPreview>,
-    id: String
+    id: String,
 }
 impl InventoryItem for CircuitInventoryItem {
     fn id(&self) -> &str {
@@ -481,16 +475,50 @@ impl App {
                 InventoryItemGroup::SingleItem(Box::new(SelectionInventoryItem {})),
                 InventoryItemGroup::SingleItem(Box::new(WireInventoryItem {})),
                 InventoryItemGroup::Group(vec![
-                    Box::new(CircuitInventoryItem { preview: Box::new(circuits::test::Preview {}), id: "test".to_owned() }),
-                    Box::new(CircuitInventoryItem { preview: Box::new(circuits::button::Preview {}), id: "button".to_owned() }),
-                    Box::new(CircuitInventoryItem { preview: Box::new(circuits::gates::or::Preview {}), id: "or".to_owned() }),
-                ])
+                    Box::new(CircuitInventoryItem {
+                        preview: Box::new(circuits::test::Preview {}),
+                        id: "test".to_owned(),
+                    }),
+                    Box::new(CircuitInventoryItem {
+                        preview: Box::new(circuits::button::Preview {}),
+                        id: "button".to_owned(),
+                    }),
+                    Box::new(CircuitInventoryItem {
+                        preview: Box::new(circuits::gates::gate::Preview {
+                            template: circuits::gates::or::TEMPLATE,
+                        }),
+                        id: "or".to_owned(),
+                    }),
+                    Box::new(CircuitInventoryItem {
+                        preview: Box::new(circuits::gates::gate::Preview {
+                            template: circuits::gates::and::TEMPLATE,
+                        }),
+                        id: "and".to_owned(),
+                    }),
+                ]),
             ],
-            circuit_previews: HashMap::from_iter([
-                ("test".to_owned(), Box::new(circuits::test::Preview {}) as Box<dyn CircuitPreview>),
-                ("button".to_owned(), Box::new(circuits::button::Preview {})),
-                ("or".to_owned(), Box::new(circuits::gates::or::Preview {})),
-            ].into_iter())
+            circuit_previews: HashMap::from_iter(
+                [
+                    (
+                        "test".to_owned(),
+                        Box::new(circuits::test::Preview {}) as Box<dyn CircuitPreview>,
+                    ),
+                    ("button".to_owned(), Box::new(circuits::button::Preview {})),
+                    (
+                        "or".to_owned(),
+                        Box::new(circuits::gates::gate::Preview {
+                            template: circuits::gates::or::TEMPLATE,
+                        }),
+                    ),
+                    (
+                        "and".to_owned(),
+                        Box::new(circuits::gates::gate::Preview {
+                            template: circuits::gates::and::TEMPLATE,
+                        }),
+                    ),
+                ]
+                .into_iter(),
+            ),
         }
     }
 
@@ -653,19 +681,13 @@ impl App {
             None => SelectedBoardItem::None,
             Some("selection") => SelectedBoardItem::Selection,
             Some("wire") => SelectedBoardItem::Wire,
-            Some(circ) => {
-                match self.circuit_previews.get(circ) {
-                    Some(p) => SelectedBoardItem::Circuit(&**p),
-                    None => SelectedBoardItem::None,
-                }
-            }
+            Some(circ) => match self.circuit_previews.get(circ) {
+                Some(p) => SelectedBoardItem::Circuit(&**p),
+                None => SelectedBoardItem::None,
+            },
         };
 
-        self.board.update(
-            &ctx,
-            selected_item,
-            self.debug,
-        );
+        self.board.update(&ctx, selected_item, self.debug);
         let update_time = Instant::now() - start_time;
         paint.text(
             rect.left_top() + vec2(10.0, 80.0),

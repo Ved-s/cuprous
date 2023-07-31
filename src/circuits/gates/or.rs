@@ -1,26 +1,14 @@
-use eframe::epaint::{Color32, PathShape, QuadraticBezierShape, Shape, Stroke};
-use emath::{pos2, Pos2};
+use eframe::epaint::{Color32, PathShape, Shape, Stroke};
+use emath::Pos2;
 
-use crate::{circuits::*, vector::Vec2f};
+use crate::vector::Vec2f;
 
-struct Circuit {
-    inputs: Box<[CircuitPinInfo]>,
-    output: CircuitPinInfo,
-}
+use super::gate::GateTemplate;
 
-impl Circuit {
-    fn new() -> Self {
-        Self {
-            inputs: vec![
-                CircuitPinInfo::new([0, 0], InternalPinDirection::Inside),
-                CircuitPinInfo::new([0, 2], InternalPinDirection::Inside),
-            ]
-            .into_boxed_slice(),
-            output: CircuitPinInfo::new([2, 1], InternalPinDirection::Outside),
-        }
-    }
-
-    fn draw(ctx: &PaintContext, semi_transparent: bool) {
+pub const TEMPLATE: GateTemplate = GateTemplate {
+    id: "or",
+    bool_combiner: |a, b| a || b,
+    drawer: |ctx, semi_transparent| {
         let opacity = if semi_transparent { 0.6 } else { 1.0 };
 
         let border_color = Color32::BLACK.linear_multiply(opacity);
@@ -28,16 +16,18 @@ impl Circuit {
 
         let points = [
             Vec2f::from([
-                ctx.rect.left() + ctx.rect.width() * 0.83,
+                ctx.rect.left() + ctx.rect.width() * (7.0/8.0),
                 ctx.rect.center().y,
             ]),
             Vec2f::from([ctx.rect.left() + ctx.rect.width() * 0.5, ctx.rect.top() - ctx.rect.height() * 0.05]),
-            Vec2f::from([ctx.rect.left() + ctx.rect.width() * 0.05, ctx.rect.top()]),
+
+            Vec2f::from([ctx.rect.left() + ctx.rect.width() * (3.0/64.0), ctx.rect.top()]),
             Vec2f::from([
-                ctx.rect.left() + ctx.rect.width() * 0.5,
+                ctx.rect.left() + ctx.rect.width() * (3.0/8.0),
                 ctx.rect.center().y,
             ]),
-            Vec2f::from([ctx.rect.left() + ctx.rect.width() * 0.05, ctx.rect.bottom()]),
+
+            Vec2f::from([ctx.rect.left() + ctx.rect.width() * (3.0/64.0), ctx.rect.bottom()]),
             Vec2f::from([ctx.rect.left() + ctx.rect.width() * 0.5, ctx.rect.bottom() + ctx.rect.height() * 0.05]),  
         ];
 
@@ -64,43 +54,4 @@ impl Circuit {
             stroke: Stroke::new(2.0, border_color),
         }));
     }
-}
-
-impl CircuitImpl for Circuit {
-    fn draw(&self, _: &CircuitStateContext, paint_ctx: &PaintContext) {
-        Circuit::draw(paint_ctx, false);
-    }
-
-    fn create_pins(&self) -> Box<[CircuitPinInfo]> {
-        let mut vec = vec![self.output.clone()];
-        vec.extend(self.inputs.iter().cloned());
-        vec.into_boxed_slice()
-    }
-
-    fn update_signals(&mut self, state_ctx: &CircuitStateContext, _: Option<usize>) {
-        let state = self
-            .inputs
-            .iter()
-            .map(|i| i.get_input(state_ctx))
-            .reduce(|a, b| a.combine_boolean(b, |a, b| a || b))
-            .unwrap_or_default();
-        self.output.set_output(state_ctx, state);
-    }
-}
-
-#[derive(Debug)]
-pub struct Preview {}
-
-impl CircuitPreview for Preview {
-    fn draw_preview(&self, ctx: &PaintContext, in_world: bool) {
-        Circuit::draw(ctx, in_world);
-    }
-
-    fn size(&self) -> Vec2u {
-        [3, 3].into()
-    }
-
-    fn create_impl(&self) -> Box<dyn CircuitImpl> {
-        Box::new(Circuit::new())
-    }
-}
+};

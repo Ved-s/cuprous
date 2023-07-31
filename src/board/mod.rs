@@ -876,7 +876,7 @@ impl ActiveCircuitBoard {
             }
         }
 
-        for (i, pos) in part.iter_pos(true).enumerate() {
+        for pos in part.iter_pos(true) {
             let node = self.wire_nodes.get(pos.convert(|v| v as isize));
             let node = unwrap_option_or_continue!(node);
 

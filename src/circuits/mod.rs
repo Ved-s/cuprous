@@ -331,7 +331,7 @@ pub trait CircuitImpl {
         true
     }
 }
-pub trait CircuitPreview: std::fmt::Debug {
+pub trait CircuitPreview {
     fn draw_preview(&self, ctx: &PaintContext, in_world: bool);
     fn size(&self) -> Vec2u;
     fn create_impl(&self) -> Box<dyn CircuitImpl>;
