@@ -309,6 +309,7 @@ impl<'a> CircuitStateContext<'a> {
 
 #[allow(unused_variables)]
 pub trait CircuitImpl {
+
     fn draw(&self, state_ctx: &CircuitStateContext, paint_ctx: &PaintContext);
 
     fn create_pins(&self) -> Box<[CircuitPinInfo]>;

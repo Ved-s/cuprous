@@ -27,18 +27,18 @@ impl Circuit {
         let fill_color = Color32::from_gray(200).linear_multiply(opacity);
 
         let points = [
+            Vec2f::from([
+                ctx.rect.left() + ctx.rect.width() * 0.83,
+                ctx.rect.center().y,
+            ]),
+            Vec2f::from([ctx.rect.left() + ctx.rect.width() * 0.5, ctx.rect.top() - ctx.rect.height() * 0.05]),
             Vec2f::from([ctx.rect.left() + ctx.rect.width() * 0.05, ctx.rect.top()]),
             Vec2f::from([
                 ctx.rect.left() + ctx.rect.width() * 0.5,
                 ctx.rect.center().y,
             ]),
             Vec2f::from([ctx.rect.left() + ctx.rect.width() * 0.05, ctx.rect.bottom()]),
-            Vec2f::from([ctx.rect.left() + ctx.rect.width() * 0.5, ctx.rect.bottom()]),
-            Vec2f::from([
-                ctx.rect.left() + ctx.rect.width() * 0.83,
-                ctx.rect.center().y,
-            ]),
-            Vec2f::from([ctx.rect.left() + ctx.rect.width() * 0.5, ctx.rect.top()]),
+            Vec2f::from([ctx.rect.left() + ctx.rect.width() * 0.5, ctx.rect.bottom() + ctx.rect.height() * 0.05]),  
         ];
 
         let mut poly_points = vec![];
@@ -52,7 +52,7 @@ impl Circuit {
 
             poly_points.extend(
                 bezier_nd::Bezier::quadratic(&a, &b, &c)
-                    .as_points(0.1)
+                    .as_points((0.3/(ctx.screen.scale.sqrt())).max(0.01))
                     .map(Into::<Pos2>::into),
             );
         }

@@ -853,11 +853,12 @@ impl ActiveCircuitBoard {
 
         let mut dist = 1;
         for (i, pos) in part.iter_pos(true).enumerate() {
+            let pin = self.pin_at(pos);
             let node = self
                 .wire_nodes
                 .get_or_create_mut(pos.convert(|v| v as isize));
 
-            let point = node.wire.is_some() || i == 0 || i as u32 == part.length.get();
+            let point = pin.is_some() || node.wire.is_some() || i == 0 || i as u32 == part.length.get();
 
             if i > 0 {
                 node.get_dir_mut(dir_rev).set(Some(dist))
@@ -879,7 +880,7 @@ impl ActiveCircuitBoard {
             let node = self.wire_nodes.get(pos.convert(|v| v as isize));
             let node = unwrap_option_or_continue!(node);
 
-            let point = node.wire.is_some() || i == 0 || i as u32 == part.length.get();
+            let point = node.wire.is_some();
             if point {
                 let pin = self.pin_at(pos);
 
