@@ -6,13 +6,20 @@ use crate::{
     OptionalInt, PaintContext, RwLock,
 };
 
-pub mod test;
 pub mod button;
 pub mod gates;
+pub mod pullup;
+pub mod test;
 
 pub struct CircuitInfo {
     pub size: Vec2u,
     pub pins: Box<[CircuitPinInfo]>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CustomPinHandler {
+    pub mutate_state: fn(ctx: &State, pin: &CircuitPin, state: &mut WireState),
+    pub write_state: fn(ctx: &State, pin: &CircuitPin, state: WireState),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -20,6 +27,7 @@ pub enum InternalPinDirection {
     StateDependent { default: PinDirection },
     Inside,
     Outside,
+    Custom(CustomPinHandler),
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -28,6 +36,7 @@ pub enum PinDirection {
 
     #[default]
     Outside,
+    Custom(CustomPinHandler),
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -54,6 +63,7 @@ impl CircuitPin {
         match self.dir {
             InternalPinDirection::Inside => PinDirection::Inside,
             InternalPinDirection::Outside => PinDirection::Outside,
+            InternalPinDirection::Custom(h) => PinDirection::Custom(h),
             InternalPinDirection::StateDependent { default } => state
                 .read_circuit(self.id.circuit_id)
                 .map(|cs| {
@@ -82,7 +92,7 @@ impl CircuitPin {
             .unwrap_or_default()
     }
 
-    pub fn set_input(&self, state: &State, value: WireState) {
+    pub fn set_input(&self, state: &State, value: WireState, update_state: bool) {
         let circuit = state.get_circuit(self.id.circuit_id);
         let mut circuit = circuit.write().unwrap();
 
@@ -92,7 +102,15 @@ impl CircuitPin {
         }
 
         circuit.pins.set(value, self.id.id);
-        state.update_circuit_signals(self.id.circuit_id, Some(self.id.id));
+        if update_state {
+            match self.dir {
+                InternalPinDirection::Custom(_) => {
+                    state.update_pin_input(self.id.circuit_id, self.id.id)
+                }
+
+                _ => state.update_circuit_signals(self.id.circuit_id, Some(self.id.id)),
+            }
+        }
     }
 
     pub fn connected_wire(&self) -> Option<usize> {
@@ -129,6 +147,9 @@ impl CircuitPin {
                 }
                 InternalPinDirection::Outside => {}
                 InternalPinDirection::Inside => {
+                    states.update_pin_input(self.id.circuit_id, self.id.id);
+                }
+                InternalPinDirection::Custom(_) => {
                     states.update_pin_input(self.id.circuit_id, self.id.id);
                 }
             }
@@ -201,15 +222,23 @@ impl CircuitPinInfo {
         match dir {
             PinDirection::Inside => match wire {
                 Some(wire) => state_ctx.global_state.update_wire(wire),
-                None => self
-                    .pin
-                    .read()
-                    .unwrap()
-                    .set_input(state_ctx.global_state, Default::default()),
+                None => self.pin.read().unwrap().set_input(
+                    state_ctx.global_state,
+                    Default::default(),
+                    true,
+                ),
             },
             PinDirection::Outside => state_ctx
                 .global_state
                 .update_circuit_signals(pin_id.circuit_id, Some(pin_id.id)),
+            PinDirection::Custom(_) => match wire {
+                Some(wire) => state_ctx.global_state.update_wire(wire),
+                None => self.pin.read().unwrap().set_input(
+                    state_ctx.global_state,
+                    Default::default(),
+                    true,
+                ),
+            },
         }
     }
 }
@@ -309,7 +338,6 @@ impl<'a> CircuitStateContext<'a> {
 
 #[allow(unused_variables)]
 pub trait CircuitImpl {
-
     fn draw(&self, state_ctx: &CircuitStateContext, paint_ctx: &PaintContext);
 
     fn create_pins(&self) -> Box<[CircuitPinInfo]>;

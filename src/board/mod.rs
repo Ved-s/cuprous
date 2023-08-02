@@ -858,7 +858,8 @@ impl ActiveCircuitBoard {
                 .wire_nodes
                 .get_or_create_mut(pos.convert(|v| v as isize));
 
-            let point = pin.is_some() || node.wire.is_some() || i == 0 || i as u32 == part.length.get();
+            let point =
+                pin.is_some() || node.wire.is_some() || i == 0 || i as u32 == part.length.get();
 
             if i > 0 {
                 node.get_dir_mut(dir_rev).set(Some(dist))
@@ -870,11 +871,12 @@ impl ActiveCircuitBoard {
                     fix_pointers(self, pos, dist, dir_rev);
                 }
                 dist = 1;
-            }
-            else {
+            } else {
                 dist += 1;
             }
         }
+
+        let states = self.board.read().unwrap().states.clone();
 
         for pos in part.iter_pos(true) {
             let node = self.wire_nodes.get(pos.convert(|v| v as isize));
@@ -884,19 +886,23 @@ impl ActiveCircuitBoard {
             if point {
                 let pin = self.pin_at(pos);
 
-                let mut board = self.board.write().unwrap();
-                let states = board.states.clone();
-                if let Some(wire) = board.wires.get_mut(wire) {
-                    wire.set_point(
-                        pos,
-                        &states,
-                        Some(WirePoint {
-                            left: node.left.is_some(),
-                            up: node.up.is_some(),
-                            pin,
-                        }),
-                        false,
-                    )
+                {
+                    let mut board = self.board.write().unwrap();
+                    if let Some(wire) = board.wires.get_mut(wire) {
+                        wire.set_point(
+                            pos,
+                            &states,
+                            Some(WirePoint {
+                                left: node.left.is_some(),
+                                up: node.up.is_some(),
+                                pin: pin.clone(),
+                            }),
+                            false,
+                        )
+                    }
+                }
+                if let Some(pin) = &pin {
+                    pin.write().unwrap().set_wire(&states, Some(wire), false, true);
                 }
             }
         }

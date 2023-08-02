@@ -495,6 +495,10 @@ impl App {
                         }),
                         id: "and".to_owned(),
                     }),
+                    Box::new(CircuitInventoryItem {
+                        preview: Box::new(circuits::pullup::Preview {}),
+                        id: "pullup".to_owned(),
+                    }),
                 ]),
             ],
             circuit_previews: HashMap::from_iter(
@@ -516,6 +520,7 @@ impl App {
                             template: circuits::gates::and::TEMPLATE,
                         }),
                     ),
+                    ("pullup".to_owned(), Box::new(circuits::pullup::Preview {})),
                 ]
                 .into_iter(),
             ),

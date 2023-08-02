@@ -282,12 +282,23 @@ impl State {
 
     fn update_wire_now(&self, wire: &Wire) {
         let mut state = WireState::None;
+        let mut delayed_pins = vec![];
         for (_, point) in wire.points.iter() {
-            if let Some(pin) = &point.pin {
-                let pin = pin.read().unwrap();
-                if let PinDirection::Outside = pin.direction(self) {
-                    state = state.combine(pin.get_state(self));
+            if let Some(pin_arc) = &point.pin {
+                let pin = pin_arc.read().unwrap();
+
+                match pin.direction(self) {
+                    PinDirection::Inside => {},
+                    PinDirection::Outside => state = state.combine(pin.get_state(self)),
+                    PinDirection::Custom(_) => delayed_pins.push(pin_arc),
                 }
+            }
+        }
+
+        for pin in delayed_pins {
+            let pin = pin.read().unwrap();
+            if let PinDirection::Custom(h) = pin.direction(self) {
+                (h.mutate_state)(self, &pin, &mut state)
             }
         }
 
@@ -300,8 +311,11 @@ impl State {
         for (_, point) in wire.points.iter() {
             if let Some(pin) = &point.pin {
                 let pin = pin.read().unwrap();
-                if let PinDirection::Inside = pin.direction(self) {
-                    pin.set_input(self, state)
+
+                match pin.direction(self) {
+                    PinDirection::Inside => pin.set_input(self, state, true),
+                    PinDirection::Outside => {},
+                    PinDirection::Custom(_) => pin.set_input(self, state, true),
                 }
             }
         }
@@ -324,8 +338,10 @@ impl State {
         let pin = pin_info.pin.clone();
         let pin = pin.write().unwrap();
 
-        if !matches!(pin.direction(self), PinDirection::Inside) {
-            return;
+        match pin.direction(self) {
+            PinDirection::Inside => {},
+            PinDirection::Custom(_) => {},
+            PinDirection::Outside => return,
         }
 
         drop(info);
@@ -341,7 +357,7 @@ impl State {
             return;
         }
 
-        pin.set_input(self, new_state);
+        pin.set_input(self, new_state, false);
         drop(pin);
 
         self.update_circuit_signals_now(circuit, Some(id));
