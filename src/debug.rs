@@ -3,7 +3,7 @@ use std::{
     collections::HashMap,
     sync::{
         atomic::{AtomicU64, Ordering},
-        RwLock, RwLockReadGuard, RwLockWriteGuard, LockResult, PoisonError, Mutex,
+        RwLock, RwLockReadGuard, RwLockWriteGuard, LockResult, PoisonError,
     }, ops::{Deref, DerefMut}, panic::Location,
 };
 

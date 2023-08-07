@@ -1,7 +1,7 @@
 use std::{collections::HashSet, sync::Arc};
 
 use eframe::{
-    egui::{Margin, PointerButton, Sense, Widget},
+    egui::{Id, Key, Margin, PointerButton, Sense, Ui, Widget},
     epaint::{Color32, Rounding, Stroke},
 };
 use emath::{vec2, Rect, Vec2};
@@ -31,8 +31,111 @@ struct InventoryMemory {
     last_group_items: Arc<RwLock<HashSet<String>>>,
 }
 
+const NUMBER_KEYS: [Key; 10] = [
+    Key::Num0,
+    Key::Num1,
+    Key::Num2,
+    Key::Num3,
+    Key::Num4,
+    Key::Num5,
+    Key::Num6,
+    Key::Num7,
+    Key::Num8,
+    Key::Num9,
+];
+
+impl Inventory<'_> {
+    fn get_group_icon_item_id(
+        group: &[Box<dyn InventoryItem>],
+        ui: &Ui,
+        self_id: Id,
+    ) -> Option<usize> {
+        ui.memory(|mem| {
+            mem.data
+                .get_temp::<InventoryMemory>(self_id)
+                .and_then(|mem| {
+                    let last_group_items = mem.last_group_items.read().unwrap();
+                    for (i, item) in group.iter().enumerate() {
+                        if last_group_items.contains(item.id()) {
+                            return Some(i);
+                        }
+                    }
+                    None
+                })
+        })
+    }
+
+    fn update_selected(
+        &mut self,
+        ui: &Ui,
+        current_index: Option<usize>,
+        current_sub_index: Option<usize>,
+    ) -> (Option<usize>, Option<usize>) {
+        let digit_key = ui.input(|input| {
+            NUMBER_KEYS
+                .iter()
+                .enumerate()
+                .find(|t| input.key_pressed(*t.1))
+                .map(|t| t.0)
+        });
+
+        let index = match digit_key {
+            None => return (current_index, current_sub_index),
+            Some(0) => {
+                *self.selected = None;
+                return (None, None);
+            }
+            Some(digit) => digit - 1,
+        };
+
+        let shift = ui.input(|input| input.modifiers.shift);
+
+        if shift {
+            if current_sub_index == Some(index) {
+                *self.selected = None;
+                return (None, None);
+            }
+
+            let selected_group = current_index
+                .and_then(|i| self.groups.get(i))
+                .and_then(|item| match item {
+                    InventoryItemGroup::SingleItem(_) => None,
+                    InventoryItemGroup::Group(vec) => Some(vec),
+                });
+
+            if let Some(group) = selected_group {
+                if let Some(item) = group.get(index) {
+                    *self.selected = Some(item.id().to_owned());
+                    return (current_index, Some(index));
+                }
+            }
+        } else if current_index == Some(index) {
+            *self.selected = None;
+            return (None, None);
+        } else if let Some(item) = self.groups.get(index) {
+            match item {
+                InventoryItemGroup::SingleItem(item) => {
+                    *self.selected = Some(item.id().to_owned());
+                    return (Some(index), None);
+                }
+                InventoryItemGroup::Group(group) => {
+                    let item_index =
+                        Inventory::get_group_icon_item_id(group, ui, ui.next_auto_id())
+                            .unwrap_or(0);
+
+                    if let Some(item) = group.get(item_index) {
+                        *self.selected = Some(item.id().to_owned());
+                        return (Some(index), Some(item_index));
+                    }
+                }
+            }
+        }
+        (current_index, current_sub_index)
+    }
+}
+
 impl Widget for Inventory<'_> {
-    fn ui(self, ui: &mut eframe::egui::Ui) -> eframe::egui::Response {
+    fn ui(mut self, ui: &mut eframe::egui::Ui) -> eframe::egui::Response {
         let (selected_item, selected_sub_item) = match self.selected {
             None => (None, None),
             Some(selected) => self
@@ -61,6 +164,9 @@ impl Widget for Inventory<'_> {
                 })
                 .unwrap_or((None, None)),
         };
+
+        let (selected_item, selected_sub_item) =
+            self.update_selected(ui, selected_item, selected_sub_item);
 
         let selected_group = selected_sub_item.and_then(|_| {
             selected_item
@@ -110,24 +216,19 @@ impl Widget for Inventory<'_> {
                     }
 
                     if !selected {
-
-                        let icon_index = ui.memory(|mem| mem.data.get_temp::<InventoryMemory>(id).and_then(|mem| {
-                            let last_group_items = mem.last_group_items.read().unwrap();
-                            for (i, item) in items.iter().enumerate() {
-                                if last_group_items.contains(item.id()) {
-                                    return Some(i);
-                                }
-                            }
-                            None
-                        }));
-                        let icon_index = icon_index.unwrap_or(0);
+                        let icon_index =
+                            Inventory::get_group_icon_item_id(items, ui, id).unwrap_or(0);
 
                         let rect =
                             Rect::from_min_size(rect.left_top() + vec2(x, 0.0), full_item_size);
 
-                        paint_ctx.paint.circle_filled(rect.lerp_inside([0.9, 0.9].into()), rect.width() / 20.0, Color32::GREEN);
+                        paint_ctx.paint.circle_filled(
+                            rect.lerp_inside([0.9, 0.9].into()),
+                            rect.width() / 20.0,
+                            Color32::GREEN,
+                        );
                         let item = &items[icon_index];
-                        
+
                         if click_pos.is_some_and(|pos| rect.contains(pos)) {
                             let id = item.id();
                             if self.selected.as_ref().is_some_and(|sel| sel == id) {
@@ -216,7 +317,7 @@ impl Widget for Inventory<'_> {
                         let mut last_group_items = m.last_group_items.write().unwrap();
                         for item in group {
                             last_group_items.remove(item.id());
-                        } 
+                        }
                         last_group_items.insert(selected_id.clone());
                     });
                 }

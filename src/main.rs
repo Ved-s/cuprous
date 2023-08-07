@@ -445,6 +445,10 @@ impl eframe::App for App {
 
                 let mut selected = self.selected_id.take();
 
+                if ui.input(|input| input.key_pressed(Key::Escape)) {
+                    selected = None;
+                }
+
                 ui.add(Inventory {
                     selected: &mut selected,
                     groups: &self.inventory_items,
@@ -710,6 +714,7 @@ Selected: {:?}
 
 Wire parts drawn: {}
 State thread id: {:?}
+Pressed keys: {:?}
 "#,
                 self.pan_zoom.pos,
                 bounds.tiles_tl,
@@ -722,7 +727,8 @@ State thread id: {:?}
                 self.board
                     .wires_drawn
                     .load(std::sync::atomic::Ordering::Relaxed),
-                self.board.state.thread().map(|id| id.as_u64().get())
+                self.board.state.thread().map(|id| id.as_u64().get()),
+                ui.input(|input| input.keys_down.iter().cloned().collect::<Vec<_>>())
             ),
             font_id,
             Color32::WHITE,

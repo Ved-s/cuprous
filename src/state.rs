@@ -1,7 +1,7 @@
 use std::{
     any::Any,
     sync::{Arc, Condvar},
-    thread::{self, JoinHandle, Thread, ThreadId},
+    thread::{self, JoinHandle, ThreadId},
     time::{Duration, Instant},
 };
 
