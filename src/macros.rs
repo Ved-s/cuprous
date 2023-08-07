@@ -9,6 +9,16 @@ macro_rules! unwrap_option_or_continue {
 }
 
 #[macro_export]
+macro_rules! unwrap_option_or_break {
+    ($e:expr) => {
+        match $e {
+            Some(v) => v,
+            None => break
+        }
+    };
+}
+
+#[macro_export]
 macro_rules! unwrap_option_or_return {
     ($e:expr) => {
         match $e {

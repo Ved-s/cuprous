@@ -1,15 +1,19 @@
 use std::{
     any::Any,
-    sync::Arc,
+    sync::{Arc, Condvar},
+    thread::{self, JoinHandle, Thread, ThreadId},
     time::{Duration, Instant},
 };
 
 use eframe::epaint::Color32;
 
 use crate::{
+    board::CircuitBoard,
     circuits::*,
     containers::{FixedVec, RandomQueue},
-    wires::*, board::CircuitBoard, RwLock, Mutex, unwrap_option_or_return,
+    unwrap_option_or_break, unwrap_option_or_return,
+    wires::*,
+    Mutex, RwLock,
 };
 
 #[derive(Debug)]
@@ -53,7 +57,11 @@ impl WireState {
         Color32::from_rgb(rgb[0], rgb[1], rgb[2])
     }
 
-    pub fn combine_boolean(self, other: WireState, combiner: impl FnOnce(bool, bool) -> bool) -> WireState {
+    pub fn combine_boolean(
+        self,
+        other: WireState,
+        combiner: impl FnOnce(bool, bool) -> bool,
+    ) -> WireState {
         match (self, other) {
             (WireState::None, o) => o,
             (o, WireState::None) => o,
@@ -62,7 +70,7 @@ impl WireState {
             (WireState::False, WireState::False) => combiner(false, false).into(),
             (WireState::True, WireState::False) => combiner(true, false).into(),
             (WireState::False, WireState::True) => combiner(false, true).into(),
-            (WireState::True, WireState::True) => combiner(true, true).into()
+            (WireState::True, WireState::True) => combiner(true, true).into(),
         }
     }
 }
@@ -76,13 +84,13 @@ impl From<bool> for WireState {
     }
 }
 
-pub trait InternalCircuitState: Any + Default {}
+pub trait InternalCircuitState: Any + Send + Sync + Default {}
 
 #[derive(Default)]
 pub struct CircuitState {
     pub pins: FixedVec<WireState>,
     pub pin_dirs: FixedVec<PinDirection>,
-    pub internal: Option<Box<dyn Any>>,
+    pub internal: Option<Box<dyn Any + Send + Sync>>,
 }
 
 impl CircuitState {
@@ -108,14 +116,14 @@ pub struct StateCollection {
 impl StateCollection {
     pub fn new() -> Self {
         Self {
-            states: Default::default(),
+            states: Arc::new(RwLock::new(vec![].into())),
         }
     }
 
-    pub fn create_state(&self) -> (usize, Arc<State>) {
+    pub fn create_state(&self, board: Arc<RwLock<CircuitBoard>>) -> (usize, Arc<State>) {
         let mut vec = self.states.write().unwrap();
         let id = vec.first_free_pos();
-        let state = Arc::<State>::default();
+        let state = Arc::new(State::new(board));
         vec.set(state.clone(), id);
         (id, state)
     }
@@ -124,7 +132,7 @@ impl StateCollection {
         for state in self.states.read().unwrap().iter() {
             state.update_pin_input(circuit_id, id);
         }
-    } 
+    }
 
     pub fn update_wire(&self, wire: usize) {
         for state in self.states.read().unwrap().iter() {
@@ -161,15 +169,29 @@ impl StateCollection {
     }
 }
 
+#[derive(Clone)]
 pub struct State {
     pub wires: Arc<RwLock<FixedVec<Arc<RwLock<WireState>>>>>,
     pub circuits: Arc<RwLock<FixedVec<Arc<RwLock<CircuitState>>>>>,
 
     queue: Arc<Mutex<RandomQueue<UpdateTask>>>,
+    thread: Arc<RwLock<Option<StateThreadHandle>>>,
+    board: Arc<RwLock<CircuitBoard>>,
     pub updates: Arc<Mutex<Vec<(usize, Instant)>>>,
 }
 
 impl State {
+    pub fn new(board: Arc<RwLock<CircuitBoard>>) -> Self {
+        Self {
+            wires: Default::default(),
+            circuits: Default::default(),
+            queue: Default::default(),
+            thread: Default::default(),
+            board,
+            updates: Default::default(),
+        }
+    }
+
     pub fn read_wire(&self, id: usize) -> WireState {
         self.wires
             .read()
@@ -213,155 +235,75 @@ impl State {
                 }
             }
             None => {
-                let index = updates.iter().enumerate().find(|(_, t)| t.0 == id).map(|(i, _)| i);
+                let index = updates
+                    .iter()
+                    .enumerate()
+                    .find(|(_, t)| t.0 == id)
+                    .map(|(i, _)| i);
                 if let Some(index) = index {
                     updates.remove(index);
                 }
             }
         }
+        self.notify_or_create_thread(false);
     }
 
-    pub fn update(&self, board: &CircuitBoard) {
-        let mut limit = 10;
-        while limit > 0 {
-            limit -= 1;
+    // pub fn update(&self, board: &CircuitBoard) {
+    //     let mut limit = 10;
+    //     while limit > 0 {
+    //         limit -= 1;
 
-            let queue_item = { self.queue.lock().unwrap().dequeue() };
+    //         let queue_item = { self.queue.lock().unwrap().dequeue() };
 
-            if let Some(task) = queue_item {
-                match task {
-                    UpdateTask::WireState(wire) => {
-                        if let Some(wire) = board.wires.get(wire) {
-                            self.update_wire_now(wire);
-                        }
-                    }
-                    UpdateTask::CircuitSignals { id, pin } => {
-                        if let Some(circuit) = board.circuits.get(id) {
-                            self.update_circuit_signals_now(circuit, pin);
-                        }
-                    }
-                    UpdateTask::PinInput { circuit, id } => {
-                        if let Some(circuit) = board.circuits.get(circuit) {
-                            self.update_pin_input_now(circuit, id);
-                        }
-                    },
-                }
-                continue;
-            }
+    //         if let Some(task) = queue_item {
+    //             match task {
+    //                 UpdateTask::WireState(wire) => {
+    //                     if let Some(wire) = board.wires.get(wire) {
+    //                         self.update_wire_now(wire);
+    //                     }
+    //                 }
+    //                 UpdateTask::CircuitSignals { id, pin } => {
+    //                     if let Some(circuit) = board.circuits.get(id) {
+    //                         self.update_circuit_signals_now(circuit, pin);
+    //                     }
+    //                 }
+    //                 UpdateTask::PinInput { circuit, id } => {
+    //                     if let Some(circuit) = board.circuits.get(circuit) {
+    //                         self.update_pin_input_now(circuit, id);
+    //                     }
+    //                 },
+    //             }
+    //             continue;
+    //         }
 
-            let mut updates = self.updates.lock().unwrap();
-            let now = Instant::now();
-            let next = updates.iter_mut().enumerate().find(|(_, i)| i.1 <= now);
-            if let Some((i, entry)) = next {
-                let remove = if let Some(circ) = board.circuits.get(entry.0) {
-                    let mut imp = circ.imp.write().unwrap();
+    //         let mut updates = self.updates.lock().unwrap();
+    //         let now = Instant::now();
+    //         let next = updates.iter_mut().enumerate().find(|(_, i)| i.1 <= now);
+    //         if let Some((i, entry)) = next {
+    //             let remove = if let Some(circ) = board.circuits.get(entry.0) {
+    //                 let mut imp = circ.imp.write().unwrap();
 
-                    let state = CircuitStateContext::new(self, circ);
+    //                 let state = CircuitStateContext::new(self, circ);
 
-                    imp.update(&state);
-                    match imp.update_interval(&state) {
-                        Some(d) => {
-                            entry.1 = now + d;
-                            None
-                        }
-                        None => Some(i),
-                    }
-                } else {
-                    Some(i)
-                };
+    //                 imp.update(&state);
+    //                 match imp.update_interval(&state) {
+    //                     Some(d) => {
+    //                         entry.1 = now + d;
+    //                         None
+    //                     }
+    //                     None => Some(i),
+    //                 }
+    //             } else {
+    //                 Some(i)
+    //             };
 
-                if let Some(rem) = remove {
-                    updates.remove(rem);
-                }
-                continue;
-            }
-
-            
-        }
-    }
-
-    fn update_wire_now(&self, wire: &Wire) {
-        let mut state = WireState::None;
-        let mut delayed_pins = vec![];
-        for (_, point) in wire.points.iter() {
-            if let Some(pin_arc) = &point.pin {
-                let pin = pin_arc.read().unwrap();
-
-                match pin.direction(self) {
-                    PinDirection::Inside => {},
-                    PinDirection::Outside => state = state.combine(pin.get_state(self)),
-                    PinDirection::Custom(_) => delayed_pins.push(pin_arc),
-                }
-            }
-        }
-
-        for pin in delayed_pins {
-            let pin = pin.read().unwrap();
-            if let PinDirection::Custom(h) = pin.direction(self) {
-                (h.mutate_state)(self, &pin, &mut state)
-            }
-        }
-
-        let current = self.get_wire(wire.id);
-        if *current.read().unwrap() == state {
-            return;
-        }
-
-        *current.write().unwrap() = state;
-        for (_, point) in wire.points.iter() {
-            if let Some(pin) = &point.pin {
-                let pin = pin.read().unwrap();
-
-                match pin.direction(self) {
-                    PinDirection::Inside => pin.set_input(self, state, true),
-                    PinDirection::Outside => {},
-                    PinDirection::Custom(_) => pin.set_input(self, state, true),
-                }
-            }
-        }
-    }
-
-    fn update_circuit_signals_now(&self, circuit: &Circuit, pin: Option<usize>) {
-        circuit.imp.write().unwrap().update_signals(
-            &CircuitStateContext::new(self, circuit),
-            pin,
-        )
-    }
-
-    fn update_pin_input_now(&self, circuit: &Circuit, id: usize) {
-        let info = circuit.info.read().unwrap();
-        let pin_info = unwrap_option_or_return!(info.pins.get(id));
-
-        let ctx = CircuitStateContext::new(self, circuit);
-        let old_state = pin_info.get_input(&ctx);
-
-        let pin = pin_info.pin.clone();
-        let pin = pin.write().unwrap();
-
-        match pin.direction(self) {
-            PinDirection::Inside => {},
-            PinDirection::Custom(_) => {},
-            PinDirection::Outside => return,
-        }
-
-        drop(info);
-
-        let pin_wire = pin.connected_wire();
-        
-        let new_state = match pin_wire {
-            None => WireState::default(),
-            Some(id) => self.read_wire(id),
-        };
-
-        if old_state == new_state {
-            return;
-        }
-
-        pin.set_input(self, new_state, false);
-        drop(pin);
-
-        self.update_circuit_signals_now(circuit, Some(id));
-    }
+    //             if let Some(rem) = remove {
+    //                 updates.remove(rem);
+    //             }
+    //             continue;
+    //         }
+    //     }
+    // }
 
     pub fn update_wire(&self, wire: usize) {
         self.schedule_update(UpdateTask::WireState(wire));
@@ -385,24 +327,275 @@ impl State {
     }
 
     fn schedule_update(&self, task: UpdateTask) {
-        // TODO: use condvar for future enqueues
         let mut queue = self.queue.lock().unwrap();
         queue.enqueue(task);
+        self.notify_or_create_thread(false);
     }
 
     fn init_circuit(&self, circuit: &Circuit) {
         let state_ctx = CircuitStateContext::new(self, circuit);
         circuit.imp.read().unwrap().init_state(&state_ctx);
     }
+
+    fn notify_or_create_thread(&self, termination_req: bool) {
+        let thread_sync = {
+            let handle = self.thread.read().unwrap();
+            match &*handle {
+                None => None,
+                Some(handle) => {
+                    if handle.handle.is_finished() {
+                        None
+                    } else {
+                        Some(handle.sync.clone())
+                    }
+                }
+            }
+        };
+        if let Some(sync) = thread_sync {
+            *sync.1.lock().unwrap() = termination_req;
+            sync.0.notify_one();
+            return;
+        }
+
+        if termination_req {
+            return;
+        }
+
+        let clone = self.clone();
+        let sync = Arc::new((Condvar::new(), Mutex::new(false)));
+        let sync_clone = sync.clone();
+        let handle = thread::spawn(move || {
+            StateThread::new(clone, sync_clone).run();
+        });
+        let handle = StateThreadHandle { handle, sync };
+        *self.thread.write().unwrap() = Some(handle);
+    }
+
+    pub fn thread(&self) -> Option<ThreadId> {
+        self.thread.read().ok()?.as_ref().and_then(|thread| {
+            if thread.handle.is_finished() {
+                None
+            }
+            else {
+                Some(thread.handle.thread().id())
+            }
+        })
+    }
 }
 
-impl Default for State {
-    fn default() -> Self {
+impl Drop for State {
+    fn drop(&mut self) {
+        self.notify_or_create_thread(true);
+    }
+}
+
+struct StateThreadHandle {
+    handle: JoinHandle<()>,
+    sync: Arc<(Condvar, Mutex<bool>)>,
+}
+
+struct StateThread {
+    state: State,
+    sync: Arc<(Condvar, Mutex<bool>)>,
+
+    circuit_updates_removes: Vec<usize>,
+}
+
+impl StateThread {
+    pub fn new(state: State, sync: Arc<(Condvar, Mutex<bool>)>) -> Self {
         Self {
-            wires: Arc::new(RwLock::new(vec![].into())),
-            circuits: Arc::new(RwLock::new(vec![].into())),
-            queue: Arc::new(Mutex::new(RandomQueue::new())),
-            updates: Arc::new(Mutex::new(vec![])),
+            state,
+            sync,
+            circuit_updates_removes: Default::default(),
         }
+    }
+
+    fn run(&mut self) {
+        loop {
+            {
+                if *self.sync.1.lock().unwrap() {
+                    return;
+                }
+            }
+            let nearest_update = {
+                let mut updates = self.state.updates.lock().unwrap();
+                let mut nearest_update = None;
+                let now = Instant::now();
+                self.circuit_updates_removes.clear();
+                for (i, upd) in updates.iter_mut().enumerate() {
+                    if upd.1 <= now {
+                        let board = self.state.board.read().unwrap();
+                        let circ = board.circuits.get(upd.0);
+                        if let Some(circ) = circ {
+                            let mut imp = circ.imp.write().unwrap();
+
+                            let state = CircuitStateContext::new(&self.state, circ);
+                            imp.update(&state);
+                            match imp.update_interval(&state) {
+                                Some(d) => {
+                                    upd.1 = now + d;
+                                }
+                                None => self.circuit_updates_removes.push(i),
+                            }
+                        } else {
+                            self.circuit_updates_removes.push(i);
+                        }
+                    }
+                    let closer = match nearest_update {
+                        Some(nu) => upd.1 < nu,
+                        None => true,
+                    };
+                    if closer {
+                        nearest_update = Some(upd.1);
+                    }
+                }
+                nearest_update
+            };
+
+            while !nearest_update.is_some_and(|nu| nu <= Instant::now()) {
+                let deq = { self.state.queue.lock().unwrap().dequeue() };
+                let task = unwrap_option_or_break!(deq);
+
+                let board = self.state.board.read().unwrap();
+                match task {
+                    UpdateTask::WireState(wire) => {
+                        if let Some(wire) = board.wires.get(wire) {
+                            self.update_wire_now(wire);
+                        }
+                    }
+                    UpdateTask::CircuitSignals { id, pin } => {
+                        if let Some(circuit) = board.circuits.get(id) {
+                            self.update_circuit_signals_now(circuit, pin);
+                        }
+                    }
+                    UpdateTask::PinInput { circuit, id } => {
+                        if let Some(circuit) = board.circuits.get(circuit) {
+                            self.update_pin_input_now(circuit, id);
+                        }
+                    }
+                }
+            }
+
+            match nearest_update {
+                Some(nu) => {
+                    // Lock might block for a bit, so sample duration after it blocked
+                    let lock = self.sync.1.lock().unwrap();
+                    if let Some(duration) = nu.checked_duration_since(Instant::now()) {
+                        let result = self.sync.0.wait_timeout(lock, duration).unwrap();
+                        if result.1.timed_out() {
+                            continue;
+                        } else if *result.0 {
+                            return;
+                        }
+                    }
+                }
+                None => {
+                    let lock = self.sync.1.lock().unwrap();
+                    let result = self
+                        .sync
+                        .0
+                        .wait_timeout(lock, Duration::from_secs(1))
+                        .unwrap();
+                    if result.1.timed_out() || *result.0 {
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    fn update_wire_now(&self, wire: &Wire) {
+        let mut state = WireState::None;
+        let mut delayed_pins = vec![];
+        for (_, point) in wire.points.iter() {
+            if let Some(pin_arc) = &point.pin {
+                let pin = pin_arc.read().unwrap();
+
+                match pin.direction(&self.state) {
+                    PinDirection::Inside => {}
+                    PinDirection::Outside => state = state.combine(pin.get_state(&self.state)),
+                    PinDirection::Custom(_) => delayed_pins.push(pin_arc),
+                }
+            }
+        }
+
+        for pin in delayed_pins {
+            let pin = pin.read().unwrap();
+            if let PinDirection::Custom(h) = pin.direction(&self.state) {
+                (h.mutate_state)(&self.state, &pin, &mut state)
+            }
+        }
+
+        let current = self.state.get_wire(wire.id);
+        if *current.read().unwrap() == state {
+            return;
+        }
+
+        *current.write().unwrap() = state;
+        for (_, point) in wire.points.iter() {
+            if let Some(pin) = &point.pin {
+                let pin = pin.read().unwrap();
+
+                match pin.direction(&self.state) {
+                    PinDirection::Inside => pin.set_input(&self.state, state, true),
+                    PinDirection::Outside => {}
+                    PinDirection::Custom(_) => pin.set_input(&self.state, state, true),
+                }
+            }
+        }
+    }
+
+    fn update_circuit_signals_now(&self, circuit: &Circuit, pin: Option<usize>) {
+        circuit
+            .imp
+            .write()
+            .unwrap()
+            .update_signals(&CircuitStateContext::new(&self.state, circuit), pin)
+    }
+
+    fn update_pin_input_now(&self, circuit: &Circuit, id: usize) {
+        let info = circuit.info.read().unwrap();
+        let pin_info = unwrap_option_or_return!(info.pins.get(id));
+
+        let ctx = CircuitStateContext::new(&self.state, circuit);
+        let old_state = pin_info.get_input(&ctx);
+
+        let pin = pin_info.pin.clone();
+        let pin = pin.write().unwrap();
+
+        match pin.direction(&self.state) {
+            PinDirection::Inside => {}
+            PinDirection::Custom(_) => {}
+            PinDirection::Outside => return,
+        }
+
+        drop(info);
+
+        let pin_wire = pin.connected_wire();
+
+        let new_state = match pin_wire {
+            None => WireState::default(),
+            Some(id) => self.state.read_wire(id),
+        };
+
+        if old_state == new_state {
+            return;
+        }
+
+        pin.set_input(&self.state, new_state, false);
+        drop(pin);
+
+        self.update_circuit_signals_now(circuit, Some(id));
+    }
+}
+
+#[cfg(test)]
+mod test {
+
+    fn sync_send<T: Sync + Send>() {}
+
+    #[test]
+    fn sync_send_state() {
+        sync_send::<super::State>();
     }
 }

@@ -2,6 +2,7 @@
 #![feature(generic_const_exprs)]
 #![feature(int_roundings)]
 #![feature(lazy_cell)]
+#![feature(thread_id_value)]
 
 use std::{f32::consts::PI, mem::size_of, ops::Range, sync::Arc, time::Instant};
 
@@ -431,7 +432,7 @@ impl eframe::App for App {
         self.last_win_pos = int_info.window_info.position;
         self.last_win_size = int_info.window_info.size;
 
-        self.board.state.update(&self.board.board.read().unwrap());
+        //self.board.state.update(&self.board.board.read().unwrap());
 
         if ctx.input(|input| input.key_pressed(Key::F9)) {
             self.debug = !self.debug;
@@ -460,8 +461,9 @@ impl eframe::App for App {
 impl App {
     fn new() -> Self {
         let board = CircuitBoard::new();
-        let state_id = board.states.create_state().0;
+        let states = board.states.clone();
         let board = Arc::new(RwLock::new(board));
+        let state_id = states.create_state(board.clone()).0;
 
         Self {
             pan_zoom: PanAndZoom::new(0.0.into(), 16.0),
@@ -707,6 +709,7 @@ Selected: {:?}
 [F9] Debug: {}
 
 Wire parts drawn: {}
+State thread id: {:?}
 "#,
                 self.pan_zoom.pos,
                 bounds.tiles_tl,
@@ -718,7 +721,8 @@ Wire parts drawn: {}
                 self.debug,
                 self.board
                     .wires_drawn
-                    .load(std::sync::atomic::Ordering::Relaxed)
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                self.board.state.thread().map(|id| id.as_u64().get())
             ),
             font_id,
             Color32::WHITE,

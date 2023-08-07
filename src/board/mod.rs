@@ -1,5 +1,5 @@
 use std::{
-    cell::RefCell,
+    cell::{RefCell, OnceCell},
     collections::{hash_map::DefaultHasher, HashMap, HashSet},
     f32::consts::TAU,
     hash::Hasher,
@@ -7,7 +7,7 @@ use std::{
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
-    },
+    }, mem::MaybeUninit,
 };
 
 use eframe::{

@@ -3,7 +3,7 @@ use std::{
     collections::HashMap,
     sync::{
         atomic::{AtomicU64, Ordering},
-        RwLock, RwLockReadGuard, RwLockWriteGuard, LockResult, PoisonError,
+        RwLock, RwLockReadGuard, RwLockWriteGuard, LockResult, PoisonError, Mutex,
     }, ops::{Deref, DerefMut}, panic::Location,
 };
 
@@ -33,10 +33,12 @@ pub struct DebugRwLock<T: ?Sized> {
     inner: RwLock<T>,
 }
 
+// unsafe impl<T> Send for DebugRwLock<T> {}
+// unsafe impl<T> Sync for DebugRwLock<T> {}
+
 impl<T> DebugRwLock<T> {
     pub fn new(value: T) -> Self {
         let id = DRWLOCK_ID.fetch_add(1, Ordering::Relaxed);
-
         Self {
             id,
             inner: RwLock::new(value),
@@ -224,5 +226,14 @@ where
     match result {
         Ok(t) => Ok(f(t)),
         Err(err) => Err(PoisonError::new(f(err.into_inner()))),
+    }
+}
+
+#[cfg(test)]
+mod test {
+    fn sync_send<T: Sync + Send>() {}
+
+    fn sync_send_rwlock() {
+        sync_send::<super::DebugRwLock<()>>();
     }
 }
