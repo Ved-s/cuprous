@@ -19,6 +19,7 @@ impl Circuit {
                     },
                     write_state: |_, _, _| {},
                 }),
+                "pin"
             ),
         }
     }
@@ -60,5 +61,9 @@ impl CircuitPreview for Preview {
 
     fn create_impl(&self) -> Box<dyn CircuitImpl> {
         Box::new(Circuit::new())
+    }
+    
+    fn type_name(&self) -> DynStaticStr {
+        "pullup".into()
     }
 }

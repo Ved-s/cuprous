@@ -10,7 +10,7 @@ struct Circuit {
 impl Circuit {
     fn new() -> Self {
         Self {
-            out_pin: CircuitPinInfo::new([2, 1], InternalPinDirection::Outside),
+            out_pin: CircuitPinInfo::new([2, 1], InternalPinDirection::Outside, "out"),
         }
     }
 
@@ -89,5 +89,9 @@ impl CircuitPreview for Preview {
 
     fn create_impl(&self) -> Box<dyn CircuitImpl> {
         Box::new(Circuit::new())
+    }
+
+    fn type_name(&self) -> DynStaticStr {
+        "button".into()
     }
 }

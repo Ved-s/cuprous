@@ -1,16 +1,19 @@
 use std::{collections::HashMap, num::NonZeroU32, sync::Arc};
 
 use eframe::epaint::Color32;
+use serde::{Serialize, Serializer};
 
 use crate::{
-    circuits::CircuitPin,
+    circuits::{CircuitPin, DynStaticStr},
     state::StateCollection,
     vector::{Vec2i, Vector},
-    Direction2, Direction4, OptionalInt, OptionalNonzeroInt, RwLock, SizeCalc, State, DirectionPosItreator,
+    Direction2, Direction4, DirectionPosItreator, OptionalInt, OptionalNonzeroInt, RwLock,
+    SizeCalc, State,
 };
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize)]
 pub struct Wire {
+    #[serde(skip)]
     pub id: usize,
     pub points: HashMap<Vec2i, WirePoint>,
 }
@@ -25,10 +28,12 @@ impl Wire {
         pos: Vector<2, i32>,
         states: &StateCollection,
         point: Option<WirePoint>,
-        update_wire: bool
+        update_wire: bool,
     ) {
         match point {
-            Some(point) => { self.points.insert(pos, point); }
+            Some(point) => {
+                self.points.insert(pos, point);
+            }
             None => {
                 if let Some(point) = self.points.remove(&pos) {
                     if let Some(pin) = point.pin {
@@ -37,7 +42,6 @@ impl Wire {
                 }
             }
         }
-        
 
         if update_wire {
             states.update_wire(self.id);
@@ -45,12 +49,42 @@ impl Wire {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize)]
 pub struct WirePoint {
+    #[serde(skip_serializing_if = "is_false")]
     pub up: bool,
+    #[serde(skip_serializing_if = "is_false")]
     pub left: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(serialize_with = "serialize_pin_connection")]
     pub pin: Option<Arc<RwLock<CircuitPin>>>,
 }
+
+fn is_false(bool: &bool) -> bool {
+    !bool
+}
+
+fn serialize_pin_connection<S: Serializer>(pin: &Option<Arc<RwLock<CircuitPin>>>, serializer: S) -> Result<S::Ok, S::Error> {
+    
+    #[derive(Serialize)]
+    struct NamedCircuitPinId {
+        name: DynStaticStr,
+        circuit: usize
+    }
+    
+    if let Some(pin) = pin {
+        let pin = pin.read().unwrap();
+        let id = NamedCircuitPinId {
+            name: pin.name(),
+            circuit: pin.id.circuit_id,
+        };
+        id.serialize(serializer)
+    }
+    else {
+        serializer.serialize_unit()
+    }
+}
+
 pub struct WirePart {
     pub pos: Vec2i,
     pub length: NonZeroU32,
@@ -59,7 +93,8 @@ pub struct WirePart {
 
 impl WirePart {
     pub fn iter_pos(&self, include_start: bool) -> DirectionPosItreator {
-        self.dir.iter_pos_along(self.pos, self.length.get() as i32, include_start)
+        self.dir
+            .iter_pos_along(self.pos, self.length.get() as i32, include_start)
     }
 }
 

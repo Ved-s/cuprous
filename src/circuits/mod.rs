@@ -1,4 +1,6 @@
-use std::{sync::Arc, time::Duration};
+use std::{ops::Deref, sync::Arc, time::Duration};
+
+use serde::{Deserialize, Serialize, Serializer, ser::SerializeMap};
 
 use crate::{
     state::{CircuitState, InternalCircuitState, State, StateCollection, WireState},
@@ -39,7 +41,7 @@ pub enum PinDirection {
     Custom(CustomPinHandler),
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct CircuitPinId {
     pub id: usize,
     pub circuit_id: usize,
@@ -53,6 +55,7 @@ impl CircuitPinId {
 
 #[derive(Debug)]
 pub struct CircuitPin {
+    name: DynStaticStr,
     pub id: CircuitPinId,
     wire: Option<usize>,
     dir: InternalPinDirection,
@@ -113,6 +116,10 @@ impl CircuitPin {
         }
     }
 
+    pub fn name(&self) -> DynStaticStr {
+        self.name.clone()
+    }
+
     pub fn connected_wire(&self) -> Option<usize> {
         self.wire
     }
@@ -159,6 +166,7 @@ impl CircuitPin {
 
 #[derive(Debug, Clone)]
 pub struct CircuitPinInfo {
+    pub name: DynStaticStr,
     pub pos: Vec2u,
     pub pin: Arc<RwLock<CircuitPin>>,
 }
@@ -178,15 +186,11 @@ impl CircuitPinInfo {
     }
 
     pub fn set_output(&self, state_ctx: &CircuitStateContext, value: WireState) {
-        let CircuitPin {
-            id: CircuitPinId { circuit_id: _, id },
-            wire,
-            dir: _,
-        } = *self.pin.read().unwrap();
+        let pin = self.pin.read().unwrap();
 
         let current = state_ctx
             .read_circuit_state()
-            .map(|arc| arc.read().unwrap().pins.get_clone(id).unwrap_or_default())
+            .map(|arc| arc.read().unwrap().pins.get_clone(pin.id.id).unwrap_or_default())
             .unwrap_or_default();
         if current == value {
             return;
@@ -197,8 +201,8 @@ impl CircuitPinInfo {
             .write()
             .unwrap()
             .pins
-            .set(value, id);
-        if let Some(wire) = wire {
+            .set(value, pin.id.id);
+        if let Some(wire) = pin.wire {
             state_ctx.global_state.update_wire(wire)
         }
     }
@@ -244,23 +248,85 @@ impl CircuitPinInfo {
 }
 
 impl CircuitPinInfo {
-    fn new(pos: impl Into<Vec2u>, dir: InternalPinDirection) -> Self {
+    fn new(pos: impl Into<Vec2u>, dir: InternalPinDirection, name: impl Into<DynStaticStr>) -> Self {
+        let name = name.into();
         Self {
             pos: pos.into(),
             pin: Arc::new(RwLock::new(CircuitPin {
                 id: Default::default(),
                 dir,
                 wire: None,
+                name: name.clone()
             })),
+            name  
         }
     }
 }
 
+#[derive(Clone, Debug)]
+pub enum DynStaticStr {
+    Static(&'static str),
+    Dynamic(Arc<str>),
+}
+
+impl Serialize for DynStaticStr {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.deref())
+    }
+}
+
+impl Deref for DynStaticStr {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            DynStaticStr::Static(str) => str,
+            DynStaticStr::Dynamic(arc) => arc.deref(),
+        }
+    }
+}
+
+impl From<&'static str> for DynStaticStr {
+    fn from(value: &'static str) -> Self {
+        Self::Static(value)
+    }
+}
+
+impl From<Arc<str>> for DynStaticStr {
+    fn from(value: Arc<str>) -> Self {
+        Self::Dynamic(value)
+    }
+}
+
+#[derive(Serialize)]
 pub struct Circuit {
+    pub ty: DynStaticStr,
+    #[serde(skip)]
     pub id: usize,
     pub pos: Vec2i,
+
+    #[serde(rename = "pin_wires")]
+    #[serde(serialize_with = "serialize_circuit_info")]
     pub info: Arc<RwLock<CircuitInfo>>,
+    #[serde(skip)] // TODO
     pub imp: Arc<RwLock<Box<dyn CircuitImpl>>>,
+}
+
+fn serialize_circuit_info<S: Serializer>(info: &Arc<RwLock<CircuitInfo>>, serializer: S) -> Result<S::Ok, S::Error> {
+    let info = info.read().unwrap();
+
+    let mut map_ser = serializer.serialize_map(None)?;
+
+    for info in info.pins.iter() {
+        let pin = info.pin.read().unwrap();
+        if let Some(wire) = pin.connected_wire() {
+            map_ser.serialize_entry(&info.name, &wire)?;
+        }
+    }
+    map_ser.end()
 }
 
 impl Circuit {
@@ -279,6 +345,7 @@ impl Circuit {
                 pins,
             })),
             imp: Arc::new(RwLock::new(imp)),
+            ty: preview.type_name(),
         }
     }
 }
@@ -360,6 +427,7 @@ pub trait CircuitImpl: Send + Sync {
     }
 }
 pub trait CircuitPreview {
+    fn type_name(&self) -> DynStaticStr;
     fn draw_preview(&self, ctx: &PaintContext, in_world: bool);
     fn size(&self) -> Vec2u;
     fn create_impl(&self) -> Box<dyn CircuitImpl>;

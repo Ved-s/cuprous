@@ -15,6 +15,7 @@ use eframe::{
     epaint::{Color32, Rounding, Stroke},
 };
 use emath::{vec2, Align2, Rect};
+use serde::Serialize;
 
 use crate::{
     circuits::{Circuit, CircuitNode, CircuitPin, CircuitPreview, CircuitStateContext},
@@ -30,9 +31,12 @@ use self::selection::{SelectedWorldObject, Selection};
 
 pub mod selection;
 
+#[derive(Serialize)]
 pub struct CircuitBoard {
     pub wires: FixedVec<Wire>,
     pub circuits: FixedVec<Circuit>,
+
+    #[serde(skip)] // TODO
     pub states: StateCollection,
 }
 
@@ -902,7 +906,9 @@ impl ActiveCircuitBoard {
                     }
                 }
                 if let Some(pin) = &pin {
-                    pin.write().unwrap().set_wire(&states, Some(wire), false, true);
+                    pin.write()
+                        .unwrap()
+                        .set_wire(&states, Some(wire), false, true);
                 }
             }
         }

@@ -7,7 +7,9 @@ edition = "2021"
 
 [dependencies]
 bezier-nd = "0.5.0"
-eframe = "0.22.0"
+eframe = { version = "0.22.0", features = ["persistence"] }
 emath = "0.22.0"
 geo-nd = "0.5.0"
 paste = "1.0.12"
+ron = "0.8.0"
+serde = "1.0.183"

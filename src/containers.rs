@@ -4,12 +4,40 @@ use std::{
     ops::Range,
 };
 
-use crate::{vector::{Vector, Vec2isize, Vec2usize}, SizeCalc, Intersect, unwrap_option_or_continue};
+use serde::{Deserialize, Serialize};
+
+use crate::{
+    unwrap_option_or_continue,
+    vector::{Vec2isize, Vec2usize, Vector},
+    Intersect, SizeCalc,
+};
 
 #[derive(Debug, Clone)]
 pub struct FixedVec<T> {
     vec: Vec<Option<T>>,
     first_free: Option<usize>,
+}
+
+impl<T: Serialize> Serialize for FixedVec<T> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.vec.serialize(serializer)
+    }
+}
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for FixedVec<T> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let vec = Vec::<Option<T>>::deserialize(deserializer)?;
+        let first_free = vec.iter().enumerate().find_map(|(i, o)| match o {
+            Some(_) => None,
+            None => Some(i),
+        });
+        Ok(Self { vec, first_free })
+    }
 }
 
 impl<T: Default> Default for FixedVec<T> {
@@ -167,6 +195,10 @@ impl<T> FixedVec<T> {
         self.vec.is_empty()
     }
 
+    pub fn inner(&self) -> &Vec<Option<T>> {
+        &self.vec
+    }
+
     fn test_free_correct(&self) {
         assert!(!self.first_free.is_some_and(|v| self.get(v).is_some()));
     }
@@ -302,7 +334,10 @@ impl<const CHUNK_SIZE: usize, T: Default> Chunks2D<CHUNK_SIZE, T> {
             .and_then(|row| row.get(qx)?.as_ref().map(|b| b.as_ref()))
     }
 
-    pub fn get_chunk_mut(&mut self, pos: impl Into<Vec2isize>) -> Option<&mut Chunk<CHUNK_SIZE, T>> {
+    pub fn get_chunk_mut(
+        &mut self,
+        pos: impl Into<Vec2isize>,
+    ) -> Option<&mut Chunk<CHUNK_SIZE, T>> {
         let ((qx, qy), qid) = Self::to_quarter_id_pos(pos.into());
         let quarter = &mut self.quarters[qid];
         let row = quarter.get_mut(qy)?;
@@ -310,7 +345,10 @@ impl<const CHUNK_SIZE: usize, T: Default> Chunks2D<CHUNK_SIZE, T> {
             .and_then(|row| row.get_mut(qx)?.as_mut().map(|b| b.as_mut()))
     }
 
-    pub fn get_or_create_chunk_mut(&mut self, pos: impl Into<Vec2isize>) -> &mut Chunk<CHUNK_SIZE, T> {
+    pub fn get_or_create_chunk_mut(
+        &mut self,
+        pos: impl Into<Vec2isize>,
+    ) -> &mut Chunk<CHUNK_SIZE, T> {
         let ((qx, qy), qid) = Self::to_quarter_id_pos(pos.into());
         let quarter = &mut self.quarters[qid];
 
@@ -438,8 +476,13 @@ impl<const CHUNK_SIZE: usize, T: Default> Chunks2D<CHUNK_SIZE, T> {
         }
     }
 
-    pub fn for_each_item<P>(&self, tl: Vector<2, isize>, br: Vector<2, isize>, pass: &P, f: impl Fn(Vector<2, isize>, &T, &P)) {
-
+    pub fn for_each_item<P>(
+        &self,
+        tl: Vector<2, isize>,
+        br: Vector<2, isize>,
+        pass: &P,
+        f: impl Fn(Vector<2, isize>, &T, &P),
+    ) {
         let chunks_tl = tl.convert(|v| v.div_floor(CHUNK_SIZE as isize));
         let chunks_br = br.convert(|v| v.div_floor(CHUNK_SIZE as isize));
 
@@ -473,16 +516,15 @@ impl<const CHUNK_SIZE: usize, T: Default> Chunks2D<CHUNK_SIZE, T> {
                         }
 
                         let item = &chunk[i as usize][j as usize];
- 
+
                         let pos = chunk_tl + [i, j];
-                        
+
                         f(pos, item, pass);
                     }
                 }
             }
         }
     }
-
 }
 
 pub struct ChunksAreaIterator<'a, const CHUNK_SIZE: usize, T: Default> {
@@ -521,15 +563,13 @@ impl<'a, const CHUNK_SIZE: usize, T: Default> ChunksAreaIterator<'a, CHUNK_SIZE,
                 }
             }
 
-            self.chunk = self
-                .chunks
-                .get_chunk(self.chunk_pos);
+            self.chunk = self.chunks.get_chunk(self.chunk_pos);
 
             match self.chunk {
                 Some(_) => {
                     self.set_in_chunk_start_pos();
-                    return true
-                },
+                    return true;
+                }
                 None => continue,
             }
         }
@@ -570,7 +610,7 @@ impl<'a, const CHUNK_SIZE: usize, T: Default> ChunksAreaIterator<'a, CHUNK_SIZE,
                 return;
             }
         }
-        
+
         self.in_chunk_pos = pos;
     }
 
@@ -587,7 +627,6 @@ impl<'a, const CHUNK_SIZE: usize, T: Default> ChunksAreaIterator<'a, CHUNK_SIZE,
             0
         };
         self.in_chunk_pos = [x_start, y_start].into();
-
     }
 }
 

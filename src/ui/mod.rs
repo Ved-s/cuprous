@@ -75,7 +75,7 @@ impl Inventory<'_> {
             NUMBER_KEYS
                 .iter()
                 .enumerate()
-                .find(|t| input.key_pressed(*t.1))
+                .find(|t| input.num_presses(*t.1) == 1)
                 .map(|t| t.0)
         });
 
@@ -332,12 +332,5 @@ fn apply_margin_to_rect(rect: Rect, margin: Margin) -> Rect {
     Rect {
         min: rect.min + margin.left_top(),
         max: rect.max - margin.right_bottom(),
-    }
-}
-
-fn apply_margin_to_rect_inverse(rect: Rect, margin: Margin) -> Rect {
-    Rect {
-        min: rect.min - margin.left_top(),
-        max: rect.max + margin.right_bottom(),
     }
 }

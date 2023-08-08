@@ -21,13 +21,14 @@ pub struct Circuit {
 impl Circuit {
     fn new() -> Self {
         Self {
-            clock_pin: CircuitPinInfo::new([0, 0], InternalPinDirection::Outside),
-            dir_pin: CircuitPinInfo::new([0, 1], InternalPinDirection::Inside),
+            clock_pin: CircuitPinInfo::new([0, 0], InternalPinDirection::Outside, "clock"),
+            dir_pin: CircuitPinInfo::new([0, 1], InternalPinDirection::Inside, "dir"),
             io_pin: CircuitPinInfo::new(
                 [1, 1],
                 InternalPinDirection::StateDependent {
                     default: PinDirection::Outside,
                 },
+                "io"
             ),
         }
     }
@@ -164,5 +165,9 @@ impl CircuitPreview for Preview {
 
     fn create_impl(&self) -> Box<dyn CircuitImpl> {
         Box::new(Circuit::new())
+    }
+
+    fn type_name(&self) -> DynStaticStr {
+        "test".into()
     }
 }

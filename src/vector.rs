@@ -379,6 +379,30 @@ impl<T: VectorValue, const SIZE: usize> std::ops::IndexMut<usize> for Vector<SIZ
     }
 }
 
+impl<T: serde::Serialize + VectorValue, const SIZE: usize> serde::Serialize for Vector<SIZE, T> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.0.serialize(serializer)
+    }
+}
+
+impl<'de, T: serde::Deserialize<'de> + VectorValue, const SIZE: usize> serde::Deserialize<'de>
+    for Vector<SIZE, T>
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let vec = <Vec<T>>::deserialize(deserializer)?;
+        let mut arr = [T::default(); SIZE];
+        let size = SIZE.min(vec.len());
+        arr[size..].copy_from_slice(&vec[size..]);
+        Ok(Self(arr))
+    }
+}
+
 impl<T: geo_nd::Float + VectorValue + FloatMath + IsZero, const SIZE: usize> geo_nd::Vector<T, SIZE>
     for Vector<SIZE, T>
 {

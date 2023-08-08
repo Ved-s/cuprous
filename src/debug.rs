@@ -7,6 +7,8 @@ use std::{
     }, ops::{Deref, DerefMut}, panic::Location,
 };
 
+use serde::{Serialize, Deserialize};
+
 use crate::containers::FixedVec;
 
 static DRWLOCK_ID: AtomicU64 = AtomicU64::new(0);
@@ -28,9 +30,17 @@ fn access_map<R>(accessor: impl FnOnce(&mut HashMap<u64, LockType>) -> R) -> R {
     })
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct DebugRwLock<T: ?Sized> {
+
+    #[serde(skip)]
+    #[serde(default = "new_drwlock_id")]
     id: u64,
     inner: RwLock<T>,
+}
+
+fn new_drwlock_id() -> u64 {
+    DRWLOCK_ID.fetch_add(1, Ordering::Relaxed)
 }
 
 // unsafe impl<T> Send for DebugRwLock<T> {}
@@ -38,7 +48,7 @@ pub struct DebugRwLock<T: ?Sized> {
 
 impl<T> DebugRwLock<T> {
     pub fn new(value: T) -> Self {
-        let id = DRWLOCK_ID.fetch_add(1, Ordering::Relaxed);
+        let id = new_drwlock_id();
         Self {
             id,
             inner: RwLock::new(value),
@@ -233,6 +243,7 @@ where
 mod test {
     fn sync_send<T: Sync + Send>() {}
 
+    #[test]
     fn sync_send_rwlock() {
         sync_send::<super::DebugRwLock<()>>();
     }

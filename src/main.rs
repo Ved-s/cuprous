@@ -3,6 +3,7 @@
 #![feature(int_roundings)]
 #![feature(lazy_cell)]
 #![feature(thread_id_value)]
+#![feature(string_leak)]
 
 use std::{f32::consts::PI, mem::size_of, ops::Range, sync::Arc, time::Instant};
 
@@ -459,6 +460,12 @@ impl eframe::App for App {
 
                 self.selected_id = selected;
             });
+    }
+
+    fn save(&mut self, _storage: &mut dyn eframe::Storage) {
+        let board = self.board.board.read().unwrap();
+        let json = ron::to_string(&*board).unwrap();
+        _storage.set_string("board", json);
     }
 }
 

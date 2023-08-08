@@ -18,11 +18,11 @@ impl Circuit {
         Self {
             template,
             inputs: vec![
-                CircuitPinInfo::new([0, 0], InternalPinDirection::Inside),
-                CircuitPinInfo::new([0, 2], InternalPinDirection::Inside),
+                CircuitPinInfo::new([0, 0], InternalPinDirection::Inside, "in_0"),
+                CircuitPinInfo::new([0, 2], InternalPinDirection::Inside, "in_1"),
             ]
             .into_boxed_slice(),
-            output: CircuitPinInfo::new([3, 1], InternalPinDirection::Outside),
+            output: CircuitPinInfo::new([3, 1], InternalPinDirection::Outside, "out"),
         }
     }
 }
@@ -64,5 +64,9 @@ impl CircuitPreview for Preview {
 
     fn create_impl(&self) -> Box<dyn CircuitImpl> {
         Box::new(Circuit::new(self.template.clone()))
+    }
+
+    fn type_name(&self) -> DynStaticStr {
+        self.template.id.into()
     }
 }
