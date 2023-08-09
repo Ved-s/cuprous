@@ -11,6 +11,12 @@ use crate::{
     SizeCalc, State,
 };
 
+#[derive(Debug, Clone, Copy)]
+pub struct FoundWirePoint {
+    pub dist: NonZeroU32,
+    pub pos: Vec2i,
+}
+
 #[derive(Debug, Default, Serialize)]
 pub struct Wire {
     #[serde(skip)]
@@ -47,6 +53,24 @@ impl Wire {
             states.update_wire(self.id);
         }
     }
+
+    pub fn search_wire_point(&self, pos: Vector<2, i32>, dir: Direction2) -> Option<FoundWirePoint> {
+        let current_diff_pos = dir.choose_axis_component(pos.x(), pos.y());
+        let current_eq_pos = dir.choose_axis_component(pos.y(), pos.x());
+        self.points
+            .keys()
+            .filter_map(|pos| {
+                let target_diff_pos = dir.choose_axis_component(pos.x(), pos.y());
+                let target_eq_pos = dir.choose_axis_component(pos.y(), pos.x());
+                let pos_diff = current_diff_pos - target_diff_pos;
+                (target_eq_pos == current_eq_pos && pos_diff > 0).then_some((pos, pos_diff as u32))
+            })
+            .min_by(|a, b| a.1.cmp(&b.1))
+            .map(|(pos, dist)| FoundWirePoint {
+                dist: NonZeroU32::new(dist).expect("unreachable"),
+                pos: *pos,
+            })
+    }
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -60,18 +84,29 @@ pub struct WirePoint {
     pub pin: Option<Arc<RwLock<CircuitPin>>>,
 }
 
+impl WirePoint {
+    pub fn get_dir(&self, dir: Direction2) -> bool {
+        match dir {
+            Direction2::Up => self.up,
+            Direction2::Left => self.left,
+        }
+    }
+}
+
 fn is_false(bool: &bool) -> bool {
     !bool
 }
 
-fn serialize_pin_connection<S: Serializer>(pin: &Option<Arc<RwLock<CircuitPin>>>, serializer: S) -> Result<S::Ok, S::Error> {
-    
+fn serialize_pin_connection<S: Serializer>(
+    pin: &Option<Arc<RwLock<CircuitPin>>>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
     #[derive(Serialize)]
     struct NamedCircuitPinId {
         name: DynStaticStr,
-        circuit: usize
+        circuit: usize,
     }
-    
+
     if let Some(pin) = pin {
         let pin = pin.read().unwrap();
         let id = NamedCircuitPinId {
@@ -79,8 +114,7 @@ fn serialize_pin_connection<S: Serializer>(pin: &Option<Arc<RwLock<CircuitPin>>>
             circuit: pin.id.circuit_id,
         };
         id.serialize(serializer)
-    }
-    else {
+    } else {
         serializer.serialize_unit()
     }
 }

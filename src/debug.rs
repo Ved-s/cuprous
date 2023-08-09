@@ -30,13 +30,29 @@ fn access_map<R>(accessor: impl FnOnce(&mut HashMap<u64, LockType>) -> R) -> R {
     })
 }
 
-#[derive(Serialize, Deserialize)]
 pub struct DebugRwLock<T: ?Sized> {
-
-    #[serde(skip)]
-    #[serde(default = "new_drwlock_id")]
     id: u64,
+
     inner: RwLock<T>,
+}
+
+impl<'de, T: ?Sized + Deserialize<'de>> Deserialize<'de> for DebugRwLock<T> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de> {
+        Ok(Self {
+            id: new_drwlock_id(),
+            inner: RwLock::<T>::deserialize(deserializer)?
+        })
+    }
+}
+
+impl<T: ?Sized + Serialize> Serialize for DebugRwLock<T> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer {
+        self.inner.serialize(serializer)
+    }
 }
 
 fn new_drwlock_id() -> u64 {

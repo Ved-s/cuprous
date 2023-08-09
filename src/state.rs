@@ -1,11 +1,12 @@
 use std::{
-    any::Any,
+    any::{Any, TypeId},
     sync::{Arc, Condvar},
     thread::{self, JoinHandle, ThreadId},
     time::{Duration, Instant},
 };
 
 use eframe::epaint::Color32;
+use serde::{Deserialize, Serialize, Serializer};
 
 use crate::{
     board::CircuitBoard,
@@ -16,14 +17,14 @@ use crate::{
     Mutex, RwLock,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum UpdateTask {
     CircuitSignals { id: usize, pin: Option<usize> },
     WireState(usize),
     PinInput { circuit: usize, id: usize },
 }
 
-#[derive(Default, Clone, Copy, Eq, PartialEq)]
+#[derive(Default, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
 pub enum WireState {
     #[default]
     None,
@@ -84,31 +85,50 @@ impl From<bool> for WireState {
     }
 }
 
-pub trait InternalCircuitState: Any + Send + Sync + Default {}
+pub trait InternalCircuitState: Any + Send + Sync {
+    fn serialize(&self) -> serde_intermediate::Intermediate {
+        ().into()
+    }
+}
 
-#[derive(Default)]
+#[derive(Default, Serialize)]
 pub struct CircuitState {
     pub pins: FixedVec<WireState>,
     pub pin_dirs: FixedVec<PinDirection>,
-    pub internal: Option<Box<dyn Any + Send + Sync>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(serialize_with = "serialize_internal_circuit_state")]
+    pub internal: Option<Box<dyn InternalCircuitState>>,
+}
+
+fn serialize_internal_circuit_state<S: Serializer>(
+    internal: &Option<Box<dyn InternalCircuitState>>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    internal
+        .as_ref()
+        .map(|s| s.serialize())
+        .serialize(serializer)
 }
 
 impl CircuitState {
     pub fn get_internal<T: InternalCircuitState>(&self) -> Option<&T> {
-        self.internal.as_ref()?.downcast_ref()
+        self.internal
+            .as_ref()
+            .map(|b| unsafe { &*(b.as_ref() as *const dyn InternalCircuitState as *const T) })
     }
 
-    pub fn get_internal_mut<T: InternalCircuitState>(&mut self) -> &mut T {
+    pub fn get_internal_mut<T: InternalCircuitState + Default>(&mut self) -> &mut T {
         let b = self.internal.get_or_insert_with(|| Box::<T>::default());
-        if !b.is::<T>() {
+        if (**b).type_id() != TypeId::of::<T>() {
             *b = Box::<T>::default();
         }
 
-        b.downcast_mut().expect("unreachable")
+        unsafe { &mut *(b.as_mut() as *mut dyn InternalCircuitState as *mut T) }
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub struct StateCollection {
     states: Arc<RwLock<FixedVec<Arc<State>>>>,
 }
@@ -167,17 +187,40 @@ impl StateCollection {
             state.init_circuit(circuit);
         }
     }
+
+    pub fn states(&self) -> &RwLock<FixedVec<Arc<State>>> {
+        self.states.as_ref()
+    }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub struct State {
     pub wires: Arc<RwLock<FixedVec<Arc<RwLock<WireState>>>>>,
     pub circuits: Arc<RwLock<FixedVec<Arc<RwLock<CircuitState>>>>>,
 
     queue: Arc<Mutex<RandomQueue<UpdateTask>>>,
+
+    #[serde(skip)]
     thread: Arc<RwLock<Option<StateThreadHandle>>>,
+    #[serde(skip)]
     board: Arc<RwLock<CircuitBoard>>,
+
+    #[serde(serialize_with = "serialize_state_updates")]
     pub updates: Arc<Mutex<Vec<(usize, Instant)>>>,
+}
+
+fn serialize_state_updates<S: Serializer>(
+    updates: &Arc<Mutex<Vec<(usize, Instant)>>>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    let now = Instant::now();
+    serializer.collect_seq(
+        updates
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(id, time)| (id, time.checked_duration_since(now))),
+    )
 }
 
 impl State {
@@ -375,8 +418,7 @@ impl State {
         self.thread.read().ok()?.as_ref().and_then(|thread| {
             if thread.handle.is_finished() {
                 None
-            }
-            else {
+            } else {
                 Some(thread.handle.thread().id())
             }
         })

@@ -3,9 +3,8 @@
 #![feature(int_roundings)]
 #![feature(lazy_cell)]
 #![feature(thread_id_value)]
-#![feature(string_leak)]
 
-use std::{f32::consts::PI, mem::size_of, ops::Range, sync::Arc, time::Instant};
+use std::{f32::consts::PI, mem::size_of, ops::Range, sync::Arc, time::Instant, fs::File, io::Write};
 
 use board::{selection::Selection, ActiveCircuitBoard, CircuitBoard, SelectedBoardItem};
 use eframe::{
@@ -17,6 +16,7 @@ use emath::{pos2, vec2, Align2, Pos2, Rect, Vec2};
 mod r#const;
 
 mod vector;
+
 use ui::{Inventory, InventoryItem, InventoryItemGroup};
 use vector::{Vec2f, Vec2i, Vector};
 
@@ -438,6 +438,11 @@ impl eframe::App for App {
         if ctx.input(|input| input.key_pressed(Key::F9)) {
             self.debug = !self.debug;
         }
+        
+        if ctx.input(|input| input.key_pressed(Key::F8)) {
+            let board = self.board.board.clone();
+            self.board = ActiveCircuitBoard::new(board, 0).unwrap();
+        }
 
         egui::CentralPanel::default()
             .frame(Frame::central_panel(ctx.style().as_ref()).inner_margin(Margin::same(0.0)))
@@ -464,8 +469,7 @@ impl eframe::App for App {
 
     fn save(&mut self, _storage: &mut dyn eframe::Storage) {
         let board = self.board.board.read().unwrap();
-        let json = ron::to_string(&*board).unwrap();
-        _storage.set_string("board", json);
+        _storage.set_string("board", ron::to_string(&*board).unwrap());
     }
 }
 
@@ -1053,6 +1057,13 @@ impl Direction2 {
 
     pub fn move_vector(self, vec: Vec2i, distance: i32, forward: bool) -> Vec2i {
         vec + self.unit_vector(forward) * distance
+    }
+
+    pub fn choose_axis_component<T>(self, x: T, y: T) -> T {
+        match self {
+            Direction2::Up => y,
+            Direction2::Left => x,
+        }
     }
 
     /// if include_start { returns dist values } else { returns start pos + dist values }

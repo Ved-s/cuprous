@@ -32,12 +32,14 @@ pub enum InternalPinDirection {
     Custom(CustomPinHandler),
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PinDirection {
     Inside,
 
     #[default]
     Outside,
+
+    #[serde(skip)]
     Custom(CustomPinHandler),
 }
 
@@ -311,22 +313,22 @@ pub struct Circuit {
     #[serde(rename = "pin_wires")]
     #[serde(serialize_with = "serialize_circuit_info")]
     pub info: Arc<RwLock<CircuitInfo>>,
-    #[serde(skip)] // TODO
+    
+    #[serde(serialize_with = "serialize_circuit_impl")]
     pub imp: Arc<RwLock<Box<dyn CircuitImpl>>>,
 }
 
 fn serialize_circuit_info<S: Serializer>(info: &Arc<RwLock<CircuitInfo>>, serializer: S) -> Result<S::Ok, S::Error> {
     let info = info.read().unwrap();
-
-    let mut map_ser = serializer.serialize_map(None)?;
-
-    for info in info.pins.iter() {
+    
+    let map: Vec<_> = info.pins.iter().filter_map(|info| {
         let pin = info.pin.read().unwrap();
-        if let Some(wire) = pin.connected_wire() {
-            map_ser.serialize_entry(&info.name, &wire)?;
-        }
-    }
-    map_ser.end()
+        pin.connected_wire().map(|wire| (info.name.clone(), wire))
+    }).collect();
+    serializer.collect_map(map)
+}
+fn serialize_circuit_impl<S: Serializer>(imp: &Arc<RwLock<Box<dyn CircuitImpl>>>, serializer: S) -> Result<S::Ok, S::Error> {
+    imp.read().unwrap().serialize().serialize(serializer)
 }
 
 impl Circuit {
@@ -384,7 +386,7 @@ impl<'a> CircuitStateContext<'a> {
         ))
     }
 
-    pub fn write_circuit_internal_state<T: InternalCircuitState, R>(
+    pub fn write_circuit_internal_state<T: InternalCircuitState + Default, R>(
         &self,
         writer: impl FnOnce(&mut T) -> R,
     ) -> R {
@@ -424,6 +426,10 @@ pub trait CircuitImpl: Send + Sync {
 
     fn draw_pin_points(&self) -> bool {
         true
+    }
+
+    fn serialize(&self) -> serde_intermediate::Intermediate {
+        ().into()
     }
 }
 pub trait CircuitPreview {

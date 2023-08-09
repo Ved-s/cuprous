@@ -68,12 +68,16 @@ impl CircuitImpl for Circuit {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Serialize, Deserialize)]
 struct State {
     state: bool,
 }
 
-impl InternalCircuitState for State {}
+impl InternalCircuitState for State {
+    fn serialize(&self) -> serde_intermediate::Intermediate {
+        serde_intermediate::to_intermediate(self).unwrap()
+    }
+}
 
 #[derive(Debug)]
 pub struct Preview {}

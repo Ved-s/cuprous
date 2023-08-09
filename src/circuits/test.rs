@@ -4,13 +4,17 @@ use emath::Align2;
 
 use super::*;
 
-#[derive(Default)]
+#[derive(Default, Serialize, Deserialize)]
 pub struct State {
     state: bool,
     dir_in: bool,
 }
 
-impl InternalCircuitState for State {}
+impl InternalCircuitState for State {
+    fn serialize(&self) -> serde_intermediate::Intermediate {
+        serde_intermediate::to_intermediate(self).unwrap()
+    }
+}
 
 pub struct Circuit {
     clock_pin: CircuitPinInfo,

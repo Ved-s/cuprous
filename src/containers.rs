@@ -669,6 +669,14 @@ pub struct RandomQueue<T, S: BuildHasher = RandomState> {
     hasher: <S as BuildHasher>::Hasher,
 }
 
+impl<T: Serialize, H: BuildHasher> Serialize for RandomQueue<T, H> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer {
+        self.vec.inner().serialize(serializer)
+    }
+}
+
 impl<T, S: Default + BuildHasher> Default for RandomQueue<T, S> {
     fn default() -> Self {
         Self::with_hasher(&Default::default())

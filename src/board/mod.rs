@@ -15,14 +15,14 @@ use eframe::{
     epaint::{Color32, Rounding, Stroke},
 };
 use emath::{vec2, Align2, Rect};
-use serde::Serialize;
+use serde::{Serialize, Serializer};
 
 use crate::{
     circuits::{Circuit, CircuitNode, CircuitPin, CircuitPreview, CircuitStateContext},
     containers::{Chunks2D, ChunksLookaround, FixedVec},
     state::{State, StateCollection},
     unwrap_option_or_continue, unwrap_option_or_return,
-    vector::{IsZero, Vec2f, Vec2i},
+    vector::{IsZero, Vec2f, Vec2i, Vec2u},
     wires::{FoundWireNode, TileWires, Wire, WireNode, WirePart, WirePoint},
     Direction2, Direction4, PaintContext, RwLock, Screen,
 };
@@ -36,8 +36,12 @@ pub struct CircuitBoard {
     pub wires: FixedVec<Wire>,
     pub circuits: FixedVec<Circuit>,
 
-    #[serde(skip)] // TODO
+    #[serde(serialize_with = "serialize_state_collection_as_seq")]
     pub states: StateCollection,
+}
+
+fn serialize_state_collection_as_seq<S: Serializer>(states: &StateCollection, serializer: S) -> Result<S::Ok, S::Error> {
+    states.states().read().unwrap().serialize(serializer)
 }
 
 impl CircuitBoard {
@@ -238,10 +242,58 @@ impl ActiveCircuitBoard {
             board.states.get(state)?
         };
 
+        let (wires, circuits) = {
+            let board = board.read().unwrap();
+            let mut wires = Chunks2D::<16, WireNode>::default();
+            let mut circuits = Chunks2D::<16, CircuitNode>::default();
+
+            for wire in board.wires.iter() {
+                let id = wire.id;
+                for (pos, point) in wire.points.iter() {
+                    wires.get_or_create_mut(pos.convert(|v| v as isize)).wire.set(Some(id));
+                    for dir in Direction2::iter_all() {
+                        if let Some(point) = point.get_dir(dir).then(|| wire.search_wire_point(*pos, dir)).flatten() {
+                            for (i, pos) in dir.iter_pos_along(*pos, point.dist.get() as i32, true).enumerate() {
+                                let node = wires.get_or_create_mut(pos.convert(|v| v as isize));
+
+                                let start = i == 0;
+                                let end = i == point.dist.get() as usize;
+
+                                if !start {
+                                    node.get_dir_mut(Direction4::from(dir).inverted()).set(Some(i as u32));
+                                }
+                                if !end {
+                                    node.get_dir_mut(Direction4::from(dir)).set(Some(point.dist.get() - i as u32));
+                                }
+                            }
+                        }
+                    }
+                    
+                }
+            }
+
+            for circuit in board.circuits.iter() {
+                let id = circuit.id;
+                let info = circuit.info.read().unwrap();
+
+                for y in 0..info.size.y() {
+                    for x in 0..info.size.x() {
+                        let dist = Vec2u::from([x, y]);
+                        let pos = circuit.pos + dist.convert(|v| v as i32);
+                        let node = circuits.get_or_create_mut(pos.convert(|v| v as isize));
+                        node.circuit.set(Some(id));
+                        node.origin_dist = dist;
+                    }
+                }
+            }
+
+            (wires, circuits)
+        };
+
         Some(Self {
             board,
-            wire_nodes: Default::default(), // TODO
-            circuit_nodes: Default::default(),
+            wire_nodes: wires,
+            circuit_nodes: circuits,
             state,
             wire_drag_pos: None,
             selection: RefCell::new(Selection::new()),
