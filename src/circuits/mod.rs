@@ -19,12 +19,6 @@ pub struct CircuitInfo {
     pub pins: Box<[CircuitPinInfo]>,
 }
 
-// #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-// pub struct CustomPinHandler {
-//     pub mutate_state: fn(ctx: &State, pin: &CircuitPin, state: &mut WireState),
-//     pub write_state: fn(ctx: &State, pin: &CircuitPin, state: WireState),
-// }
-
 #[derive(Debug, Clone, Copy)]
 pub enum InternalPinDirection {
     StateDependent { default: PinDirection },
