@@ -1,8 +1,9 @@
-use std::{ops::Deref, sync::Arc, time::Duration};
+use std::{hash::Hash, ops::Deref, sync::Arc, time::Duration};
 
-use serde::{Deserialize, Serialize, Serializer, ser::SerializeMap};
+use serde::{Deserialize, Serialize, Serializer};
 
 use crate::{
+    cache::GLOBAL_STR_CACHE,
     state::{CircuitState, InternalCircuitState, State, StateCollection, WireState},
     vector::{Vec2i, Vec2u, Vector},
     OptionalInt, PaintContext, RwLock,
@@ -38,7 +39,8 @@ pub enum PinDirection {
 
     #[default]
     Outside,
-
+    
+    // TODO: move handler to circuit impl
     #[serde(skip)]
     Custom(CustomPinHandler),
 }
@@ -192,7 +194,13 @@ impl CircuitPinInfo {
 
         let current = state_ctx
             .read_circuit_state()
-            .map(|arc| arc.read().unwrap().pins.get_clone(pin.id.id).unwrap_or_default())
+            .map(|arc| {
+                arc.read()
+                    .unwrap()
+                    .pins
+                    .get_clone(pin.id.id)
+                    .unwrap_or_default()
+            })
             .unwrap_or_default();
         if current == value {
             return;
@@ -250,7 +258,11 @@ impl CircuitPinInfo {
 }
 
 impl CircuitPinInfo {
-    fn new(pos: impl Into<Vec2u>, dir: InternalPinDirection, name: impl Into<DynStaticStr>) -> Self {
+    fn new(
+        pos: impl Into<Vec2u>,
+        dir: InternalPinDirection,
+        name: impl Into<DynStaticStr>,
+    ) -> Self {
         let name = name.into();
         Self {
             pos: pos.into(),
@@ -258,9 +270,9 @@ impl CircuitPinInfo {
                 id: Default::default(),
                 dir,
                 wire: None,
-                name: name.clone()
+                name: name.clone(),
             })),
-            name  
+            name,
         }
     }
 }
@@ -277,6 +289,36 @@ impl Serialize for DynStaticStr {
         S: serde::Serializer,
     {
         serializer.serialize_str(self.deref())
+    }
+}
+
+impl<'de> Deserialize<'de> for DynStaticStr {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let str = <_>::deserialize(deserializer)?;
+        Ok(Self::Dynamic(GLOBAL_STR_CACHE.cache(str)))
+    }
+}
+
+impl Hash for DynStaticStr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.deref().hash(state)
+    }
+}
+
+impl Eq for DynStaticStr {}
+
+impl PartialEq<str> for DynStaticStr {
+    fn eq(&self, other: &str) -> bool {
+        self.deref() == other
+    }
+}
+
+impl<T: PartialEq<str>> PartialEq<T> for DynStaticStr {
+    fn eq(&self, other: &T) -> bool {
+        other.eq(self.deref())
     }
 }
 
@@ -313,21 +355,31 @@ pub struct Circuit {
     #[serde(rename = "pin_wires")]
     #[serde(serialize_with = "serialize_circuit_info")]
     pub info: Arc<RwLock<CircuitInfo>>,
-    
+
     #[serde(serialize_with = "serialize_circuit_impl")]
     pub imp: Arc<RwLock<Box<dyn CircuitImpl>>>,
 }
 
-fn serialize_circuit_info<S: Serializer>(info: &Arc<RwLock<CircuitInfo>>, serializer: S) -> Result<S::Ok, S::Error> {
+fn serialize_circuit_info<S: Serializer>(
+    info: &Arc<RwLock<CircuitInfo>>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
     let info = info.read().unwrap();
-    
-    let map: Vec<_> = info.pins.iter().filter_map(|info| {
-        let pin = info.pin.read().unwrap();
-        pin.connected_wire().map(|wire| (info.name.clone(), wire))
-    }).collect();
+
+    let map: Vec<_> = info
+        .pins
+        .iter()
+        .filter_map(|info| {
+            let pin = info.pin.read().unwrap();
+            pin.connected_wire().map(|wire| (info.name.clone(), wire))
+        })
+        .collect();
     serializer.collect_map(map)
 }
-fn serialize_circuit_impl<S: Serializer>(imp: &Arc<RwLock<Box<dyn CircuitImpl>>>, serializer: S) -> Result<S::Ok, S::Error> {
+fn serialize_circuit_impl<S: Serializer>(
+    imp: &Arc<RwLock<Box<dyn CircuitImpl>>>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
     imp.read().unwrap().serialize().serialize(serializer)
 }
 
@@ -348,6 +400,19 @@ impl Circuit {
             })),
             imp: Arc::new(RwLock::new(imp)),
             ty: preview.type_name(),
+        }
+    }
+
+    pub fn save(&self) -> crate::io::CircuitData {
+        let info = self.info.read().unwrap();
+        crate::io::CircuitData {
+            ty: self.ty.clone(),
+            pos: self.pos,
+            pin_wires: info.pins.iter().filter_map(|info| {
+                let pin = info.pin.read().unwrap();
+                pin.connected_wire().map(|w| (pin.name(), w))
+            }).collect(),
+            imp: self.imp.read().unwrap().serialize(),
         }
     }
 }

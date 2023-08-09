@@ -62,6 +62,14 @@ impl<T> FixedVec<T> {
         }
     }
 
+    pub fn from_option_vec(vec: Vec<Option<T>>) -> Self {
+        let first_free = vec.iter().enumerate().find(|(_, v)| v.is_none()).map(|(i, _)| i);
+        Self {
+            vec,
+            first_free,
+        }
+    }
+
     pub fn get_nth_existing_index(&self, pos: usize) -> Option<usize> {
         if pos >= self.vec.len() {
             return None;

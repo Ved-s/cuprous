@@ -4,7 +4,7 @@
 #![feature(lazy_cell)]
 #![feature(thread_id_value)]
 
-use std::{f32::consts::PI, mem::size_of, ops::Range, sync::Arc, time::Instant, fs::File, io::Write};
+use std::{f32::consts::PI, mem::size_of, ops::Range, sync::Arc, time::Instant};
 
 use board::{selection::Selection, ActiveCircuitBoard, CircuitBoard, SelectedBoardItem};
 use eframe::{
@@ -40,6 +40,8 @@ mod macros;
 mod debug;
 
 mod ui;
+mod io;
+mod cache;
 
 #[cfg(debug_assertions)]
 type RwLock<T> = debug::DebugRwLock<T>;
@@ -48,7 +50,7 @@ type RwLock<T> = debug::DebugRwLock<T>;
 type RwLock<T> = std::sync::RwLock<T>;
 type Mutex<T> = std::sync::Mutex<T>;
 
-fn main() {
+fn main() { 
     eframe::run_native(
         "rls",
         eframe::NativeOptions::default(),
@@ -469,7 +471,8 @@ impl eframe::App for App {
 
     fn save(&mut self, _storage: &mut dyn eframe::Storage) {
         let board = self.board.board.read().unwrap();
-        _storage.set_string("board", ron::to_string(&*board).unwrap());
+        let data = board.save();
+        _storage.set_string("board", ron::to_string(&data).unwrap());
     }
 }
 

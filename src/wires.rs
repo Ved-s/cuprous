@@ -54,7 +54,11 @@ impl Wire {
         }
     }
 
-    pub fn search_wire_point(&self, pos: Vector<2, i32>, dir: Direction2) -> Option<FoundWirePoint> {
+    pub fn search_wire_point(
+        &self,
+        pos: Vector<2, i32>,
+        dir: Direction2,
+    ) -> Option<FoundWirePoint> {
         let current_diff_pos = dir.choose_axis_component(pos.x(), pos.y());
         let current_eq_pos = dir.choose_axis_component(pos.y(), pos.x());
         self.points
@@ -70,6 +74,12 @@ impl Wire {
                 dist: NonZeroU32::new(dist).expect("unreachable"),
                 pos: *pos,
             })
+    }
+
+    pub fn save(&self) -> crate::io::WireData {
+        crate::io::WireData {
+            points: self.points.iter().map(|(k, v)| (*k, v.save())).collect(),
+        }
     }
 }
 
@@ -89,6 +99,17 @@ impl WirePoint {
         match dir {
             Direction2::Up => self.up,
             Direction2::Left => self.left,
+        }
+    }
+
+    fn save(&self) -> crate::io::WirePointData {
+        crate::io::WirePointData {
+            up: self.up,
+            left: self.left,
+            pin: self.pin.as_ref().map(|pin| {
+                let pin = pin.read().unwrap();
+                crate::io::NamedCircuitPinIdData { name: pin.name(), circuit: pin.id.circuit_id }
+            }),
         }
     }
 }

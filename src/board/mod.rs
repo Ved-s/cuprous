@@ -15,7 +15,6 @@ use eframe::{
     epaint::{Color32, Rounding, Stroke},
 };
 use emath::{vec2, Align2, Rect};
-use serde::{Serialize, Serializer};
 
 use crate::{
     circuits::{Circuit, CircuitNode, CircuitPin, CircuitPreview, CircuitStateContext},
@@ -31,17 +30,10 @@ use self::selection::{SelectedWorldObject, Selection};
 
 pub mod selection;
 
-#[derive(Serialize)]
 pub struct CircuitBoard {
     pub wires: FixedVec<Wire>,
     pub circuits: FixedVec<Circuit>,
-
-    #[serde(serialize_with = "serialize_state_collection_as_seq")]
     pub states: StateCollection,
-}
-
-fn serialize_state_collection_as_seq<S: Serializer>(states: &StateCollection, serializer: S) -> Result<S::Ok, S::Error> {
-    states.states().read().unwrap().serialize(serializer)
 }
 
 impl CircuitBoard {
@@ -188,6 +180,19 @@ impl CircuitBoard {
         }
 
         Some(new_wire_id)
+    }
+
+    pub fn save(&self) -> crate::io::CircuitBoardData {
+        crate::io::CircuitBoardData {
+            wires: self.wires.inner().iter().map(|w| w.as_ref().map(|w| w.save())).collect(),
+            circuits: self.circuits.inner().iter().map(|c| c.as_ref().map(|c| c.save())).collect(),
+            states: self.states.states().read().unwrap().inner().iter().map(|s| s.as_ref().map(|s| s.save())).collect(),
+        }
+    }
+
+    // Run board simulation after loading. Not required on newly created or empty boards
+    pub fn activate(&self) {
+        self.states.activate();
     }
 }
 
