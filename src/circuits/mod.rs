@@ -1,6 +1,6 @@
 use std::{hash::Hash, ops::Deref, sync::Arc, time::Duration};
 
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 
 use crate::{
     cache::GLOBAL_STR_CACHE,
@@ -19,18 +19,18 @@ pub struct CircuitInfo {
     pub pins: Box<[CircuitPinInfo]>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CustomPinHandler {
-    pub mutate_state: fn(ctx: &State, pin: &CircuitPin, state: &mut WireState),
-    pub write_state: fn(ctx: &State, pin: &CircuitPin, state: WireState),
-}
+// #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// pub struct CustomPinHandler {
+//     pub mutate_state: fn(ctx: &State, pin: &CircuitPin, state: &mut WireState),
+//     pub write_state: fn(ctx: &State, pin: &CircuitPin, state: WireState),
+// }
 
 #[derive(Debug, Clone, Copy)]
 pub enum InternalPinDirection {
     StateDependent { default: PinDirection },
     Inside,
     Outside,
-    Custom(CustomPinHandler),
+    Custom,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -39,10 +39,7 @@ pub enum PinDirection {
 
     #[default]
     Outside,
-    
-    // TODO: move handler to circuit impl
-    #[serde(skip)]
-    Custom(CustomPinHandler),
+    Custom,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
@@ -70,7 +67,7 @@ impl CircuitPin {
         match self.dir {
             InternalPinDirection::Inside => PinDirection::Inside,
             InternalPinDirection::Outside => PinDirection::Outside,
-            InternalPinDirection::Custom(h) => PinDirection::Custom(h),
+            InternalPinDirection::Custom => PinDirection::Custom,
             InternalPinDirection::StateDependent { default } => state
                 .read_circuit(self.id.circuit_id)
                 .map(|cs| {
@@ -111,7 +108,7 @@ impl CircuitPin {
         circuit.pins.set(value, self.id.id);
         if update_state {
             match self.dir {
-                InternalPinDirection::Custom(_) => {
+                InternalPinDirection::Custom => {
                     state.update_pin_input(self.id.circuit_id, self.id.id)
                 }
 
@@ -160,7 +157,7 @@ impl CircuitPin {
                 InternalPinDirection::Inside => {
                     states.update_pin_input(self.id.circuit_id, self.id.id);
                 }
-                InternalPinDirection::Custom(_) => {
+                InternalPinDirection::Custom => {
                     states.update_pin_input(self.id.circuit_id, self.id.id);
                 }
             }
@@ -245,7 +242,7 @@ impl CircuitPinInfo {
             PinDirection::Outside => state_ctx
                 .global_state
                 .update_circuit_signals(pin_id.circuit_id, Some(pin_id.id)),
-            PinDirection::Custom(_) => match wire {
+            PinDirection::Custom => match wire {
                 Some(wire) => state_ctx.global_state.update_wire(wire),
                 None => self.pin.read().unwrap().set_input(
                     state_ctx.global_state,
@@ -345,42 +342,13 @@ impl From<Arc<str>> for DynStaticStr {
     }
 }
 
-#[derive(Serialize)]
 pub struct Circuit {
     pub ty: DynStaticStr,
-    #[serde(skip)]
     pub id: usize,
     pub pos: Vec2i,
 
-    #[serde(rename = "pin_wires")]
-    #[serde(serialize_with = "serialize_circuit_info")]
     pub info: Arc<RwLock<CircuitInfo>>,
-
-    #[serde(serialize_with = "serialize_circuit_impl")]
     pub imp: Arc<RwLock<Box<dyn CircuitImpl>>>,
-}
-
-fn serialize_circuit_info<S: Serializer>(
-    info: &Arc<RwLock<CircuitInfo>>,
-    serializer: S,
-) -> Result<S::Ok, S::Error> {
-    let info = info.read().unwrap();
-
-    let map: Vec<_> = info
-        .pins
-        .iter()
-        .filter_map(|info| {
-            let pin = info.pin.read().unwrap();
-            pin.connected_wire().map(|wire| (info.name.clone(), wire))
-        })
-        .collect();
-    serializer.collect_map(map)
-}
-fn serialize_circuit_impl<S: Serializer>(
-    imp: &Arc<RwLock<Box<dyn CircuitImpl>>>,
-    serializer: S,
-) -> Result<S::Ok, S::Error> {
-    imp.read().unwrap().serialize().serialize(serializer)
 }
 
 impl Circuit {
@@ -408,10 +376,14 @@ impl Circuit {
         crate::io::CircuitData {
             ty: self.ty.clone(),
             pos: self.pos,
-            pin_wires: info.pins.iter().filter_map(|info| {
-                let pin = info.pin.read().unwrap();
-                pin.connected_wire().map(|w| (pin.name(), w))
-            }).collect(),
+            pin_wires: info
+                .pins
+                .iter()
+                .filter_map(|info| {
+                    let pin = info.pin.read().unwrap();
+                    pin.connected_wire().map(|w| (pin.name(), w))
+                })
+                .collect(),
             imp: self.imp.read().unwrap().serialize(),
         }
     }
@@ -489,12 +461,23 @@ pub trait CircuitImpl: Send + Sync {
         None
     }
 
+    /// Whether to automatically draw pins as small circuits
     fn draw_pin_points(&self) -> bool {
         true
     }
 
+    /// Serialize circuit parameters. NOT for circuit state 
     fn serialize(&self) -> serde_intermediate::Intermediate {
         ().into()
+    }
+
+    /// Custom handler for [`PinDirection::Custom`]
+    fn custom_pin_mutate_state(
+        &self,
+        state_ctx: &CircuitStateContext,
+        pin: usize,
+        state: &mut WireState,
+    ) {
     }
 }
 pub trait CircuitPreview {

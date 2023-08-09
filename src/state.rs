@@ -494,15 +494,19 @@ impl StateThread {
                 match pin.direction(&self.state) {
                     PinDirection::Inside => {}
                     PinDirection::Outside => state = state.combine(pin.get_state(&self.state)),
-                    PinDirection::Custom(_) => delayed_pins.push(pin_arc),
+                    PinDirection::Custom => delayed_pins.push(pin_arc),
                 }
             }
         }
 
         for pin in delayed_pins {
             let pin = pin.read().unwrap();
-            if let PinDirection::Custom(h) = pin.direction(&self.state) {
-                (h.mutate_state)(&self.state, &pin, &mut state)
+            // 2 locks, eugh
+            if let PinDirection::Custom = pin.direction(&self.state) {
+                if let Some(circuit) = self.state.board.read().unwrap().circuits.get(pin.id.circuit_id) {
+                    let state_ctx = CircuitStateContext::new(&self.state, circuit);
+                    circuit.imp.read().unwrap().custom_pin_mutate_state(&state_ctx, pin.id.id, &mut state);
+                }
             }
         }
 
@@ -519,7 +523,7 @@ impl StateThread {
                 match pin.direction(&self.state) {
                     PinDirection::Inside => pin.set_input(&self.state, state, true),
                     PinDirection::Outside => {}
-                    PinDirection::Custom(_) => pin.set_input(&self.state, state, true),
+                    PinDirection::Custom => pin.set_input(&self.state, state, true),
                 }
             }
         }
@@ -545,7 +549,7 @@ impl StateThread {
 
         match pin.direction(&self.state) {
             PinDirection::Inside => {}
-            PinDirection::Custom(_) => {}
+            PinDirection::Custom => {}
             PinDirection::Outside => return,
         }
 

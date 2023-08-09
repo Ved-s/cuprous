@@ -9,18 +9,7 @@ struct Circuit {
 impl Circuit {
     fn new() -> Self {
         Self {
-            pin: CircuitPinInfo::new(
-                [0, 0],
-                InternalPinDirection::Custom(CustomPinHandler {
-                    mutate_state: |_, _, state| {
-                        if matches!(state, WireState::None) {
-                            *state = WireState::False;
-                        }
-                    },
-                    write_state: |_, _, _| {},
-                }),
-                "pin"
-            ),
+            pin: CircuitPinInfo::new([0, 0], InternalPinDirection::Custom, "pin"),
         }
     }
 
@@ -42,8 +31,17 @@ impl CircuitImpl for Circuit {
         vec![self.pin.clone()].into_boxed_slice()
     }
 
-    fn update_signals(&mut self, _: &CircuitStateContext, _: Option<usize>) {
-        
+    fn update_signals(&mut self, _: &CircuitStateContext, _: Option<usize>) {}
+
+    fn custom_pin_mutate_state(
+        &self,
+        _: &CircuitStateContext,
+        _: usize,
+        state: &mut WireState,
+    ) {
+        if matches!(state, WireState::None) {
+            *state = WireState::False;
+        }
     }
 }
 
@@ -62,7 +60,7 @@ impl CircuitPreview for Preview {
     fn create_impl(&self) -> Box<dyn CircuitImpl> {
         Box::new(Circuit::new())
     }
-    
+
     fn type_name(&self) -> DynStaticStr {
         "pullup".into()
     }
