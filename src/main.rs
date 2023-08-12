@@ -9,15 +9,19 @@ use std::{
     mem::size_of,
     ops::{Deref, Range},
     sync::Arc,
-    time::Instant,
 };
 
 use board::{selection::Selection, ActiveCircuitBoard, CircuitBoard, SelectedBoardItem};
 use eframe::{
     egui::{self, Context, Frame, Key, Margin, Sense, TextStyle, Ui},
     epaint::{ahash::HashMap, Color32, PathShape, Rounding, Shape, Stroke},
+    CreationContext,
 };
 use emath::{pos2, vec2, Align2, Pos2, Rect, Vec2};
+
+use time::Instant;
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::{prelude::*, JsValue};
 
 mod r#const;
 
@@ -48,6 +52,7 @@ mod debug;
 mod cache;
 mod io;
 mod ui;
+mod time;
 
 #[cfg(debug_assertions)]
 type RwLock<T> = debug::DebugRwLock<T>;
@@ -66,7 +71,7 @@ impl io::LoadingContext for BasicLoadingContext<'_> {
     }
 }
 
-fn main() {
+fn create(cc: &CreationContext) -> Box<dyn eframe::App> {
     let previews = [
         Box::new(circuits::test::Preview {}) as Box<dyn CircuitPreview>,
         Box::new(circuits::button::Preview {}),
@@ -80,24 +85,33 @@ fn main() {
     ];
     let previews = HashMap::from_iter(previews.into_iter().map(|p| (p.type_name(), Arc::new(p))));
 
-    eframe::run_native(
-        "rls",
-        eframe::NativeOptions::default(),
-        Box::new(|cc| {
-            let ctx = BasicLoadingContext {
-                previews: &previews,
-            };
-            let shift = cc.egui_ctx.input(|input| input.modifiers.shift);
-            let board = (!shift)
-                .then_some(cc.storage).flatten()
-                .and_then(|s| s.get_string("board"))
-                .map(|s| ron::from_str::<crate::io::CircuitBoardData>(&s).unwrap())
-                .map(|d| CircuitBoard::load(&d, &ctx));
+    let ctx = BasicLoadingContext {
+        previews: &previews,
+    };
+    let shift = cc.egui_ctx.input(|input| input.modifiers.shift);
+    let board = (!shift)
+        .then_some(cc.storage)
+        .flatten()
+        .and_then(|s| s.get_string("board"))
+        .map(|s| ron::from_str::<crate::io::CircuitBoardData>(&s).unwrap())
+        .map(|d| CircuitBoard::load(&d, &ctx));
 
-            Box::new(App::new(board, previews))
-        }),
-    )
-    .unwrap();
+    Box::new(App::new(board, previews))
+}
+
+fn main() {
+    #[cfg(not(target_arch = "wasm32"))]
+    eframe::run_native("rls", eframe::NativeOptions::default(), Box::new(create)).unwrap();
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+#[cfg(target_arch = "wasm32")]
+pub async fn web_main(canvas_id: &str) -> Result<(), JsValue> {
+    use eframe::WebOptions;
+
+    eframe::WebRunner::new()
+        .start(canvas_id, WebOptions::default(), Box::new(create))
+        .await
 }
 
 #[allow(unused)]
@@ -327,7 +341,9 @@ impl Screen {
 }
 
 struct App {
+    #[cfg(not(target_arch = "wasm32"))]
     last_win_pos: Option<Pos2>,
+    #[cfg(not(target_arch = "wasm32"))]
     last_win_size: Vec2,
 
     pub pan_zoom: PanAndZoom,
@@ -462,21 +478,25 @@ fn rotated_rect_shape(rect: Rect, angle: f32, origin: Pos2) -> Vec<Pos2> {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &eframe::egui::Context, frame: &mut eframe::Frame) {
-        let int_info = frame.info();
-        if let Some(win_pos) = int_info.window_info.position {
-            if let Some(last_win_pos) = self.last_win_pos {
-                let win_size = int_info.window_info.size;
-                if win_size != self.last_win_size {
-                    let diff: Vec2f = (win_pos - last_win_pos).into();
-                    self.pan_zoom.pos += diff / self.pan_zoom.scale;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let int_info = frame.info();
+            if let Some(win_pos) = int_info.window_info.position {
+                if let Some(last_win_pos) = self.last_win_pos {
+                    let win_size = int_info.window_info.size;
+                    if win_size != self.last_win_size {
+                        let diff: Vec2f = (win_pos - last_win_pos).into();
+                        self.pan_zoom.pos += diff / self.pan_zoom.scale;
+                    }
                 }
             }
+            self.last_win_pos = int_info.window_info.position;
+            self.last_win_size = int_info.window_info.size;
         }
         ctx.request_repaint();
-        self.last_win_pos = int_info.window_info.position;
-        self.last_win_size = int_info.window_info.size;
 
-        //self.board.state.update(&self.board.board.read().unwrap());
+        #[cfg(feature = "single_thread")]
+        self.board.board.read().unwrap().states.update();
 
         if ctx.input(|input| input.key_pressed(Key::F9)) {
             self.debug = !self.debug;
@@ -523,7 +543,10 @@ impl App {
         previews: HashMap<DynStaticStr, Arc<Box<dyn CircuitPreview>>>,
     ) -> Self {
         let board = board.unwrap_or_else(|| Arc::new(RwLock::new(CircuitBoard::new())));
+
+        #[cfg(not(feature = "single_thread"))]
         board.read().unwrap().activate();
+
         let state_id = {
             let circuit_board = board.read().unwrap();
             let states = circuit_board.states.states().read().unwrap();
@@ -538,7 +561,10 @@ impl App {
         };
         Self {
             pan_zoom: PanAndZoom::new(0.0.into(), 16.0),
+
+            #[cfg(not(target_arch = "wasm32"))]
             last_win_pos: None,
+            #[cfg(not(target_arch = "wasm32"))]
             last_win_size: Default::default(),
             board: ActiveCircuitBoard::new(board, state_id).unwrap(),
             debug: true,
@@ -733,6 +759,7 @@ impl App {
 
         self.board.update(&ctx, selected_item, self.debug);
         let update_time = Instant::now() - start_time;
+
         paint.text(
             rect.left_top() + vec2(10.0, 80.0),
             Align2::LEFT_TOP,
@@ -740,13 +767,12 @@ impl App {
                 r#"Pos: {}
 Tile draw bounds: {} - {}
 Chunk draw bounds: {} - {}
-Time: {:.4} ms
+Time: {:.2} ms
 Selected: {:?}
 
 [F9] Debug: {}
 
 Wire parts drawn: {}
-State thread id: {:?}
 Pressed keys: {:?}
 "#,
                 self.pan_zoom.pos,
@@ -760,7 +786,6 @@ Pressed keys: {:?}
                 self.board
                     .wires_drawn
                     .load(std::sync::atomic::Ordering::Relaxed),
-                self.board.state.thread().map(|id| id.as_u64().get()),
                 ui.input(|input| input.keys_down.iter().cloned().collect::<Vec<_>>())
             ),
             font_id,

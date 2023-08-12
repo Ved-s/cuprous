@@ -264,6 +264,7 @@ impl CircuitBoard {
     }
 
     // Run board simulation after loading. Not required on newly created or empty boards
+    #[cfg(not(feature = "single_thread"))]
     pub fn activate(&self) {
         self.states.activate();
     }
