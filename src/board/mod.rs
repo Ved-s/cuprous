@@ -184,10 +184,83 @@ impl CircuitBoard {
 
     pub fn save(&self) -> crate::io::CircuitBoardData {
         crate::io::CircuitBoardData {
-            wires: self.wires.inner().iter().map(|w| w.as_ref().map(|w| w.save())).collect(),
-            circuits: self.circuits.inner().iter().map(|c| c.as_ref().map(|c| c.save())).collect(),
-            states: self.states.states().read().unwrap().inner().iter().map(|s| s.as_ref().map(|s| s.save())).collect(),
+            wires: self
+                .wires
+                .inner()
+                .iter()
+                .map(|w| w.as_ref().map(|w| w.save()))
+                .collect(),
+            circuits: self
+                .circuits
+                .inner()
+                .iter()
+                .map(|c| c.as_ref().map(|c| c.save()))
+                .collect(),
+            states: self
+                .states
+                .states()
+                .read()
+                .unwrap()
+                .inner()
+                .iter()
+                .map(|s| s.as_ref().map(|s| s.save()))
+                .collect(),
         }
+    }
+
+    pub fn load(data: &crate::io::CircuitBoardData, ctx: &impl crate::io::LoadingContext) -> Arc<RwLock<Self>> {
+        let circuits = FixedVec::from_option_vec(
+            data.circuits
+                .iter()
+                .enumerate()
+                .map(|(i, c)| {
+                    c.as_ref().and_then(|c| {
+                        let preview = ctx.get_circuit_preview(&c.ty)?;
+                        let circ = Circuit::create(i, c.pos, preview);
+                        if !matches!(c.imp, serde_intermediate::Intermediate::Unit) {
+                            circ.imp.write().unwrap().load(&c.imp);
+                        }
+                        {
+                            let mut info = circ.info.write().unwrap();
+                            for (pin_name, wire) in c.pin_wires.iter() {
+                                if let Some(info) =
+                                    info.pins.iter_mut().find(|i| i.name == *pin_name)
+                                {
+                                    info.pin.write().unwrap().wire = Some(*wire);
+                                }
+                            }
+                        }
+                        Some(circ)
+                    })
+                })
+                .collect(),
+        );
+
+        let wires = FixedVec::from_option_vec(
+            data.wires
+                .iter()
+                .enumerate()
+                .map(|(i, w)| w.as_ref().map(|w| Wire::load(w, i, &circuits)))
+                .collect(),
+        );
+
+        let board = CircuitBoard {
+            wires,
+            circuits,
+            states: StateCollection::new(),
+        };
+        let board = Arc::new(RwLock::new(board));
+
+        let states = StateCollection::from_fixed_vec(FixedVec::from_option_vec(
+            data.states
+                .iter()
+                .map(|v| v.as_ref().map(|s| Arc::new(State::load(s, board.clone()))))
+                .collect(),
+        ));
+
+        board.write().unwrap().states = states;
+
+        board
     }
 
     // Run board simulation after loading. Not required on newly created or empty boards
@@ -255,25 +328,36 @@ impl ActiveCircuitBoard {
             for wire in board.wires.iter() {
                 let id = wire.id;
                 for (pos, point) in wire.points.iter() {
-                    wires.get_or_create_mut(pos.convert(|v| v as isize)).wire.set(Some(id));
+                    wires
+                        .get_or_create_mut(pos.convert(|v| v as isize))
+                        .wire
+                        .set(Some(id));
                     for dir in Direction2::iter_all() {
-                        if let Some(point) = point.get_dir(dir).then(|| wire.search_wire_point(*pos, dir)).flatten() {
-                            for (i, pos) in dir.iter_pos_along(*pos, point.dist.get() as i32, true).enumerate() {
+                        if let Some(point) = point
+                            .get_dir(dir)
+                            .then(|| wire.search_wire_point(*pos, dir))
+                            .flatten()
+                        {
+                            for (i, pos) in dir
+                                .iter_pos_along(*pos, point.dist.get() as i32, true)
+                                .enumerate()
+                            {
                                 let node = wires.get_or_create_mut(pos.convert(|v| v as isize));
 
                                 let start = i == 0;
                                 let end = i == point.dist.get() as usize;
 
                                 if !start {
-                                    node.get_dir_mut(Direction4::from(dir).inverted()).set(Some(i as u32));
+                                    node.get_dir_mut(Direction4::from(dir).inverted())
+                                        .set(Some(i as u32));
                                 }
                                 if !end {
-                                    node.get_dir_mut(Direction4::from(dir)).set(Some(point.dist.get() - i as u32));
+                                    node.get_dir_mut(Direction4::from(dir))
+                                        .set(Some(point.dist.get() - i as u32));
                                 }
                             }
                         }
                     }
-                    
                 }
             }
 

@@ -24,7 +24,7 @@ pub enum UpdateTask {
     PinInput { circuit: usize, id: usize },
 }
 
-#[derive(Default, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Clone, Copy, Eq, PartialEq, Serialize, Deserialize, Debug)]
 pub enum WireState {
     #[default]
     None,
@@ -117,7 +117,22 @@ impl CircuitState {
         crate::io::CircuitStateData {
             pins: self.pins.inner().clone(),
             pin_dirs: self.pin_dirs.inner().clone(),
-            internal: self.internal.as_ref().map(|s| s.serialize()).unwrap_or_default(),
+            internal: self
+                .internal
+                .as_ref()
+                .map(|s| s.serialize())
+                .unwrap_or_default(),
+        }
+    }
+
+    fn load(data: &crate::io::CircuitStateData, id: usize, board: &CircuitBoard) -> Self {
+        Self {
+            pins: FixedVec::from_option_vec(data.pins.clone()),
+            pin_dirs:  FixedVec::from_option_vec(data.pin_dirs.clone()),
+            internal: match &data.internal {
+                serde_intermediate::Intermediate::Unit => None,
+                data => board.circuits.get(id).and_then(|c| c.imp.read().unwrap().load_internal(data))
+            },
         }
     }
 }
@@ -131,6 +146,12 @@ impl StateCollection {
     pub fn new() -> Self {
         Self {
             states: Arc::new(RwLock::new(vec![].into())),
+        }
+    }
+
+    pub fn from_fixed_vec(vec: FixedVec<Arc<State>>) -> Self {
+        Self {
+            states: Arc::new(RwLock::new(vec)),
         }
     }
 
@@ -277,10 +298,67 @@ impl State {
     pub fn save(&self) -> crate::io::StateData {
         let now = Instant::now();
         crate::io::StateData {
-            wires: self.wires.read().unwrap().inner().iter().map(|ws| ws.as_ref().map(|ws| *ws.read().unwrap())).collect(),
-            circuits: self.circuits.read().unwrap().inner().iter().map(|cs| cs.as_ref().map(|cs| cs.read().unwrap().save())).collect(),
+            wires: self
+                .wires
+                .read()
+                .unwrap()
+                .inner()
+                .iter()
+                .map(|ws| ws.as_ref().map(|ws| *ws.read().unwrap()))
+                .collect(),
+            circuits: self
+                .circuits
+                .read()
+                .unwrap()
+                .inner()
+                .iter()
+                .map(|cs| cs.as_ref().map(|cs| cs.read().unwrap().save()))
+                .collect(),
             queue: self.queue.lock().unwrap().inner().iter().copied().collect(),
-            updates: self.updates.lock().unwrap().iter().map(|(id, time)| (*id, time.checked_duration_since(now))).collect(),
+            updates: self
+                .updates
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(id, time)| (*id, time.checked_duration_since(now)))
+                .collect(),
+        }
+    }
+
+    pub fn load(data: &crate::io::StateData, board: Arc<RwLock<CircuitBoard>>) -> State {
+        let now = Instant::now();
+
+        let wires = data
+            .wires
+            .iter()
+            .map(|w| w.map(|w| Arc::new(RwLock::new(w))))
+            .collect();
+
+        let board_ref = board.read().unwrap();
+        let circuits = data
+            .circuits
+            .iter()
+            .enumerate()
+            .map(|(i, c)| {
+                c.as_ref()
+                    .map(|c| Arc::new(RwLock::new(CircuitState::load(c, i, &board_ref))))
+            })
+            .collect();
+        drop(board_ref);
+
+        let updates = data
+            .updates
+            .iter()
+            .map(|(id, dur)| (*id, dur.map(|d| now + d).unwrap_or(now)))
+            .collect();
+
+        Self {
+            wires: Arc::new(RwLock::new(FixedVec::from_option_vec(wires))),
+            circuits: Arc::new(RwLock::new(FixedVec::from_option_vec(circuits))),
+            queue: Arc::new(Mutex::new(RandomQueue::from_vec(data.queue.clone()))),
+            thread: Arc::new(RwLock::new(None)),
+            board,
+            updates: Arc::new(Mutex::new(updates)),
         }
     }
 
@@ -503,9 +581,20 @@ impl StateThread {
             let pin = pin.read().unwrap();
             // 2 locks, eugh
             if let PinDirection::Custom = pin.direction(&self.state) {
-                if let Some(circuit) = self.state.board.read().unwrap().circuits.get(pin.id.circuit_id) {
+                if let Some(circuit) = self
+                    .state
+                    .board
+                    .read()
+                    .unwrap()
+                    .circuits
+                    .get(pin.id.circuit_id)
+                {
                     let state_ctx = CircuitStateContext::new(&self.state, circuit);
-                    circuit.imp.read().unwrap().custom_pin_mutate_state(&state_ctx, pin.id.id, &mut state);
+                    circuit
+                        .imp
+                        .read()
+                        .unwrap()
+                        .custom_pin_mutate_state(&state_ctx, pin.id.id, &mut state);
                 }
             }
         }

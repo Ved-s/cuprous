@@ -334,15 +334,6 @@ impl<const SIZE: usize, T: VectorValue + IsZero> IsZero for Vector<SIZE, T> {
     }
 }
 
-/*
-std::convert::AsRef<[F; D]>
-std::convert::AsMut<[F; D]>
-std::convert::AsRef<[F]>
-std::convert::AsMut<[F]>
-std::ops::Index<usize, Output = F>
-std::ops::IndexMut<usize>
- */
-
 impl<T: VectorValue, const SIZE: usize> std::convert::AsRef<[T; SIZE]> for Vector<SIZE, T> {
     fn as_ref(&self) -> &[T; SIZE] {
         &self.0
@@ -398,7 +389,7 @@ impl<'de, T: serde::Deserialize<'de> + VectorValue, const SIZE: usize> serde::De
         let vec = <Vec<T>>::deserialize(deserializer)?;
         let mut arr = [T::default(); SIZE];
         let size = SIZE.min(vec.len());
-        arr[size..].copy_from_slice(&vec[size..]);
+        arr[..size].copy_from_slice(&vec[..size]);
         Ok(Self(arr))
     }
 }

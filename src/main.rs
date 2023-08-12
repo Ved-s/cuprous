@@ -4,7 +4,13 @@
 #![feature(lazy_cell)]
 #![feature(thread_id_value)]
 
-use std::{f32::consts::PI, mem::size_of, ops::Range, sync::Arc, time::Instant};
+use std::{
+    f32::consts::PI,
+    mem::size_of,
+    ops::{Deref, Range},
+    sync::Arc,
+    time::Instant,
+};
 
 use board::{selection::Selection, ActiveCircuitBoard, CircuitBoard, SelectedBoardItem};
 use eframe::{
@@ -24,7 +30,7 @@ mod containers;
 use crate::containers::*;
 
 mod circuits;
-use circuits::CircuitPreview;
+use circuits::{CircuitPreview, DynStaticStr};
 
 mod wires;
 
@@ -39,9 +45,9 @@ mod macros;
 #[cfg(debug_assertions)]
 mod debug;
 
-mod ui;
-mod io;
 mod cache;
+mod io;
+mod ui;
 
 #[cfg(debug_assertions)]
 type RwLock<T> = debug::DebugRwLock<T>;
@@ -50,11 +56,46 @@ type RwLock<T> = debug::DebugRwLock<T>;
 type RwLock<T> = std::sync::RwLock<T>;
 type Mutex<T> = std::sync::Mutex<T>;
 
-fn main() { 
+struct BasicLoadingContext<'a> {
+    previews: &'a HashMap<DynStaticStr, Arc<Box<dyn CircuitPreview>>>,
+}
+
+impl io::LoadingContext for BasicLoadingContext<'_> {
+    fn get_circuit_preview<'a>(&'a self, ty: &DynStaticStr) -> Option<&'a dyn CircuitPreview> {
+        self.previews.get(ty).map(|b| b.deref().deref())
+    }
+}
+
+fn main() {
+    let previews = [
+        Box::new(circuits::test::Preview {}) as Box<dyn CircuitPreview>,
+        Box::new(circuits::button::Preview {}),
+        Box::new(circuits::gates::gate::Preview {
+            template: circuits::gates::or::TEMPLATE,
+        }),
+        Box::new(circuits::gates::gate::Preview {
+            template: circuits::gates::and::TEMPLATE,
+        }),
+        Box::new(circuits::pullup::Preview {}),
+    ];
+    let previews = HashMap::from_iter(previews.into_iter().map(|p| (p.type_name(), Arc::new(p))));
+
     eframe::run_native(
         "rls",
         eframe::NativeOptions::default(),
-        Box::new(|_| Box::new(App::new())),
+        Box::new(|cc| {
+            let ctx = BasicLoadingContext {
+                previews: &previews,
+            };
+            let shift = cc.egui_ctx.input(|input| input.modifiers.shift);
+            let board = (!shift)
+                .then_some(cc.storage).flatten()
+                .and_then(|s| s.get_string("board"))
+                .map(|s| ron::from_str::<crate::io::CircuitBoardData>(&s).unwrap())
+                .map(|d| CircuitBoard::load(&d, &ctx));
+
+            Box::new(App::new(board, previews))
+        }),
     )
     .unwrap();
 }
@@ -296,7 +337,7 @@ struct App {
 
     inventory_items: Vec<InventoryItemGroup>,
     selected_id: Option<String>,
-    circuit_previews: HashMap<String, Box<dyn CircuitPreview>>,
+    circuit_previews: HashMap<String, Arc<Box<dyn CircuitPreview>>>,
 }
 
 struct SelectionInventoryItem {}
@@ -370,7 +411,7 @@ impl InventoryItem for WireInventoryItem {
 }
 
 struct CircuitInventoryItem {
-    preview: Box<dyn CircuitPreview>,
+    preview: Arc<Box<dyn CircuitPreview>>,
     id: String,
 }
 impl InventoryItem for CircuitInventoryItem {
@@ -440,7 +481,7 @@ impl eframe::App for App {
         if ctx.input(|input| input.key_pressed(Key::F9)) {
             self.debug = !self.debug;
         }
-        
+
         if ctx.input(|input| input.key_pressed(Key::F8)) {
             let board = self.board.board.clone();
             self.board = ActiveCircuitBoard::new(board, 0).unwrap();
@@ -477,12 +518,24 @@ impl eframe::App for App {
 }
 
 impl App {
-    fn new() -> Self {
-        let board = CircuitBoard::new();
-        let states = board.states.clone();
-        let board = Arc::new(RwLock::new(board));
-        let state_id = states.create_state(board.clone()).0;
-
+    fn new(
+        board: Option<Arc<RwLock<CircuitBoard>>>,
+        previews: HashMap<DynStaticStr, Arc<Box<dyn CircuitPreview>>>,
+    ) -> Self {
+        let board = board.unwrap_or_else(|| Arc::new(RwLock::new(CircuitBoard::new())));
+        board.read().unwrap().activate();
+        let state_id = {
+            let circuit_board = board.read().unwrap();
+            let states = circuit_board.states.states().read().unwrap();
+            let first_id = states
+                .inner()
+                .iter()
+                .enumerate()
+                .find(|(_, v)| v.is_some())
+                .map(|(i, _)| i);
+            drop(states);
+            first_id.unwrap_or_else(|| circuit_board.states.create_state(board.clone()).0)
+        };
         Self {
             pan_zoom: PanAndZoom::new(0.0.into(), 16.0),
             last_win_pos: None,
@@ -494,56 +547,22 @@ impl App {
             inventory_items: vec![
                 InventoryItemGroup::SingleItem(Box::new(SelectionInventoryItem {})),
                 InventoryItemGroup::SingleItem(Box::new(WireInventoryItem {})),
-                InventoryItemGroup::Group(vec![
-                    Box::new(CircuitInventoryItem {
-                        preview: Box::new(circuits::test::Preview {}),
-                        id: "test".to_owned(),
-                    }),
-                    Box::new(CircuitInventoryItem {
-                        preview: Box::new(circuits::button::Preview {}),
-                        id: "button".to_owned(),
-                    }),
-                    Box::new(CircuitInventoryItem {
-                        preview: Box::new(circuits::gates::gate::Preview {
-                            template: circuits::gates::or::TEMPLATE,
-                        }),
-                        id: "or".to_owned(),
-                    }),
-                    Box::new(CircuitInventoryItem {
-                        preview: Box::new(circuits::gates::gate::Preview {
-                            template: circuits::gates::and::TEMPLATE,
-                        }),
-                        id: "and".to_owned(),
-                    }),
-                    Box::new(CircuitInventoryItem {
-                        preview: Box::new(circuits::pullup::Preview {}),
-                        id: "pullup".to_owned(),
-                    }),
-                ]),
+                InventoryItemGroup::Group(
+                    previews
+                        .iter()
+                        .map(|e| {
+                            Box::new(CircuitInventoryItem {
+                                preview: e.1.clone(),
+                                id: e.0.deref().to_owned(),
+                            }) as Box<dyn InventoryItem>
+                        })
+                        .collect(),
+                ),
             ],
-            circuit_previews: HashMap::from_iter(
-                [
-                    (
-                        "test".to_owned(),
-                        Box::new(circuits::test::Preview {}) as Box<dyn CircuitPreview>,
-                    ),
-                    ("button".to_owned(), Box::new(circuits::button::Preview {})),
-                    (
-                        "or".to_owned(),
-                        Box::new(circuits::gates::gate::Preview {
-                            template: circuits::gates::or::TEMPLATE,
-                        }),
-                    ),
-                    (
-                        "and".to_owned(),
-                        Box::new(circuits::gates::gate::Preview {
-                            template: circuits::gates::and::TEMPLATE,
-                        }),
-                    ),
-                    ("pullup".to_owned(), Box::new(circuits::pullup::Preview {})),
-                ]
-                .into_iter(),
-            ),
+            circuit_previews: previews
+                .into_iter()
+                .map(|(id, arc)| (id.deref().to_owned(), arc))
+                .collect(),
         }
     }
 
@@ -707,7 +726,7 @@ impl App {
             Some("selection") => SelectedBoardItem::Selection,
             Some("wire") => SelectedBoardItem::Wire,
             Some(circ) => match self.circuit_previews.get(circ) {
-                Some(p) => SelectedBoardItem::Circuit(&**p),
+                Some(p) => SelectedBoardItem::Circuit(&***p),
                 None => SelectedBoardItem::None,
             },
         };

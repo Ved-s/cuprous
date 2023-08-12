@@ -52,8 +52,8 @@ impl CircuitPinId {
 pub struct CircuitPin {
     name: DynStaticStr,
     pub id: CircuitPinId,
-    wire: Option<usize>,
-    dir: InternalPinDirection,
+    pub(crate) wire: Option<usize>,
+    pub(crate) dir: InternalPinDirection,
 }
 
 impl CircuitPin {
@@ -378,7 +378,7 @@ impl Circuit {
                     pin.connected_wire().map(|w| (pin.name(), w))
                 })
                 .collect(),
-            imp: self.imp.read().unwrap().serialize(),
+            imp: self.imp.read().unwrap().save(),
         }
     }
 }
@@ -461,8 +461,16 @@ pub trait CircuitImpl: Send + Sync {
     }
 
     /// Serialize circuit parameters. NOT for circuit state 
-    fn serialize(&self) -> serde_intermediate::Intermediate {
+    fn save(&self) -> serde_intermediate::Intermediate {
         ().into()
+    }
+
+    fn load(&mut self, data: &serde_intermediate::Intermediate) {
+
+    }
+
+    fn load_internal(&self, data: &serde_intermediate::Intermediate) -> Option<Box<dyn InternalCircuitState>> {
+        None
     }
 
     /// Custom handler for [`PinDirection::Custom`]

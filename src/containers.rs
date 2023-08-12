@@ -695,6 +695,13 @@ impl<T> RandomQueue<T> {
     pub fn new() -> RandomQueue<T, RandomState> {
         Default::default()
     }
+
+    pub fn from_vec(vec: Vec<T>) -> RandomQueue<T, RandomState> {
+        Self {
+            vec: vec.into(),
+            ..Default::default()
+        }
+    }
 }
 
 impl<T, S: BuildHasher> RandomQueue<T, S> {

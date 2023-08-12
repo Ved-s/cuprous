@@ -66,6 +66,10 @@ impl CircuitImpl for Circuit {
             .unwrap_or_default();
         self.out_pin.set_output(state_ctx, state.into());
     }
+
+    fn load_internal(&self, data: &serde_intermediate::Intermediate) -> Option<Box<dyn InternalCircuitState>> {
+        serde_intermediate::de::intermediate::deserialize::<State>(data).ok().map(|s| Box::new(s) as Box<dyn InternalCircuitState>)
+    }
 }
 
 #[derive(Default, Serialize, Deserialize)]

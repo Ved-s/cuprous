@@ -1,10 +1,11 @@
 use std::{collections::HashMap, num::NonZeroU32, sync::Arc};
 
 use eframe::epaint::Color32;
-use serde::{Serialize, Serializer};
+
 
 use crate::{
-    circuits::{CircuitPin, DynStaticStr},
+    circuits::{Circuit, CircuitPin},
+    containers::FixedVec,
     state::StateCollection,
     vector::{Vec2i, Vector},
     Direction2, Direction4, DirectionPosItreator, OptionalInt, OptionalNonzeroInt, RwLock,
@@ -17,9 +18,8 @@ pub struct FoundWirePoint {
     pub pos: Vec2i,
 }
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Default)]
 pub struct Wire {
-    #[serde(skip)]
     pub id: usize,
     pub points: HashMap<Vec2i, WirePoint>,
 }
@@ -81,16 +81,23 @@ impl Wire {
             points: self.points.iter().map(|(k, v)| (*k, v.save())).collect(),
         }
     }
+
+    pub fn load(data: &crate::io::WireData, id: usize, circuits: &FixedVec<Circuit>) -> Self {
+        Self {
+            id,
+            points: data
+                .points
+                .iter()
+                .map(|(pos, data)| (*pos, WirePoint::load(data, circuits)))
+                .collect(),
+        }
+    }
 }
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Default)]
 pub struct WirePoint {
-    #[serde(skip_serializing_if = "is_false")]
     pub up: bool,
-    #[serde(skip_serializing_if = "is_false")]
     pub left: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(serialize_with = "serialize_pin_connection")]
     pub pin: Option<Arc<RwLock<CircuitPin>>>,
 }
 
@@ -108,35 +115,33 @@ impl WirePoint {
             left: self.left,
             pin: self.pin.as_ref().map(|pin| {
                 let pin = pin.read().unwrap();
-                crate::io::NamedCircuitPinIdData { name: pin.name(), circuit: pin.id.circuit_id }
+                crate::io::NamedCircuitPinIdData {
+                    name: pin.name(),
+                    circuit: pin.id.circuit_id,
+                }
             }),
         }
     }
-}
 
-fn is_false(bool: &bool) -> bool {
-    !bool
-}
-
-fn serialize_pin_connection<S: Serializer>(
-    pin: &Option<Arc<RwLock<CircuitPin>>>,
-    serializer: S,
-) -> Result<S::Ok, S::Error> {
-    #[derive(Serialize)]
-    struct NamedCircuitPinId {
-        name: DynStaticStr,
-        circuit: usize,
-    }
-
-    if let Some(pin) = pin {
-        let pin = pin.read().unwrap();
-        let id = NamedCircuitPinId {
-            name: pin.name(),
-            circuit: pin.id.circuit_id,
-        };
-        id.serialize(serializer)
-    } else {
-        serializer.serialize_unit()
+    fn load(data: &crate::io::WirePointData, circuits: &FixedVec<Circuit>) -> Self {
+        let pin = data.pin.as_ref().and_then(|data| {
+            circuits
+                .get(data.circuit)
+                .and_then(|circ| {
+                    circ.info
+                        .read()
+                        .unwrap()
+                        .pins
+                        .iter()
+                        .find(|i| i.name == *data.name)
+                        .map(|info| info.pin.clone())
+                })
+        });
+        Self {
+            up: data.up,
+            left: data.left,
+            pin,
+        }
     }
 }
 
