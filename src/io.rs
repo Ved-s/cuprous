@@ -4,9 +4,9 @@ use serde::{Deserialize, Serialize};
 use serde_intermediate::Intermediate;
 
 use crate::{
-    circuits::{DynStaticStr, PinDirection, CircuitPreview},
+    circuits::{PinDirection, CircuitPreview},
     state::{UpdateTask, WireState},
-    vector::Vec2i,
+    vector::Vec2i, DynStaticStr,
 };
 
 pub trait LoadingContext {

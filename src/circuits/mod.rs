@@ -1,12 +1,11 @@
-use std::{hash::Hash, ops::Deref, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    cache::GLOBAL_STR_CACHE,
     state::{CircuitState, InternalCircuitState, State, StateCollection, WireState},
     vector::{Vec2i, Vec2u, Vector},
-    OptionalInt, PaintContext, RwLock,
+    OptionalInt, PaintContext, RwLock, DynStaticStr,
 };
 
 pub mod button;
@@ -265,74 +264,6 @@ impl CircuitPinInfo {
             })),
             name,
         }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub enum DynStaticStr {
-    Static(&'static str),
-    Dynamic(Arc<str>),
-}
-
-impl Serialize for DynStaticStr {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_str(self.deref())
-    }
-}
-
-impl<'de> Deserialize<'de> for DynStaticStr {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let str = <_>::deserialize(deserializer)?;
-        Ok(Self::Dynamic(GLOBAL_STR_CACHE.cache(str)))
-    }
-}
-
-impl Hash for DynStaticStr {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.deref().hash(state)
-    }
-}
-
-impl Eq for DynStaticStr {}
-
-impl PartialEq<str> for DynStaticStr {
-    fn eq(&self, other: &str) -> bool {
-        self.deref() == other
-    }
-}
-
-impl<T: PartialEq<str>> PartialEq<T> for DynStaticStr {
-    fn eq(&self, other: &T) -> bool {
-        other.eq(self.deref())
-    }
-}
-
-impl Deref for DynStaticStr {
-    type Target = str;
-
-    fn deref(&self) -> &Self::Target {
-        match self {
-            DynStaticStr::Static(str) => str,
-            DynStaticStr::Dynamic(arc) => arc.deref(),
-        }
-    }
-}
-
-impl From<&'static str> for DynStaticStr {
-    fn from(value: &'static str) -> Self {
-        Self::Static(value)
-    }
-}
-
-impl From<Arc<str>> for DynStaticStr {
-    fn from(value: Arc<str>) -> Self {
-        Self::Dynamic(value)
     }
 }
 
