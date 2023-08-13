@@ -305,7 +305,7 @@ impl App {
         let start_time = Instant::now();
 
         let rect = ui.max_rect();
-        self.pan_zoom.update(ui, rect);
+        self.pan_zoom.update(ui, rect, self.selected_id.is_none());
         let paint = ui.painter_at(rect);
         let font_id = TextStyle::Monospace.resolve(ui.style());
         let mut grid_ds_cell_size = self.pan_zoom.scale;

@@ -5,9 +5,10 @@
 #![feature(thread_id_value)]
 
 use std::{
+    collections::HashMap,
     f32::consts::PI,
     ops::{Deref, Range},
-    sync::Arc, collections::HashMap,
+    sync::Arc,
 };
 
 use board::selection::Selection;
@@ -17,7 +18,6 @@ use eframe::{
     epaint::{PathShape, Rounding, Shape, Stroke},
 };
 use emath::{pos2, vec2, Pos2, Rect};
-
 
 use serde::{Deserialize, Serialize};
 #[cfg(target_arch = "wasm32")]
@@ -49,11 +49,11 @@ mod macros;
 #[cfg(debug_assertions)]
 mod debug;
 
+mod app;
 mod cache;
 mod io;
-mod ui;
 mod time;
-mod app;
+mod ui;
 
 #[cfg(debug_assertions)]
 type RwLock<T> = debug::DebugRwLock<T>;
@@ -74,7 +74,12 @@ impl io::LoadingContext for BasicLoadingContext<'_> {
 
 fn main() {
     #[cfg(not(target_arch = "wasm32"))]
-    eframe::run_native("rls", eframe::NativeOptions::default(), Box::new(|cc| Box::new(app::App::create(cc)))).unwrap();
+    eframe::run_native(
+        "rls",
+        eframe::NativeOptions::default(),
+        Box::new(|cc| Box::new(app::App::create(cc))),
+    )
+    .unwrap();
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
@@ -83,7 +88,11 @@ pub async fn web_main(canvas_id: &str) -> Result<(), JsValue> {
     use eframe::WebOptions;
 
     eframe::WebRunner::new()
-        .start(canvas_id, WebOptions::default(), Box::new(|cc| Box::new(app::App::create(cc))))
+        .start(
+            canvas_id,
+            WebOptions::default(),
+            Box::new(|cc| Box::new(app::App::create(cc))),
+        )
         .await
 }
 
@@ -227,7 +236,7 @@ pub struct PanAndZoom {
 }
 
 impl PanAndZoom {
-    fn update(&mut self, ui: &egui::Ui, rect: Rect) {
+    fn update(&mut self, ui: &egui::Ui, rect: Rect, allow_primary_button_drag: bool) {
         let zoom = ui.input(|input| {
             input
                 .multi_touch()
@@ -246,7 +255,9 @@ impl PanAndZoom {
 
         let interaction = ui.interact(rect, ui.id(), Sense::drag());
 
-        if interaction.dragged_by(egui::PointerButton::Secondary) {
+        if interaction.dragged_by(egui::PointerButton::Secondary)
+            || (allow_primary_button_drag && interaction.dragged_by(egui::PointerButton::Primary))
+        {
             self.pos -= interaction.drag_delta() / self.scale;
         }
 
@@ -716,7 +727,6 @@ impl Iterator for DirectionPosItreator {
         Some(p)
     }
 }
-
 
 #[derive(Clone, Debug)]
 pub enum DynStaticStr {
