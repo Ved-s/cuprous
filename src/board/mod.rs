@@ -398,6 +398,8 @@ impl ActiveCircuitBoard {
             .borrow_mut()
             .pre_update_selection(self, ctx, selected.selection());
 
+
+        // TODO: bug, sone wires aren't updated when deletion makes wires split
         if ctx.egui_ctx.input(|input| {
             input.key_pressed(egui::Key::Delete) || input.key_pressed(egui::Key::Backspace)
         }) {

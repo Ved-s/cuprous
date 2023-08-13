@@ -1,0 +1,64 @@
+name: Rust WASM Page
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Install Rust
+      uses: brndnmtthws/rust-action-rustup@v1.0.0
+      with:
+        toolchain: nightly
+        targets: wasm32-unknown-unknown
+        components: cargo, rustc, rust-std
+
+    - name: Build
+      run: cargo build --target wasm32-unknown-unknown -F wasm --release
+
+    - name: Install wasm-bindgen
+      run: cargo install wasm-bindgen-cli
+
+    - name: Copy WASM
+      run: cp target/wasm32-unknown-unknown/debug/rls.wasm web/rls.wasm
+
+    - name: Bindgen
+      run: wasm-bindgen web/rls.wasm --out-dir web --target web
+
+    - name: Package artifact
+      uses: actions/upload-pages-artifact@v1
+      with:
+        path: web/
+  
+  deploy:
+
+    needs:
+      build
+
+    permissions:
+      pages: write
+      id-token: write
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup Pages
+        uses: actions/configure-pages@v3
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v2

@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <script type="module">
+        import init, { web_main } from "./rls.js"
+
+        async function run() {
+            await init();
+            await web_main("main");
+        }
+        run()
+    </script>
+    <script>
+    </script>
+</head>
+<body>
+    <style> 
+        html,
+        body {
+            overflow: hidden;
+            margin: 0 !important;
+            padding: 0 !important;
+            height: 100%;
+            width: 100%;
+        }
+        canvas {
+            margin-right: auto;
+            margin-left: auto;
+            display: block;
+            position: absolute;
+            top: 0%;
+            left: 50%;
+            transform: translate(-50%, 0%);
+        }
+    </style>
+    <canvas id="main"> </canvas>
+</body>
+</html>
