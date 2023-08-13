@@ -31,7 +31,7 @@ jobs:
       run: cargo install wasm-bindgen-cli
 
     - name: Copy WASM
-      run: cp target/wasm32-unknown-unknown/debug/rls.wasm web/rls.wasm
+      run: cp target/wasm32-unknown-unknown/release/rls.wasm web/rls.wasm
 
     - name: Bindgen
       run: wasm-bindgen web/rls.wasm --out-dir web --target web
