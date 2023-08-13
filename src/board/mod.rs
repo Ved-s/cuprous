@@ -96,76 +96,44 @@ impl CircuitBoard {
         points: &HashSet<Vec2i>,
         update_states: bool,
     ) -> Option<usize> {
-        fn search_wire_point(
-            nodes: impl Iterator<Item = Vec2i>,
-            from: Vec2i,
-            vertical: bool,
-            inverse: bool,
-        ) -> Option<Vec2i> {
-            let f_eq_coord = if vertical { from.x() } else { from.y() };
-            let f_diff_coord = if vertical { from.y() } else { from.x() };
-
-            nodes
-                .filter_map(|p| {
-                    let p_eq_coord = if vertical { p.x() } else { p.y() };
-                    if p_eq_coord != f_eq_coord {
-                        None
-                    } else {
-                        let p_diff_coord = if vertical { p.y() } else { p.x() };
-
-                        let dist = if inverse {
-                            f_diff_coord - p_diff_coord
-                        } else {
-                            p_diff_coord - f_diff_coord
-                        };
-
-                        if dist <= 0 {
-                            None
-                        } else {
-                            Some((p, dist))
-                        }
-                    }
-                })
-                .min_by(|a, b| a.1.cmp(&b.1))
-                .map(|p| p.0)
-        }
-
         let new_wire_id = self.wires.first_free_pos();
         let wire = unwrap_option_or_return!(self.wires.get_mut(id), None);
 
+        let point_positions: Vec<_> = wire.points.keys().cloned().collect();
+
+        for pos in point_positions {
+            // sometimes I hate rust borrow checker
+            if let Some(point_dirs) = wire.points.get(&pos).map(|p| [p.up, p.left]) {
+                let iter = [Direction2::Up, Direction2::Left]
+                    .into_iter()
+                    .enumerate()
+                    .filter_map(|(i, v)| point_dirs[i].then_some(v));
+                for dir in iter {
+                    if let Some(found) = wire.search_wire_point(pos, dir.into()) {
+                        if points.contains(&found.pos) != points.contains(&pos) {
+                            *wire
+                                .points
+                                .get_mut(&pos)
+                                .expect("unreachable")
+                                .get_dir_mut(dir) = false;
+                        }
+                    }
+                }
+            }
+        }
+
         let mut new_points = HashMap::new();
         for pos in points.iter() {
-            let point = unwrap_option_or_continue!(wire.points.remove(pos));
+            let mut point = unwrap_option_or_continue!(wire.points.remove(pos));
 
-            let ref_right = search_wire_point(wire.points.keys().cloned(), *pos, false, true);
-            let ref_down = search_wire_point(wire.points.keys().cloned(), *pos, true, true);
-            if let Some(r) = ref_right {
-                if let Some(p) = wire.points.get_mut(&r) {
-                    p.left = false
-                }
-            }
-            if let Some(r) = ref_down {
-                if let Some(p) = wire.points.get_mut(&r) {
-                    p.up = false
-                }
-            }
-
-            let WirePoint { left, up, pin } = point;
-
-            let left = left
-                && search_wire_point(wire.points.keys().cloned(), *pos, false, false)
-                    .is_some_and(|p| points.contains(&p));
-            let up = up
-                && search_wire_point(wire.points.keys().cloned(), *pos, true, false)
-                    .is_some_and(|p| points.contains(&p));
-            let pin = pin.map(|p| {
+            point.pin = point.pin.map(|p| {
                 p.write()
                     .unwrap()
                     .set_wire(&self.states, Some(new_wire_id), false, true);
                 p
             });
 
-            new_points.insert(*pos, WirePoint { up, left, pin });
+            new_points.insert(*pos, point);
         }
 
         let new_wire = Wire {
@@ -208,7 +176,10 @@ impl CircuitBoard {
         }
     }
 
-    pub fn load(data: &crate::io::CircuitBoardData, ctx: &impl crate::io::LoadingContext) -> Arc<RwLock<Self>> {
+    pub fn load(
+        data: &crate::io::CircuitBoardData,
+        ctx: &impl crate::io::LoadingContext,
+    ) -> Arc<RwLock<Self>> {
         let circuits = FixedVec::from_option_vec(
             data.circuits
                 .iter()
@@ -336,7 +307,7 @@ impl ActiveCircuitBoard {
                     for dir in Direction2::iter_all() {
                         if let Some(point) = point
                             .get_dir(dir)
-                            .then(|| wire.search_wire_point(*pos, dir))
+                            .then(|| wire.search_wire_point(*pos, dir.into()))
                             .flatten()
                         {
                             for (i, pos) in dir
@@ -398,8 +369,6 @@ impl ActiveCircuitBoard {
             .borrow_mut()
             .pre_update_selection(self, ctx, selected.selection());
 
-
-        // TODO: bug, sone wires aren't updated when deletion makes wires split
         if ctx.egui_ctx.input(|input| {
             input.key_pressed(egui::Key::Delete) || input.key_pressed(egui::Key::Backspace)
         }) {
@@ -423,8 +392,8 @@ impl ActiveCircuitBoard {
 
             let states = self.board.read().unwrap().states.clone();
             for wire in affected_wires {
+                //self.split_wires(wire, true);
                 states.update_wire(wire);
-                self.split_wires(wire, true)
             }
         }
 
@@ -1397,8 +1366,9 @@ impl ActiveCircuitBoard {
         self.remove_useless_intersection(target.pos, false);
 
         if split {
-            self.split_wires(wire, update_states);
-        } else if update_states {
+            self.split_wires(wire, true);
+        }
+        if update_states {
             let states = self.board.read().unwrap().states.clone();
             states.update_wire(wire);
         }

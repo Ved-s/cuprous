@@ -56,8 +56,9 @@ impl Wire {
     pub fn search_wire_point(
         &self,
         pos: Vector<2, i32>,
-        dir: Direction2,
+        dir: Direction4,
     ) -> Option<FoundWirePoint> {
+        let (dir, forward) = dir.into_dir2();
         let current_diff_pos = dir.choose_axis_component(pos.x(), pos.y());
         let current_eq_pos = dir.choose_axis_component(pos.y(), pos.x());
         self.points
@@ -66,7 +67,12 @@ impl Wire {
                 let target_diff_pos = dir.choose_axis_component(pos.x(), pos.y());
                 let target_eq_pos = dir.choose_axis_component(pos.y(), pos.x());
                 let pos_diff = current_diff_pos - target_diff_pos;
-                (target_eq_pos == current_eq_pos && pos_diff > 0).then_some((pos, pos_diff as u32))
+
+                if forward {
+                    (target_eq_pos == current_eq_pos && pos_diff > 0).then_some((pos, pos_diff as u32))
+                } else {
+                    (target_eq_pos == current_eq_pos && pos_diff < 0).then_some((pos, -pos_diff as u32))
+                }
             })
             .min_by(|a, b| a.1.cmp(&b.1))
             .map(|(pos, dist)| FoundWirePoint {
@@ -105,6 +111,13 @@ impl WirePoint {
         match dir {
             Direction2::Up => self.up,
             Direction2::Left => self.left,
+        }
+    }
+
+    pub fn get_dir_mut(&mut self, dir: Direction2) -> &mut bool {
+        match dir {
+            Direction2::Up => &mut self.up,
+            Direction2::Left => &mut self.left,
         }
     }
 
