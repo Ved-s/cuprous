@@ -1,0 +1,13 @@
+<svg width="4" height="4">
+    <circle fill="green" cx="0.5" cy="0.5" r="0.1"/>
+    <circle fill="green" cx="0.5" cy="2.5" r="0.1"/>
+    <circle fill="green" cx="3.5" cy="1.5" r="0.1"/>
+    <path d="
+        M 0.5 0 
+        L 1.5 0 
+        C 3.65 0 3.65 3 1.5 3
+        L 0.5 3
+        Z
+    " stroke="black" stroke-width="0.05" fill="white" />
+    <circle fill="white" stroke="black" stroke-width="0.05" cx="3.32" cy="1.5" r="0.2"/>
+</svg>

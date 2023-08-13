@@ -392,7 +392,6 @@ impl ActiveCircuitBoard {
 
             let states = self.board.read().unwrap().states.clone();
             for wire in affected_wires {
-                //self.split_wires(wire, true);
                 states.update_wire(wire);
             }
         }
@@ -701,7 +700,7 @@ impl ActiveCircuitBoard {
                 let pos = circ_ctx.screen.world_to_screen_tile(pos) + circ_ctx.screen.scale / 2.0;
                 circ_ctx
                     .paint
-                    .circle_filled(pos.into(), circ_ctx.screen.scale * 0.1, color);
+                    .circle_filled(pos.into(), circ_ctx.screen.scale * Self::WIRE_THICKNESS * 0.5, color);
             }
         }
 
