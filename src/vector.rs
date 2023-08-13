@@ -6,7 +6,7 @@ use std::{
     ops::{Add, Div, Mul},
 };
 
-use crate::{r#const::*, SizeCalc};
+use crate::r#const::*;
 
 pub trait VectorValue: Sized + Copy + Default {}
 impl<T> VectorValue for T where T: Sized + Copy + Default {}
@@ -158,12 +158,6 @@ impl_vec_component!(w, 3);
 impl<const SIZE: usize, T: VectorValue> Default for Vector<SIZE, T> {
     fn default() -> Self {
         Self([Default::default(); SIZE])
-    }
-}
-
-impl<const SIZE: usize, T: VectorValue + SizeCalc> SizeCalc for Vector<SIZE, T> {
-    fn calc_size_inner(&self) -> usize {
-        (0..SIZE).map(|i| self.0[i].calc_size_inner()).sum()
     }
 }
 

@@ -8,8 +8,7 @@ use crate::{
     containers::FixedVec,
     state::StateCollection,
     vector::{Vec2i, Vector},
-    Direction2, Direction4, DirectionPosItreator, OptionalInt, OptionalNonzeroInt, RwLock,
-    SizeCalc, State,
+    Direction2, Direction4, DirectionPosItreator, OptionalInt, OptionalNonzeroInt, RwLock, State,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -195,11 +194,6 @@ impl WireNode {
     }
 }
 
-impl SizeCalc for WireNode {
-    fn calc_size_inner(&self) -> usize {
-        0
-    }
-}
 
 #[allow(unused)]
 pub struct FoundWireNode {

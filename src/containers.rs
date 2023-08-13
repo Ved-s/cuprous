@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     unwrap_option_or_continue,
     vector::{Vec2isize, Vec2usize, Vector},
-    Intersect, SizeCalc,
+    Intersect,
 };
 
 #[derive(Debug, Clone)]
@@ -218,11 +218,6 @@ impl<T> From<Vec<T>> for FixedVec<T> {
     }
 }
 
-impl<T: SizeCalc> SizeCalc for FixedVec<T> {
-    fn calc_size_inner(&self) -> usize {
-        self.vec.calc_size_inner()
-    }
-}
 
 pub struct FixedVecIterator<'a, T> {
     vec: &'a Vec<Option<T>>,
@@ -663,12 +658,6 @@ impl<'a, const CHUNK_SIZE: usize, T: Default> Iterator for ChunksAreaIterator<'a
                 Some(res)
             }
         }
-    }
-}
-
-impl<const CHUNK_SIZE: usize, T: SizeCalc + Default> SizeCalc for Chunks2D<CHUNK_SIZE, T> {
-    fn calc_size_inner(&self) -> usize {
-        self.quarters.calc_size_inner()
     }
 }
 
