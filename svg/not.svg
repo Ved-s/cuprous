@@ -6,7 +6,6 @@
         L 1.32 0.5
         L 0.5 0.9
         Z
-        
     " stroke="black" stroke-width="0.05" fill="white" />
     <circle fill="white" stroke="black" stroke-width="0.05" cx="1.32" cy="0.5" r="0.2"/>
 </svg>
