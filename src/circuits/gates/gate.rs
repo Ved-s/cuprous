@@ -1,15 +1,22 @@
-use crate::circuits::*;
+use eframe::epaint::{Color32, Stroke};
+use emath::{vec2, Vec2};
+
+use crate::{
+    circuits::*,
+    path::{PathItem, PathItemIterator},
+};
 
 #[derive(Clone)]
 pub struct GateTemplate {
     pub id: &'static str,
-    pub bool_combiner: fn(bool, bool) -> bool,
-    pub drawer: fn(&PaintContext, bool)
+    pub process_inputs: fn(&[bool]) -> bool,
+    pub drawer: fn(&PaintContext, bool),
 }
 
 struct Circuit {
     template: GateTemplate,
     inputs: Box<[CircuitPinInfo]>,
+    input_bools: Vec<bool>,
     output: CircuitPinInfo,
 }
 
@@ -23,6 +30,7 @@ impl Circuit {
             ]
             .into_boxed_slice(),
             output: CircuitPinInfo::new([3, 1], InternalPinDirection::Outside, "out"),
+            input_bools: Vec::with_capacity(2)
         }
     }
 }
@@ -39,18 +47,33 @@ impl CircuitImpl for Circuit {
     }
 
     fn update_signals(&mut self, state_ctx: &CircuitStateContext, _: Option<usize>) {
-        let state = self
+        let states = self
             .inputs
             .iter()
-            .map(|i| i.get_input(state_ctx))
-            .reduce(|a, b| a.combine_boolean(b, self.template.bool_combiner))
-            .unwrap_or_default();
-        self.output.set_output(state_ctx, state);
+            .map(|i| i.get_input(state_ctx));
+        self.input_bools.clear();
+        for state in states {
+            match state {
+                WireState::None => continue,
+                WireState::True => self.input_bools.push(true),
+                WireState::False => self.input_bools.push(false),
+                WireState::Error => {
+                    self.output.set_output(state_ctx, WireState::Error);
+                    return;
+                },
+            }
+        }
+        if self.input_bools.is_empty() {
+            self.output.set_output(state_ctx, WireState::None);
+        }
+        else {
+            self.output.set_output(state_ctx, (self.template.process_inputs)(&self.input_bools).into());
+        }
     }
 }
 
 pub struct Preview {
-    pub template: GateTemplate
+    pub template: GateTemplate,
 }
 
 impl CircuitPreview for Preview {
@@ -69,4 +92,26 @@ impl CircuitPreview for Preview {
     fn type_name(&self) -> DynStaticStr {
         self.template.id.into()
     }
+}
+
+pub fn draw_from_path(ctx: &PaintContext, semi_transparent: bool, size: Vec2, path: &[PathItem]) {
+    let opacity = if semi_transparent { 0.6 } else { 1.0 };
+
+    let border_color = Color32::BLACK.linear_multiply(opacity);
+    let fill_color = Color32::from_gray(200).linear_multiply(opacity);
+    let straightness = (0.3 / (ctx.screen.scale.sqrt())).max(0.01);
+
+    path.iter().cloned().create_path_shapes(
+        ctx.rect.left_top().to_vec2(),
+        vec2(
+            1.0 / size.x * ctx.rect.width(),
+            1.0 / size.y * ctx.rect.height(),
+        ),
+        fill_color,
+        Stroke::new(2.0, border_color),
+        straightness,
+        |_, s| {
+            ctx.paint.add(s);
+        },
+    );
 }

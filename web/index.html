@@ -2,6 +2,7 @@
 <html>
 <head>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>rls</title>
     <script src="coi-serviceworker.js"></script>
     <script type="module">
         import init, { web_main } from "./wasm/rls.js"
@@ -11,8 +12,6 @@
             await web_main("main");
         }
         run()
-    </script>
-    <script>
     </script>
 </head>
 <body>

@@ -20,25 +20,27 @@ pub trait PathItemIterator: Iterator<Item = PathItem> {
         fill: impl Into<Color32>,
         stroke: impl Into<Stroke>,
         bezier_straightness: f32,
-        consumer: impl Fn(PathShape),
+        consumer: impl Fn(usize, PathShape),
     ) {
         let fill = fill.into();
         let stroke = stroke.into();
 
         let mut pos = pos2(0., 0.);
         let mut points = vec![];
+        let mut path_index = 0;
 
         for item in self {
             match item {
                 PathItem::MoveTo(p) => {
                     let p = (offset + p.to_vec2() * scale).to_pos2();
                     if !points.is_empty() {
-                        consumer(PathShape {
+                        consumer(path_index, PathShape {
                             points,
                             closed: false,
                             fill,
                             stroke,
                         });
+                        path_index += 1;
                         points = vec![];
                     }
                     pos = p;
@@ -98,12 +100,13 @@ pub trait PathItemIterator: Iterator<Item = PathItem> {
                 PathItem::ClosePath => {
                     if !points.is_empty() {
                         pos = points[0];
-                        consumer(PathShape {
+                        consumer(path_index, PathShape {
                             points,
                             closed: true,
                             fill,
                             stroke,
                         });
+                        path_index += 1;
                         points = vec![];
                     }
                 }
@@ -111,7 +114,7 @@ pub trait PathItemIterator: Iterator<Item = PathItem> {
         }
 
         if !points.is_empty() {
-            consumer(PathShape {
+            consumer(path_index, PathShape {
                 points,
                 closed: false,
                 fill,

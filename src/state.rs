@@ -60,23 +60,6 @@ impl WireState {
         };
         Color32::from_rgb(rgb[0], rgb[1], rgb[2])
     }
-
-    pub fn combine_boolean(
-        self,
-        other: WireState,
-        combiner: impl FnOnce(bool, bool) -> bool,
-    ) -> WireState {
-        match (self, other) {
-            (WireState::None, o) => o,
-            (o, WireState::None) => o,
-            (WireState::Error, _) => WireState::Error,
-            (_, WireState::Error) => WireState::Error,
-            (WireState::False, WireState::False) => combiner(false, false).into(),
-            (WireState::True, WireState::False) => combiner(true, false).into(),
-            (WireState::False, WireState::True) => combiner(false, true).into(),
-            (WireState::True, WireState::True) => combiner(true, true).into(),
-        }
-    }
 }
 
 impl From<bool> for WireState {
@@ -625,17 +608,6 @@ impl State {
         });
         let handle = StateThreadHandle { handle, sync };
         *self.thread.write().unwrap() = Some(handle);
-    }
-
-    #[cfg(not(feature = "single_thread"))]
-    pub fn thread(&self) -> Option<ThreadId> {
-        self.thread.read().ok()?.as_ref().and_then(|thread| {
-            if thread.handle.is_finished() {
-                None
-            } else {
-                Some(thread.handle.thread().id())
-            }
-        })
     }
 }
 

@@ -100,7 +100,13 @@ impl App {
                 template: circuits::gates::or::TEMPLATE,
             }),
             Box::new(circuits::gates::gate::Preview {
+                template: circuits::gates::nor::TEMPLATE,
+            }),
+            Box::new(circuits::gates::gate::Preview {
                 template: circuits::gates::and::TEMPLATE,
+            }),
+            Box::new(circuits::gates::gate::Preview {
+                template: circuits::gates::nand::TEMPLATE,
             }),
             Box::new(circuits::pullup::Preview {}),
         ];
@@ -150,7 +156,7 @@ impl App {
             #[cfg(not(target_arch = "wasm32"))]
             last_win_size: Default::default(),
             board: ActiveCircuitBoard::new(board, state_id).unwrap(),
-            debug: true,
+            debug: false,
 
             selected_id: None,
             inventory_items: vec![
