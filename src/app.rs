@@ -32,6 +32,7 @@ pub struct App {
     circuit_previews: HashMap<String, Arc<Box<dyn CircuitPreview>>>,
 }
 
+// TODO: fix coi sometimes not working by re-registering it and reloading
 impl eframe::App for App {
     fn update(&mut self, ctx: &eframe::egui::Context, frame: &mut eframe::Frame) {
         #[cfg(not(target_arch = "wasm32"))]
@@ -61,6 +62,12 @@ impl eframe::App for App {
         if ctx.input(|input| input.key_pressed(Key::F8)) {
             let board = self.board.board.clone();
             self.board = ActiveCircuitBoard::new(board, 0).unwrap();
+        }
+
+        if ctx.input(|input| input.key_pressed(Key::R)) {
+            let state = &self.board.state;
+            state.reset();
+            state.update_all_circuits();
         }
 
         egui::CentralPanel::default()
@@ -120,6 +127,7 @@ impl App {
             Box::new(circuits::gates::gate::Preview {
                 template: circuits::gates::nand::TEMPLATE,
             }),
+            Box::new(circuits::gates::not::Preview {}),
             Box::new(circuits::pullup::Preview {}),
         ];
         let previews =
@@ -394,6 +402,8 @@ Time: {:.2} ms
 Selected: {:?}
 
 [F9] Debug: {}
+[F8] Board reload
+[R] State reset
 
 Wire parts drawn: {}
 Pressed keys: {:?}

@@ -5,3 +5,4 @@ pub mod nor;
 pub mod xnor;
 pub mod and;
 pub mod nand;
+pub mod not;

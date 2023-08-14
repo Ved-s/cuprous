@@ -609,6 +609,30 @@ impl State {
         let handle = StateThreadHandle { handle, sync };
         *self.thread.write().unwrap() = Some(handle);
     }
+
+    pub fn reset(&self) {
+
+        // Important to lock everything, so thread won't do anything
+        let mut queue = self.queue.lock().unwrap();
+        let mut circuits = self.circuits.write().unwrap();
+        let mut wires = self.wires.write().unwrap();
+
+        queue.clear();
+        circuits.clear();
+        wires.clear();
+    }
+
+    pub fn update_all_circuits(&self) {
+        let mut queue = self.queue.lock().unwrap();
+
+        let board = self.board.read().unwrap();
+        for circuit in board.circuits.iter() {
+            queue.enqueue(UpdateTask::CircuitSignals { id: circuit.id, pin: None });
+        }
+        drop(queue);
+        #[cfg(not(feature = "single_thread"))]
+        self.poke_thread(true, false);
+    }
 }
 
 impl Drop for State {

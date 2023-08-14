@@ -210,6 +210,11 @@ impl<T> FixedVec<T> {
     fn test_free_correct(&self) {
         assert!(!self.first_free.is_some_and(|v| self.get(v).is_some()));
     }
+
+    pub fn clear(&mut self) {
+        self.vec.clear();
+        self.first_free = None;
+    }
 }
 
 impl<T> From<Vec<T>> for FixedVec<T> {
@@ -730,6 +735,10 @@ impl<T, S: BuildHasher> RandomQueue<T, S> {
         };
         self.hasher.write_usize(pos);
         Some(item)
+    }
+
+    pub fn clear(&mut self) {
+        self.vec.clear();
     }
 
     pub fn inner(&self) -> &FixedVec<T> {
