@@ -5,7 +5,7 @@ use std::{
 };
 
 #[cfg(not(feature = "single_thread"))]
-use std::thread::{self, JoinHandle, ThreadId};
+use std::thread::{self, JoinHandle};
 
 use eframe::epaint::Color32;
 use crate::time::Instant;

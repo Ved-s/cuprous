@@ -3,8 +3,6 @@ name = "rls"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
 bezier-nd = "0.5.0"
 eframe = { version = "0.22.0", features = ["persistence"] }
@@ -14,7 +12,6 @@ paste = "1.0.12"
 ron = "0.8.0"
 serde = "1.0.183"
 serde-intermediate = { version = "1.6.0", default-features = false }
-wasm-bindgen = "0.2.87"
 
 [target.wasm32-unknown-unknown.dependencies]
 js-sys = "0.3.64"
@@ -22,6 +19,9 @@ web-sys = "0.3.64"
 wasm-bindgen = "0.2.87"
 wasm-bindgen-futures = "0.4.37"
 wasm-bindgen_rs = { package = "wasm-bindgen", version = "0.2", optional = true }
+
+[profile.release]
+lto = true
 
 [features]
 single_thread = []
