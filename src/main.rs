@@ -52,6 +52,7 @@ mod debug;
 mod app;
 mod cache;
 mod io;
+mod path;
 mod time;
 mod ui;
 

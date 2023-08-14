@@ -1,7 +1,7 @@
-use eframe::epaint::{Color32, PathShape, Shape, Stroke};
-use emath::Pos2;
+use eframe::epaint::{Color32, Stroke};
+use emath::{pos2, vec2};
 
-use crate::vector::Vec2f;
+use crate::path::{PathItem, PathItemIterator};
 
 use super::gate::GateTemplate;
 
@@ -13,45 +13,35 @@ pub const TEMPLATE: GateTemplate = GateTemplate {
 
         let border_color = Color32::BLACK.linear_multiply(opacity);
         let fill_color = Color32::from_gray(200).linear_multiply(opacity);
+        let straightness = (0.3 / (ctx.screen.scale.sqrt())).max(0.01);
 
-        let points = [
-            Vec2f::from([
-                ctx.rect.left() + ctx.rect.width() * (7.0/8.0),
-                ctx.rect.center().y,
-            ]),
-            Vec2f::from([ctx.rect.left() + ctx.rect.width() * 0.5, ctx.rect.top() - ctx.rect.height() * 0.05]),
-
-            Vec2f::from([ctx.rect.left() + ctx.rect.width() * (3.0/64.0), ctx.rect.top()]),
-            Vec2f::from([
-                ctx.rect.left() + ctx.rect.width() * (3.0/8.0),
-                ctx.rect.center().y,
-            ]),
-
-            Vec2f::from([ctx.rect.left() + ctx.rect.width() * (3.0/64.0), ctx.rect.bottom()]),
-            Vec2f::from([ctx.rect.left() + ctx.rect.width() * 0.5, ctx.rect.bottom() + ctx.rect.height() * 0.05]),  
+        /*
+         M 3.5 1.5
+         Q 2.5 0 1.5 0
+         L 0.25 0
+         Q 1.25 1.5 0.25 3
+         L 1.5 3
+         Q 2.5 3 3.5 1.5
+         Z
+        */
+        let path = [
+            PathItem::MoveTo(pos2(3.5, 1.5)),
+            PathItem::QuadraticBezier(pos2(2.5, 0.0), pos2(1.5, 0.0)),
+            PathItem::LineTo(pos2(0.25, 0.0)),
+            PathItem::QuadraticBezier(pos2(1.25, 1.5), pos2(0.25, 3.0)),
+            PathItem::LineTo(pos2(1.5, 3.0)),
+            PathItem::QuadraticBezier(pos2(2.5, 3.0), pos2(3.5, 1.5)),
+            PathItem::ClosePath,
         ];
 
-        let mut poly_points = vec![];
-
-        for i in 0..3 {
-            let start = i * 2;
-
-            let a = points[start];
-            let b = points[start + 1];
-            let c = points[(start + 2) % points.len()];
-
-            poly_points.extend(
-                bezier_nd::Bezier::quadratic(&a, &b, &c)
-                    .as_points((0.3/(ctx.screen.scale.sqrt())).max(0.01))
-                    .map(Into::<Pos2>::into),
+        path.into_iter()
+            .create_path_shapes(
+                ctx.rect.left_top().to_vec2(),
+                vec2(1.0 / 4.0 * ctx.rect.width(), 1.0 / 3.0 * ctx.rect.height()),
+                fill_color,
+                Stroke::new(2.0, border_color),
+                straightness,
+                |s| { ctx.paint.add(s); }
             );
-        }
-
-        ctx.paint.add(Shape::Path(PathShape {
-            points: poly_points,
-            closed: true,
-            fill: fill_color,
-            stroke: Stroke::new(2.0, border_color),
-        }));
-    }
+    },
 };
