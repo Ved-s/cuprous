@@ -1,17 +1,19 @@
-use std::{collections::HashMap, sync::Arc, ops::Deref};
+use std::{collections::HashMap, ops::Deref, sync::Arc};
 
 use eframe::{
-    egui::{self, Key, Margin, Context, Ui, TextStyle},
-    CreationContext, epaint::{Stroke, Color32},
+    egui::{self, Context, Key, Margin, TextStyle, Ui},
+    epaint::{Color32, Stroke},
+    CreationContext,
 };
-use emath::{Pos2, Vec2, pos2, Rect, vec2, Align2};
+use emath::{pos2, vec2, Align2, Pos2, Rect, Vec2};
 
 use crate::{
     board::{ActiveCircuitBoard, CircuitBoard, SelectedBoardItem},
     circuits::{self, CircuitPreview},
-    ui::{Inventory, InventoryItemGroup, InventoryItem},
+    time::Instant,
+    ui::{Inventory, InventoryItem, InventoryItemGroup},
     vector::{Vec2f, Vector},
-    BasicLoadingContext, PanAndZoom, RwLock, DynStaticStr, TileDrawBounds, time::Instant, PaintContext,
+    BasicLoadingContext, DynStaticStr, PaintContext, PanAndZoom, RwLock, TileDrawBounds,
 };
 
 pub struct App {
@@ -91,6 +93,10 @@ impl eframe::App for App {
     }
 }
 
+static INVENTORY_CIRCUIT_ORDER: [&str; 10] = [
+    "button", "or", "nor", "and", "nand", "xor", "xnor", "not", "pullup", "test",
+];
+
 impl App {
     pub fn create(cc: &CreationContext) -> Self {
         let previews = [
@@ -101,6 +107,12 @@ impl App {
             }),
             Box::new(circuits::gates::gate::Preview {
                 template: circuits::gates::nor::TEMPLATE,
+            }),
+            Box::new(circuits::gates::gate::Preview {
+                template: circuits::gates::xor::TEMPLATE,
+            }),
+            Box::new(circuits::gates::gate::Preview {
+                template: circuits::gates::xnor::TEMPLATE,
             }),
             Box::new(circuits::gates::gate::Preview {
                 template: circuits::gates::and::TEMPLATE,
@@ -148,6 +160,38 @@ impl App {
             drop(states);
             first_id.unwrap_or_else(|| circuit_board.states.create_state(board.clone()).0)
         };
+        let inventory_group: Vec<_> = {
+            use std::cmp::Ordering;
+
+            let mut vec: Vec<_> = previews.keys().collect();
+            vec.sort_by(|a, b| {
+                let a_ind = INVENTORY_CIRCUIT_ORDER
+                    .iter()
+                    .enumerate()
+                    .find_map(|s| (a == s.1).then_some(s.0));
+                let b_ind = INVENTORY_CIRCUIT_ORDER
+                    .iter()
+                    .enumerate()
+                    .find_map(|s| (b == s.1).then_some(s.0));
+
+                match (a_ind, b_ind) {
+                    (Some(a), Some(b)) => a.cmp(&b),
+                    (None, Some(_)) => Ordering::Less,
+                    (Some(_), None) => Ordering::Greater,
+                    (None, None) => Ordering::Equal,
+                }
+            });
+            vec.into_iter()
+                .filter_map(|id| {
+                    previews.get(id).map(|preview| {
+                        Box::new(crate::CircuitInventoryItem {
+                            preview: preview.clone(),
+                            id: preview.type_name().deref().to_owned(),
+                        }) as Box<dyn InventoryItem>
+                    })
+                })
+                .collect()
+        };
         Self {
             pan_zoom: PanAndZoom::new(0.0.into(), 16.0),
 
@@ -162,17 +206,7 @@ impl App {
             inventory_items: vec![
                 InventoryItemGroup::SingleItem(Box::new(crate::SelectionInventoryItem {})),
                 InventoryItemGroup::SingleItem(Box::new(crate::WireInventoryItem {})),
-                InventoryItemGroup::Group(
-                    previews
-                        .iter()
-                        .map(|e| {
-                            Box::new(crate::CircuitInventoryItem {
-                                preview: e.1.clone(),
-                                id: e.0.deref().to_owned(),
-                            }) as Box<dyn InventoryItem>
-                        })
-                        .collect(),
-                ),
+                InventoryItemGroup::Group(inventory_group),
             ],
             circuit_previews: previews
                 .into_iter()

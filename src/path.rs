@@ -59,6 +59,7 @@ pub trait PathItemIterator: Iterator<Item = PathItem> {
                     if points.is_empty() {
                         points.push(pos);
                     }
+                    let points_empty = points.is_empty();
                     points.extend(
                         bezier_nd::Bezier::quadratic(
                             &Vec2f::from(pos),
@@ -69,7 +70,7 @@ pub trait PathItemIterator: Iterator<Item = PathItem> {
                         .map(Pos2::from)
                         .enumerate()
                         // Remove first point if it's equal to current position
-                        .filter(|(i, p)| *i > 0 || *p != pos)
+                        .filter(|(i, p)| *i > 0 || points_empty || *p != pos)
                         .map(|(_, p)| p),
                     );
                     pos = b.to_pos2();

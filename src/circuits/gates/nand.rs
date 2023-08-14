@@ -7,7 +7,7 @@ use super::gate::{GateTemplate, draw_from_path};
 
 pub const TEMPLATE: GateTemplate = GateTemplate {
     id: "nand",
-    process_inputs: |i| !i.iter().fold(true, |a, b| a && *b),
+    process_inputs: |i| !i.iter().all(|b| *b),
     drawer: |ctx, semi_transparent| {
         let opacity = if semi_transparent { 0.6 } else { 1.0 };
         let border_color = Color32::BLACK.linear_multiply(opacity);
