@@ -90,7 +90,7 @@ impl CircuitBoard {
         }
 
         if update_states {
-            self.states.update_wire(id);
+            self.states.update_wire(id, true);
         }
     }
 
@@ -147,8 +147,8 @@ impl CircuitBoard {
         self.wires.set(new_wire, new_wire_id);
 
         if update_states {
-            self.states.update_wire(id);
-            self.states.update_wire(new_wire_id);
+            self.states.update_wire(id, true);
+            self.states.update_wire(new_wire_id, true);
         }
 
         Some(new_wire_id)
@@ -493,7 +493,7 @@ impl ActiveCircuitBoard {
 
                 let states = self.board.read().unwrap().states.clone();
                 for wire in affected_wires {
-                    states.update_wire(wire);
+                    states.update_wire(wire, true);
                 }
                 drop(sim_lock)
             }
@@ -1087,7 +1087,7 @@ impl ActiveCircuitBoard {
         );
 
         let board = self.board.read().unwrap();
-        board.states.update_wire(new_wire);
+        board.states.update_wire(new_wire, true);
         drop(sim_lock);
         Some(new_wire)
     }
@@ -1267,11 +1267,11 @@ impl ActiveCircuitBoard {
             let states = self.board.read().unwrap().states.clone();
 
             if let Some(wire) = prev_wire {
-                states.update_wire(wire);
+                states.update_wire(wire, true);
             }
 
             if let Some(wire) = wire {
-                states.update_wire(wire)
+                states.update_wire(wire, true)
             }
         }
 
@@ -1506,7 +1506,7 @@ impl ActiveCircuitBoard {
         }
         if update_states {
             let states = self.board.read().unwrap().states.clone();
-            states.update_wire(wire);
+            states.update_wire(wire, true);
         }
 
         Some(wire)
@@ -1602,7 +1602,7 @@ impl ActiveCircuitBoard {
         if update_states {
             let states = self.board.read().unwrap().states.clone();
             for wire in wires {
-                states.update_wire(wire);
+                states.update_wire(wire, true);
             }
         }
     }

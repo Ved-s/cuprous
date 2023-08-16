@@ -946,10 +946,10 @@ impl PastePreview {
                 }
             }
         }
-        
+
         let states = board.board.read().unwrap().states.clone();
         for wire in wire_ids {
-            states.update_wire(wire);
+            states.update_wire(wire, true);
         }
         drop(sim_lock)
     }

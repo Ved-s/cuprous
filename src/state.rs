@@ -23,7 +23,7 @@ use crate::{
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum UpdateTask {
     CircuitSignals { id: usize, pin: Option<usize> },
-    WireState(usize),
+    WireState { id: usize, skip_state_ckeck: bool },
     PinInput { circuit: usize, id: usize },
 }
 
@@ -164,9 +164,9 @@ impl StateCollection {
         }
     }
 
-    pub fn update_wire(&self, wire: usize) {
+    pub fn update_wire(&self, wire: usize, skip_state_ckeck: bool) {
         for state in self.states.read().unwrap().iter() {
-            state.update_wire(wire);
+            state.update_wire(wire, skip_state_ckeck);
         }
     }
 
@@ -377,8 +377,8 @@ impl State {
         }
     }
 
-    pub fn update_wire(&self, wire: usize) {
-        self.schedule_update(UpdateTask::WireState(wire));
+    pub fn update_wire(&self, wire: usize, skip_state_ckeck: bool) {
+        self.schedule_update(UpdateTask::WireState { id: wire, skip_state_ckeck });
     }
 
     pub fn update_circuit_signals(&self, circuit: usize, pin: Option<usize>) {
@@ -464,9 +464,9 @@ impl State {
 
             let board = self.board.read().unwrap();
             match task {
-                UpdateTask::WireState(wire) => {
-                    if let Some(wire) = board.wires.get(wire) {
-                        self.update_wire_now(wire);
+                UpdateTask::WireState {id, skip_state_ckeck } => {
+                    if let Some(wire) = board.wires.get(id) {
+                        self.update_wire_now(wire, skip_state_ckeck);
                     }
                 }
                 UpdateTask::CircuitSignals { id, pin } => {
@@ -491,7 +491,7 @@ impl State {
         circuit.imp.read().unwrap().init_state(&state_ctx);
     }
 
-    fn update_wire_now(&self, wire: &Wire) {
+    fn update_wire_now(&self, wire: &Wire, skip_state_ckeck: bool) {
         let mut state = WireState::None;
         let mut delayed_pins = vec![];
         for (_, point) in wire.points.iter() {
@@ -522,7 +522,7 @@ impl State {
         }
 
         let current = self.get_wire(wire.id);
-        if *current.read().unwrap() == state {
+        if !skip_state_ckeck && *current.read().unwrap() == state {
             return;
         }
 
@@ -640,7 +640,7 @@ impl State {
             queue.enqueue(UpdateTask::CircuitSignals { id: circuit.id, pin: None });
         }
         for wire in board.wires.iter() {
-            queue.enqueue(UpdateTask::WireState(wire.id));
+            queue.enqueue(UpdateTask::WireState { id: wire.id, skip_state_ckeck: true });
         }
         drop(queue);
         #[cfg(not(feature = "single_thread"))]

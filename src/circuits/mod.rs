@@ -136,10 +136,10 @@ impl CircuitPin {
 
         if update_wire {
             if let Some(prev) = prev {
-                states.update_wire(prev);
+                states.update_wire(prev, true);
             }
             if let Some(wire) = wire {
-                states.update_wire(wire);
+                states.update_wire(wire, true);
             }
         }
         if update_input {
@@ -204,7 +204,7 @@ impl CircuitPinInfo {
             .pins
             .set(value, pin.id.id);
         if let Some(wire) = pin.wire {
-            state_ctx.global_state.update_wire(wire)
+            state_ctx.global_state.update_wire(wire, false)
         }
     }
 
@@ -226,7 +226,7 @@ impl CircuitPinInfo {
 
         match dir {
             PinDirection::Inside => match wire {
-                Some(wire) => state_ctx.global_state.update_wire(wire),
+                Some(wire) => state_ctx.global_state.update_wire(wire, true),
                 None => self.pin.read().unwrap().set_input(
                     state_ctx.global_state,
                     Default::default(),
@@ -237,7 +237,7 @@ impl CircuitPinInfo {
                 .global_state
                 .update_circuit_signals(pin_id.circuit_id, Some(pin_id.id)),
             PinDirection::Custom => match wire {
-                Some(wire) => state_ctx.global_state.update_wire(wire),
+                Some(wire) => state_ctx.global_state.update_wire(wire, true),
                 None => self.pin.read().unwrap().set_input(
                     state_ctx.global_state,
                     Default::default(),

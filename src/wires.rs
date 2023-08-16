@@ -49,7 +49,7 @@ impl Wire {
         }
 
         if update_wire {
-            states.update_wire(self.id);
+            states.update_wire(self.id, true);
         }
     }
 
