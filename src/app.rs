@@ -92,7 +92,7 @@ impl eframe::App for App {
         } else if ctx.input(|input| input.key_pressed(Key::R)) {
             let state = &self.board.state;
             state.reset();
-            state.update_all_circuits();
+            state.update_everything();
         }
 
         egui::CentralPanel::default()

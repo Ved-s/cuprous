@@ -315,17 +315,15 @@ impl Circuit {
     }
 
     pub fn copy(&self, pos: Vec2u, state: &State) -> crate::io::CircuitCopyData {
-        let (pin_dirs, internal) = state
+        let internal = state
             .read_circuit(self.id)
             .map(|c| {
                 let circuit = c.read().unwrap();
-                let internal = circuit
+                circuit
                     .internal
                     .as_ref()
                     .map(|i| i.serialize())
-                    .unwrap_or_default();
-                let pin_dirs = circuit.pin_dirs.inner().clone();
-                (pin_dirs, internal)
+                    .unwrap_or_default()
             })
             .unwrap_or_default();
 
@@ -333,7 +331,6 @@ impl Circuit {
             ty: self.ty.clone(),
             pos,
             imp: self.imp.read().unwrap().save(),
-            pin_dirs,
             internal,
             update: state
                 .updates

@@ -6,7 +6,7 @@
 
 use std::{
     borrow::Borrow,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     f32::consts::PI,
     hash::Hash,
     num::NonZeroU32,
@@ -893,6 +893,10 @@ impl PastePreview {
             return;
         }
 
+        let sim_lock = { board.board.read().unwrap().sim_lock.clone() };
+        let sim_lock = sim_lock.write();
+
+        let mut wire_ids: HashSet<usize> = HashSet::new();
         for wire in self.wires.iter() {
             if let Some(length) = NonZeroU32::new(wire.length) {
                 let part = WirePart {
@@ -900,37 +904,36 @@ impl PastePreview {
                     length,
                     dir: wire.dir,
                 };
-                board.place_wire_part(part);
+                if let Some(id) = board.place_wire_part(part, false) {
+                    wire_ids.insert(id);
+                }
             }
         }
         for (circuit_data, preview) in self.circuits.iter() {
             let id = board.place_circuit(
                 pos + circuit_data.pos.convert(|v| v as i32),
+                false,
                 preview.as_ref(),
                 &|board, id| {
-                    {
-                        let board = board.board.read().unwrap();
-                        for state in board.states.states().read().unwrap().iter() {
-                            let state = state.get_circuit(id);
-                            let mut state = state.write().unwrap();
-                            state.pin_dirs =
-                                FixedVec::from_option_vec(circuit_data.pin_dirs.clone());
-                            if !matches!(
-                                circuit_data.internal,
-                                serde_intermediate::Intermediate::Unit
-                            ) {
-                                if let Some(circuit) = board.circuits.get(id) {
-                                    state.internal = circuit
-                                        .imp
-                                        .write()
-                                        .unwrap()
-                                        .load_internal(&circuit_data.internal);
-                                }
+                    let board = board.board.read().unwrap();
+                    if let Some(circuit) = board.circuits.get(id) {
+                        if !matches!(
+                            circuit_data.internal,
+                            serde_intermediate::Intermediate::Unit
+                        ) {
+                            for state in board.states.states().read().unwrap().iter() {
+                                let state = state.get_circuit(id);
+                                let mut state = state.write().unwrap();
+
+                                state.internal = circuit
+                                    .imp
+                                    .write()
+                                    .unwrap()
+                                    .load_internal(&circuit_data.internal);
                             }
                         }
-                    }
-                    if !matches!(circuit_data.imp, serde_intermediate::Intermediate::Unit) {
-                        if let Some(circuit) = board.board.read().unwrap().circuits.get(id) {
+
+                        if !matches!(circuit_data.imp, serde_intermediate::Intermediate::Unit) {
                             circuit.imp.write().unwrap().load(&circuit_data.imp)
                         }
                     }
@@ -943,5 +946,11 @@ impl PastePreview {
                 }
             }
         }
+        
+        let states = board.board.read().unwrap().states.clone();
+        for wire in wire_ids {
+            states.update_wire(wire);
+        }
+        drop(sim_lock)
     }
 }

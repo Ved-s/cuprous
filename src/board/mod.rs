@@ -34,6 +34,9 @@ pub struct CircuitBoard {
     pub wires: FixedVec<Wire>,
     pub circuits: FixedVec<Circuit>,
     pub states: StateCollection,
+
+    // RwLock for blocking simulation while modifying board
+    pub sim_lock: Arc<RwLock<()>>
 }
 
 impl CircuitBoard {
@@ -42,6 +45,7 @@ impl CircuitBoard {
             wires: vec![].into(),
             circuits: vec![].into(),
             states: StateCollection::new(),
+            sim_lock: Default::default()
         }
     }
 
@@ -219,6 +223,7 @@ impl CircuitBoard {
             wires,
             circuits,
             states: StateCollection::new(),
+            sim_lock: Default::default()
         };
         let board = Arc::new(RwLock::new(board));
 
@@ -470,6 +475,8 @@ impl ActiveCircuitBoard {
                     let mut selection = self.selection.borrow_mut();
                     selection.selection.drain().collect::<Vec<_>>()
                 };
+                let sim_lock = { self.board.read().unwrap().sim_lock.clone() };
+                let sim_lock = sim_lock.write();
                 for obj in drain {
                     match obj {
                         SelectedWorldObject::Circuit { id } => {
@@ -488,6 +495,7 @@ impl ActiveCircuitBoard {
                 for wire in affected_wires {
                     states.update_wire(wire);
                 }
+                drop(sim_lock)
             }
         }
 
@@ -839,7 +847,7 @@ impl ActiveCircuitBoard {
             self.wire_drag_pos = None;
 
             if let Some(part) = drawing_wire {
-                self.place_wire_part(part);
+                self.place_wire_part(part, true);
             }
         }
 
@@ -897,7 +905,7 @@ impl ActiveCircuitBoard {
 
             if interaction.clicked_by(eframe::egui::PointerButton::Primary) {
                 fn empty_handler(_: &mut ActiveCircuitBoard, _: usize) {}
-                self.place_circuit(place_pos, p, &empty_handler);
+                self.place_circuit(place_pos, true, p, &empty_handler);
             }
         } else if let SelectedBoardItem::Paste(p) = selected {
             let size = p.size;
@@ -992,9 +1000,14 @@ impl ActiveCircuitBoard {
 
     /* #region Wire manipulations */
 
-    pub fn place_wire_part(&mut self, part: WirePart) {
-        let part = unwrap_option_or_return!(self.optimize_wire_part(part));
+    /// Returns placed wire id
+    pub fn place_wire_part(&mut self, part: WirePart, lock_sim: bool) -> Option<usize> {
+        let part = unwrap_option_or_return!(self.optimize_wire_part(part), None);
 
+        let sim_lock = { self.board.read().unwrap().sim_lock.clone() };
+        let sim_lock = {
+            lock_sim.then(|| sim_lock.write())
+        };
         let wires_crossed = {
             let mut wires_crossed = HashSet::new();
             for (i, pos) in part.iter_pos(true).enumerate() {
@@ -1075,6 +1088,8 @@ impl ActiveCircuitBoard {
 
         let board = self.board.read().unwrap();
         board.states.update_wire(new_wire);
+        drop(sim_lock);
+        Some(new_wire)
     }
 
     fn place_wire_multipart(&mut self, part: &WirePart, wire: usize) {
@@ -1771,6 +1786,7 @@ impl ActiveCircuitBoard {
     pub fn place_circuit(
         &mut self,
         place_pos: Vec2i,
+        lock_sim: bool,
         preview: &dyn CircuitPreview,
         handler: &dyn Fn(&mut ActiveCircuitBoard, usize),
     ) -> Option<usize> {
@@ -1778,6 +1794,11 @@ impl ActiveCircuitBoard {
             return None;
         }
         let size = preview.size();
+
+        let sim_lock = { self.board.read().unwrap().sim_lock.clone() };
+        let sim_lock = {
+            lock_sim.then(|| sim_lock.write())
+        };
 
         let cid = {
             self.board
@@ -1834,6 +1855,7 @@ impl ActiveCircuitBoard {
         let circ = board.circuits.get(cid).unwrap();
         board.states.init_circuit(circ);
         board.states.update_circuit_signals(cid, None);
+        drop(sim_lock);
         Some(cid)
     }
 

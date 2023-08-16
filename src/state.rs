@@ -413,6 +413,9 @@ impl State {
 
     fn update_once(&self, queue_limit: Option<usize>) -> Option<Instant> {
         
+        // Lock shared simulation, so placing/deleting won't interrupt anything 
+        let sim_lock = { self.board.read().unwrap().sim_lock.clone() };
+        let sim_lock = sim_lock.read();
         let mut circuit_updates_removes = self.circuit_updates_removes.lock().unwrap();
 
         let nearest_update = {
@@ -479,6 +482,7 @@ impl State {
             }
             queue_counter += 1;
         }
+        drop(sim_lock);
         nearest_update
     }
 
@@ -628,12 +632,15 @@ impl State {
         wires.clear();
     }
 
-    pub fn update_all_circuits(&self) {
+    pub fn update_everything(&self) {
         let mut queue = self.queue.lock().unwrap();
 
         let board = self.board.read().unwrap();
         for circuit in board.circuits.iter() {
             queue.enqueue(UpdateTask::CircuitSignals { id: circuit.id, pin: None });
+        }
+        for wire in board.wires.iter() {
+            queue.enqueue(UpdateTask::WireState(wire.id));
         }
         drop(queue);
         #[cfg(not(feature = "single_thread"))]

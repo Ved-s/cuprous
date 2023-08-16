@@ -83,9 +83,6 @@ pub struct CircuitCopyData {
     #[serde(skip_serializing_if = "is_unit")]
     #[serde(default)]
     pub imp: Intermediate,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    #[serde(default)]
-    pub pin_dirs: Vec<Option<PinDirection>>,
     #[serde(skip_serializing_if = "is_unit")]
     #[serde(default)]
     pub internal: Intermediate,
