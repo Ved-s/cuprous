@@ -20,4 +20,7 @@ Logisim-inspired logic circuits simulator
 
 ![](progress_preview.png)
 
-Current version has a lot of debug visuals
+### Web version
+
+Web version is available [here](https://ved-s.github.io/rls).
+It's less precise due to browser limitations.
