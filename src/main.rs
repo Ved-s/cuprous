@@ -5,22 +5,25 @@
 #![feature(thread_id_value)]
 
 use std::{
+    borrow::Borrow,
     collections::HashMap,
     f32::consts::PI,
+    hash::Hash,
+    num::NonZeroU32,
     ops::{Deref, Range},
     sync::Arc,
 };
 
-use board::selection::Selection;
+use board::{selection::Selection, ActiveCircuitBoard};
 use cache::GLOBAL_STR_CACHE;
 use eframe::{
     egui::{self, Context, Sense, Ui},
-    epaint::{PathShape, Rounding, Shape, Stroke},
+    epaint::{Color32, PathShape, Rounding, Shape, Stroke},
 };
 use emath::{pos2, vec2, Pos2, Rect};
 
 use serde::{Deserialize, Serialize};
-#[cfg(target_arch = "wasm32")]
+#[cfg(feature = "wasm")]
 use wasm_bindgen::{prelude::*, JsValue};
 
 mod r#const;
@@ -28,7 +31,8 @@ mod r#const;
 mod vector;
 
 use ui::InventoryItem;
-use vector::{Vec2f, Vec2i};
+use vector::{Vec2f, Vec2i, Vec2u};
+use wires::WirePart;
 
 mod containers;
 use crate::containers::*;
@@ -63,18 +67,18 @@ type RwLock<T> = debug::DebugRwLock<T>;
 type RwLock<T> = std::sync::RwLock<T>;
 type Mutex<T> = std::sync::Mutex<T>;
 
-struct BasicLoadingContext<'a> {
-    previews: &'a HashMap<DynStaticStr, Arc<Box<dyn CircuitPreview>>>,
+struct BasicLoadingContext<'a, K: Borrow<str> + Eq + Hash> {
+    previews: &'a HashMap<K, Arc<Box<dyn CircuitPreview>>>,
 }
 
-impl io::LoadingContext for BasicLoadingContext<'_> {
-    fn get_circuit_preview<'a>(&'a self, ty: &DynStaticStr) -> Option<&'a dyn CircuitPreview> {
+impl<K: Borrow<str> + Eq + Hash> io::LoadingContext for BasicLoadingContext<'_, K> {
+    fn get_circuit_preview<'a>(&'a self, ty: &str) -> Option<&'a dyn CircuitPreview> {
         self.previews.get(ty).map(|b| b.deref().deref())
     }
 }
 
 fn main() {
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(feature = "wasm"))]
     eframe::run_native(
         "rls",
         eframe::NativeOptions::default(),
@@ -84,7 +88,7 @@ fn main() {
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
-#[cfg(target_arch = "wasm32")]
+#[cfg(feature = "wasm")]
 pub async fn web_main(canvas_id: &str) -> Result<(), JsValue> {
     use eframe::WebOptions;
 
@@ -547,7 +551,7 @@ macro_rules! impl_optional_int {
 impl_optional_int!(OptionalInt, (if T::SIGNED { T::MIN } else { T::MAX }));
 impl_optional_int!(OptionalNonzeroInt, (T::ZERO));
 
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Direction4 {
     Up,
     Left,
@@ -653,7 +657,7 @@ impl From<Direction2> for Direction4 {
     }
 }
 
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Direction2 {
     Up,
     Left,
@@ -754,7 +758,7 @@ impl<'de> Deserialize<'de> for DynStaticStr {
     }
 }
 
-impl std::hash::Hash for DynStaticStr {
+impl Hash for DynStaticStr {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.deref().hash(state)
     }
@@ -785,6 +789,12 @@ impl Deref for DynStaticStr {
     }
 }
 
+impl Borrow<str> for DynStaticStr {
+    fn borrow(&self) -> &str {
+        self.deref()
+    }
+}
+
 impl From<&'static str> for DynStaticStr {
     fn from(value: &'static str) -> Self {
         Self::Static(value)
@@ -794,5 +804,144 @@ impl From<&'static str> for DynStaticStr {
 impl From<Arc<str>> for DynStaticStr {
     fn from(value: Arc<str>) -> Self {
         Self::Dynamic(value)
+    }
+}
+
+pub struct PastePreview {
+    wires: Vec<crate::io::WirePartCopyData>,
+    circuits: Vec<(crate::io::CircuitCopyData, Box<dyn CircuitPreview>)>,
+    size: Vec2u,
+}
+
+impl PastePreview {
+    pub fn new(data: crate::io::CopyPasteData, ctx: &impl io::LoadingContext) -> Self {
+        let wires = data.wires;
+        let circuits: Vec<_> = data
+            .circuits
+            .into_iter()
+            .filter_map(|d| {
+                ctx.get_circuit_preview(&d.ty)
+                    .and_then(|p| p.load_impl_data(&d.imp).map(|b| (d, b)))
+            })
+            .collect();
+
+        let size = {
+            let mut size = Vec2u::default();
+            for wire in wires.iter() {
+                size = [
+                    size.x().max(wire.pos.x() + 1),
+                    size.y().max(wire.pos.y() + 1),
+                ]
+                .into()
+            }
+            for (circuit, preview) in circuits.iter() {
+                let br = circuit.pos + preview.size();
+                size = [size.x().max(br.x()), size.y().max(br.y())].into()
+            }
+            size
+        };
+
+        Self {
+            wires,
+            circuits,
+            size,
+        }
+    }
+
+    pub fn draw(&self, board: &ActiveCircuitBoard, pos: Vec2i, ctx: &PaintContext) {
+        let rect = Rect::from_min_size(
+            ctx.screen.world_to_screen_tile(pos).into(),
+            (self.size.convert(|v| v as f32) * ctx.screen.scale).into(),
+        );
+        ctx.paint.rect_filled(
+            rect,
+            Rounding::none(),
+            Color32::from_rgba_unmultiplied(0, 120, 120, 120),
+        );
+
+        for wire in self.wires.iter() {
+            if let Some(length) = NonZeroU32::new(wire.length) {
+                let part = WirePart {
+                    pos: pos + wire.pos.convert(|v| v as i32),
+                    length,
+                    dir: wire.dir,
+                };
+                board.draw_wire_part(ctx, &part, Color32::from_gray(128))
+            }
+        }
+
+        for (circuit, preview) in self.circuits.iter() {
+            let size = preview.size();
+            if size.x() == 0 || size.y() == 0 {
+                return;
+            }
+            let pos = pos + circuit.pos.convert(|v| v as i32);
+            let rect = Rect::from_min_size(
+                ctx.screen.world_to_screen_tile(pos).into(),
+                (size.convert(|v| v as f32) * ctx.screen.scale).into(),
+            );
+            preview.draw_preview(&ctx.with_rect(rect), true);
+        }
+    }
+
+    fn place(&self, board: &mut ActiveCircuitBoard, pos: Vec2i) {
+        if self
+            .circuits
+            .iter()
+            .any(|(c, p)| !board.can_place_preview(p.as_ref(), pos + c.pos.convert(|v| v as i32)))
+        {
+            return;
+        }
+
+        for wire in self.wires.iter() {
+            if let Some(length) = NonZeroU32::new(wire.length) {
+                let part = WirePart {
+                    pos: pos + wire.pos.convert(|v| v as i32),
+                    length,
+                    dir: wire.dir,
+                };
+                board.place_wire_part(part);
+            }
+        }
+        for (circuit_data, preview) in self.circuits.iter() {
+            let id = board.place_circuit(
+                pos + circuit_data.pos.convert(|v| v as i32),
+                preview.as_ref(),
+                &|board, id| {
+                    {
+                        let board = board.board.read().unwrap();
+                        for state in board.states.states().read().unwrap().iter() {
+                            let state = state.get_circuit(id);
+                            let mut state = state.write().unwrap();
+                            state.pin_dirs =
+                                FixedVec::from_option_vec(circuit_data.pin_dirs.clone());
+                            if !matches!(
+                                circuit_data.internal,
+                                serde_intermediate::Intermediate::Unit
+                            ) {
+                                if let Some(circuit) = board.circuits.get(id) {
+                                    state.internal = circuit
+                                        .imp
+                                        .write()
+                                        .unwrap()
+                                        .load_internal(&circuit_data.internal);
+                                }
+                            }
+                        }
+                    }
+                    if !matches!(circuit_data.imp, serde_intermediate::Intermediate::Unit) {
+                        if let Some(circuit) = board.board.read().unwrap().circuits.get(id) {
+                            circuit.imp.write().unwrap().load(&circuit_data.imp)
+                        }
+                    }
+                },
+            );
+            if let (Some(id), Some(dur)) = (id, circuit_data.update) {
+                let board = board.board.read().unwrap();
+                for state in board.states.states().read().unwrap().iter() {
+                    state.set_circuit_update_interval(id, Some(dur))
+                }
+            }
+        }
     }
 }

@@ -6,11 +6,11 @@ use serde_intermediate::Intermediate;
 use crate::{
     circuits::{PinDirection, CircuitPreview},
     state::{UpdateTask, WireState},
-    vector::Vec2i, DynStaticStr,
+    vector::{Vec2i, Vec2u}, DynStaticStr, Direction2,
 };
 
 pub trait LoadingContext {
-    fn get_circuit_preview<'a>(&'a self, ty: &DynStaticStr) -> Option<&'a dyn CircuitPreview>;
+    fn get_circuit_preview<'a>(&'a self, ty: &str) -> Option<&'a dyn CircuitPreview>;
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -50,6 +50,8 @@ pub struct CircuitData {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct CircuitStateData {
     pub pins: Vec<Option<WireState>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub pin_dirs: Vec<Option<PinDirection>>,
     #[serde(skip_serializing_if = "is_unit")]
     #[serde(default)]
@@ -69,6 +71,39 @@ pub struct CircuitBoardData {
     pub wires: Vec<Option<WireData>>,
     pub circuits: Vec<Option<CircuitData>>,
     pub states: Vec<Option<StateData>>,
+}
+
+#[cfg(feature = "wasm")]
+pub static GLOBAL_CLIPBOARD: crate::Mutex<Option<crate::io::CopyPasteData>> = crate::Mutex::new(None); 
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct CircuitCopyData {
+    pub ty: DynStaticStr,
+    pub pos: Vec2u,
+    #[serde(skip_serializing_if = "is_unit")]
+    #[serde(default)]
+    pub imp: Intermediate,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
+    pub pin_dirs: Vec<Option<PinDirection>>,
+    #[serde(skip_serializing_if = "is_unit")]
+    #[serde(default)]
+    pub internal: Intermediate,
+    pub update: Option<Duration>
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct WirePartCopyData {
+    // Bottom-right position
+    pub pos: Vec2u,
+    pub length: u32,
+    pub dir: Direction2
+}
+
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+pub struct CopyPasteData {
+    pub wires: Vec<WirePartCopyData>,
+    pub circuits: Vec<CircuitCopyData>
 }
 
 fn is_unit(v: &Intermediate) -> bool {

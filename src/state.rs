@@ -131,6 +131,12 @@ pub struct StateCollection {
     states: Arc<RwLock<FixedVec<Arc<State>>>>,
 }
 
+impl Default for StateCollection {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StateCollection {
     pub fn new() -> Self {
         Self {

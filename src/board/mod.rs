@@ -23,7 +23,7 @@ use crate::{
     unwrap_option_or_continue, unwrap_option_or_return,
     vector::{IsZero, Vec2f, Vec2i, Vec2u},
     wires::{FoundWireNode, TileWires, Wire, WireNode, WirePart, WirePoint},
-    Direction2, Direction4, PaintContext, RwLock, Screen,
+    Direction2, Direction4, PaintContext, PastePreview, RwLock, Screen,
 };
 
 use self::selection::{SelectedWorldObject, Selection};
@@ -241,11 +241,18 @@ impl CircuitBoard {
     }
 }
 
+impl Default for CircuitBoard {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub enum SelectedBoardItem<'a> {
     None,
     Selection,
     Wire,
     Circuit(&'a dyn CircuitPreview),
+    Paste(&'a PastePreview),
 }
 
 impl<'a> SelectedBoardItem<'a> {
@@ -369,30 +376,118 @@ impl ActiveCircuitBoard {
             .borrow_mut()
             .pre_update_selection(self, ctx, selected.selection());
 
-        if ctx.egui_ctx.input(|input| {
-            input.key_pressed(egui::Key::Delete) || input.key_pressed(egui::Key::Backspace)
-        }) {
-            let mut affected_wires = HashSet::new();
-            let drain = {
-                let mut selection = self.selection.borrow_mut();
-                selection.selection.drain().collect::<Vec<_>>()
-            };
-            for obj in drain {
-                match obj {
-                    SelectedWorldObject::Circuit { id } => {
-                        self.remove_circuit(id, &mut affected_wires);
-                    }
-                    SelectedWorldObject::WirePart { pos, dir } => {
-                        if let Some(wire) = self.remove_wire_part(pos, dir.into(), true, false) {
-                            affected_wires.insert(wire);
+        let selected_something = !self.selection.borrow().selection.is_empty();
+
+        if selected_something {
+            #[cfg(feature = "wasm")]
+            let copy_request = ctx.egui_ctx.input(|input| {
+                input.modifiers.ctrl
+                    && (input.key_pressed(egui::Key::C) || input.key_pressed(egui::Key::X))
+            });
+            #[cfg(not(feature = "wasm"))]
+            let copy_request = ctx.egui_ctx.input(|input| {
+                input
+                    .events
+                    .iter()
+                    .any(|e| matches!(e, egui::Event::Copy | egui::Event::Cut))
+            });
+
+            if copy_request {
+                let selection = self.selection.borrow();
+                let board = self.board.read().unwrap();
+
+                let min_pos = {
+                    let mut min_pos = None;
+                    for obj in selection.selection.iter() {
+                        let pos = match obj {
+                            SelectedWorldObject::WirePart { pos, dir } => {
+                                let node = self.find_wire_node(*pos, (*dir).into());
+                                let node = unwrap_option_or_continue!(node);
+                                node.pos
+                            }
+                            SelectedWorldObject::Circuit { id } => {
+                                let circuit = board.circuits.get(*id);
+                                let circuit = unwrap_option_or_continue!(circuit);
+                                circuit.pos
+                            }
+                        };
+                        min_pos = match min_pos {
+                            None => Some(pos),
+                            Some(mp) => Some([mp.x().min(pos.x()), mp.y().min(pos.y())].into()),
                         }
+                    }
+                    min_pos
+                };
+                if let Some(min_pos) = min_pos {
+                    let mut copy = crate::io::CopyPasteData::default();
+                    for obj in selection.selection.iter() {
+                        match obj {
+                            SelectedWorldObject::WirePart { pos, dir } => {
+                                if let Some(w) = self.find_wire_node(*pos, (*dir).into()) {
+                                    copy.wires.push(crate::io::WirePartCopyData {
+                                        pos: (*pos - min_pos).convert(|v| v as u32),
+                                        length: w.distance.get(),
+                                        dir: *dir,
+                                    })
+                                }
+                            }
+                            SelectedWorldObject::Circuit { id } => {
+                                if let Some(circuit) = board.circuits.get(*id) {
+                                    let pos = (circuit.pos - min_pos).convert(|v| v as u32);
+                                    copy.circuits.push(circuit.copy(pos, self.state.as_ref()))
+                                }
+                            }
+                        }
+                    }
+                    #[cfg(not(feature = "wasm"))]
+                    {
+                        let copy_text = ron::to_string(&copy).unwrap();
+                        ctx.ui.output_mut(|output| output.copied_text = copy_text);
+                    }
+                    #[cfg(feature = "wasm")]
+                    {
+                        *crate::io::GLOBAL_CLIPBOARD.lock().unwrap() = Some(copy);
                     }
                 }
             }
 
-            let states = self.board.read().unwrap().states.clone();
-            for wire in affected_wires {
-                states.update_wire(wire);
+            #[cfg(feature = "wasm")]
+            let delete_request = ctx
+                .egui_ctx
+                .input(|input| input.modifiers.ctrl && input.key_pressed(egui::Key::X));
+            #[cfg(not(feature = "wasm"))]
+            let delete_request = ctx
+                .egui_ctx
+                .input(|input| input.events.iter().any(|e| matches!(e, egui::Event::Cut)));
+
+            if delete_request
+                || ctx.egui_ctx.input(|input| {
+                    input.key_pressed(egui::Key::Delete) || input.key_pressed(egui::Key::Backspace)
+                })
+            {
+                let mut affected_wires = HashSet::new();
+                let drain = {
+                    let mut selection = self.selection.borrow_mut();
+                    selection.selection.drain().collect::<Vec<_>>()
+                };
+                for obj in drain {
+                    match obj {
+                        SelectedWorldObject::Circuit { id } => {
+                            self.remove_circuit(id, &mut affected_wires);
+                        }
+                        SelectedWorldObject::WirePart { pos, dir } => {
+                            if let Some(wire) = self.remove_wire_part(pos, dir.into(), true, false)
+                            {
+                                affected_wires.insert(wire);
+                            }
+                        }
+                    }
+                }
+
+                let states = self.board.read().unwrap().states.clone();
+                for wire in affected_wires {
+                    states.update_wire(wire);
+                }
             }
         }
 
@@ -424,7 +519,7 @@ impl ActiveCircuitBoard {
         );
 
         self.update_wires(ctx, selected.wire());
-        self.update_circuits(ctx, selected.circuit());
+        self.update_previews(ctx, selected);
         self.selection.borrow_mut().update_selection(ctx);
     }
 
@@ -698,9 +793,11 @@ impl ActiveCircuitBoard {
                 }
                 let color = pin.get_state(state_ctx.global_state).color();
                 let pos = circ_ctx.screen.world_to_screen_tile(pos) + circ_ctx.screen.scale / 2.0;
-                circ_ctx
-                    .paint
-                    .circle_filled(pos.into(), circ_ctx.screen.scale * Self::WIRE_THICKNESS * 0.5, color);
+                circ_ctx.paint.circle_filled(
+                    pos.into(),
+                    circ_ctx.screen.scale * Self::WIRE_THICKNESS * 0.5,
+                    color,
+                );
             }
         }
 
@@ -767,16 +864,25 @@ impl ActiveCircuitBoard {
         }
     }
 
-    fn update_circuits(&mut self, ctx: &PaintContext, selected: Option<&dyn CircuitPreview>) {
-        if let Some(p) = selected {
-            let mouse_tile_pos = ctx
-                .egui_ctx
-                .input(|input| input.pointer.interact_pos())
-                .map(|p| ctx.screen.screen_to_world(Vec2f::from(p)));
-            let mouse_tile_pos_i = match mouse_tile_pos {
-                None => return,
-                Some(v) => v.convert(|v| v.floor() as i32),
-            };
+    fn update_previews(&mut self, ctx: &PaintContext, selected: SelectedBoardItem) {
+        match selected {
+            SelectedBoardItem::None => return,
+            SelectedBoardItem::Selection => return,
+            SelectedBoardItem::Wire => return,
+            SelectedBoardItem::Circuit(_) => (),
+            SelectedBoardItem::Paste(_) => (),
+        };
+
+        let mouse_tile_pos = ctx
+            .egui_ctx
+            .input(|input| input.pointer.interact_pos())
+            .map(|p| ctx.screen.screen_to_world(Vec2f::from(p)));
+        let mouse_tile_pos_i = match mouse_tile_pos {
+            None => return,
+            Some(v) => v.convert(|v| v.floor() as i32),
+        };
+
+        if let SelectedBoardItem::Circuit(p) = selected {
             let size = p.size();
             if size.x() == 0 || size.y() == 0 {
                 return;
@@ -790,7 +896,23 @@ impl ActiveCircuitBoard {
             let interaction = ctx.ui.interact(ctx.rect, ctx.ui.id(), Sense::click());
 
             if interaction.clicked_by(eframe::egui::PointerButton::Primary) {
-                self.place_circuit(place_pos, p);
+                fn empty_handler(_: &mut ActiveCircuitBoard, _: usize) {}
+                self.place_circuit(place_pos, p, &empty_handler);
+            }
+        } else if let SelectedBoardItem::Paste(p) = selected {
+            let size = p.size;
+            if size.x() == 0 || size.y() == 0 {
+                return;
+            }
+            let place_pos = mouse_tile_pos_i - size.convert(|v| v as i32) / 2;
+            let rect = Rect::from_min_size(
+                ctx.screen.world_to_screen_tile(place_pos).into(),
+                (size.convert(|v| v as f32) * ctx.screen.scale).into(),
+            );
+            p.draw(self, place_pos, &ctx.with_rect(rect));
+            let interaction = ctx.ui.interact(ctx.rect, ctx.ui.id(), Sense::click());
+            if interaction.clicked_by(eframe::egui::PointerButton::Primary) {
+                p.place(self, place_pos);
             }
         }
     }
@@ -799,7 +921,7 @@ impl ActiveCircuitBoard {
 
     /* #region Wire drawing helpers */
 
-    fn draw_wire_part(&self, ctx: &PaintContext, part: &WirePart, color: Color32) {
+    pub fn draw_wire_part(&self, ctx: &PaintContext, part: &WirePart, color: Color32) {
         let screen = &ctx.screen;
         let rect = Self::calc_wire_part_rect(screen, part);
         ctx.paint.rect_filled(rect, Rounding::none(), color);
@@ -870,7 +992,7 @@ impl ActiveCircuitBoard {
 
     /* #region Wire manipulations */
 
-    fn place_wire_part(&mut self, part: WirePart) {
+    pub fn place_wire_part(&mut self, part: WirePart) {
         let part = unwrap_option_or_return!(self.optimize_wire_part(part));
 
         let wires_crossed = {
@@ -1645,21 +1767,17 @@ impl ActiveCircuitBoard {
         Direction4::iter_all().all(|dir| node.get_dir(dir).is_some())
     }
 
-    fn place_circuit(&mut self, place_pos: Vec2i, preview: &dyn CircuitPreview) {
-        let size = preview.size();
-
-        for j in 0..size.y() as i32 {
-            for i in 0..size.x() as i32 {
-                let pos = place_pos + [i, j];
-                if self
-                    .circuit_nodes
-                    .get(pos.convert(|v| v as isize))
-                    .is_some_and(|n| n.circuit.is_some())
-                {
-                    return;
-                }
-            }
+    /// Handler is called after circuit is crated and placed but before it's connected to wires and updated
+    pub fn place_circuit(
+        &mut self,
+        place_pos: Vec2i,
+        preview: &dyn CircuitPreview,
+        handler: &dyn Fn(&mut ActiveCircuitBoard, usize),
+    ) -> Option<usize> {
+        if !self.can_place_preview(preview, place_pos) {
+            return None;
         }
+        let size = preview.size();
 
         let cid = {
             self.board
@@ -1689,6 +1807,7 @@ impl ActiveCircuitBoard {
                 .info
                 .clone()
         };
+        handler(self, cid);
         for pin in circ_info.read().unwrap().pins.iter() {
             let pos = place_pos + pin.pos.convert(|v| v as i32);
             if let Some(wire) = self.create_wire_intersection(pos) {
@@ -1715,6 +1834,28 @@ impl ActiveCircuitBoard {
         let circ = board.circuits.get(cid).unwrap();
         board.states.init_circuit(circ);
         board.states.update_circuit_signals(cid, None);
+        Some(cid)
+    }
+
+    pub fn can_place_preview(
+        &mut self,
+        preview: &dyn CircuitPreview,
+        place_pos: crate::vector::Vector<2, i32>,
+    ) -> bool {
+        let size = preview.size();
+        for j in 0..size.y() as i32 {
+            for i in 0..size.x() as i32 {
+                let pos = place_pos + [i, j];
+                if self
+                    .circuit_nodes
+                    .get(pos.convert(|v| v as isize))
+                    .is_some_and(|n| n.circuit.is_some())
+                {
+                    return false;
+                }
+            }
+        }
+        true
     }
 
     fn pin_at(&self, pos: Vec2i) -> Option<Arc<RwLock<CircuitPin>>> {

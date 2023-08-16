@@ -4,8 +4,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     state::{CircuitState, InternalCircuitState, State, StateCollection, WireState},
+    time::Instant,
     vector::{Vec2i, Vec2u, Vector},
-    OptionalInt, PaintContext, RwLock, DynStaticStr,
+    DynStaticStr, OptionalInt, PaintContext, RwLock,
 };
 
 pub mod button;
@@ -312,6 +313,39 @@ impl Circuit {
             imp: self.imp.read().unwrap().save(),
         }
     }
+
+    pub fn copy(&self, pos: Vec2u, state: &State) -> crate::io::CircuitCopyData {
+        let (pin_dirs, internal) = state
+            .read_circuit(self.id)
+            .map(|c| {
+                let circuit = c.read().unwrap();
+                let internal = circuit
+                    .internal
+                    .as_ref()
+                    .map(|i| i.serialize())
+                    .unwrap_or_default();
+                let pin_dirs = circuit.pin_dirs.inner().clone();
+                (pin_dirs, internal)
+            })
+            .unwrap_or_default();
+
+        crate::io::CircuitCopyData {
+            ty: self.ty.clone(),
+            pos,
+            imp: self.imp.read().unwrap().save(),
+            pin_dirs,
+            internal,
+            update: state
+                .updates
+                .lock()
+                .unwrap()
+                .iter()
+                .find_map(|(id, time)| {
+                    (*id == self.id).then(|| time.checked_duration_since(Instant::now()))
+                })
+                .flatten(),
+        }
+    }
 }
 
 pub struct CircuitStateContext<'a> {
@@ -391,16 +425,17 @@ pub trait CircuitImpl: Send + Sync {
         true
     }
 
-    /// Serialize circuit parameters. NOT for circuit state 
+    /// Serialize circuit parameters. NOT for circuit state
     fn save(&self) -> serde_intermediate::Intermediate {
         ().into()
     }
 
-    fn load(&mut self, data: &serde_intermediate::Intermediate) {
+    fn load(&mut self, data: &serde_intermediate::Intermediate) {}
 
-    }
-
-    fn load_internal(&self, data: &serde_intermediate::Intermediate) -> Option<Box<dyn InternalCircuitState>> {
+    fn load_internal(
+        &self,
+        data: &serde_intermediate::Intermediate,
+    ) -> Option<Box<dyn InternalCircuitState>> {
         None
     }
 
@@ -418,6 +453,10 @@ pub trait CircuitPreview {
     fn draw_preview(&self, ctx: &PaintContext, in_world: bool);
     fn size(&self) -> Vec2u;
     fn create_impl(&self) -> Box<dyn CircuitImpl>;
+    fn load_impl_data(
+        &self,
+        data: &serde_intermediate::Intermediate,
+    ) -> Option<Box<dyn CircuitPreview>>;
 }
 
 #[derive(Default)]

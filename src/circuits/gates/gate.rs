@@ -92,6 +92,10 @@ impl CircuitPreview for Preview {
     fn type_name(&self) -> DynStaticStr {
         self.template.id.into()
     }
+
+    fn load_impl_data(&self, _: &serde_intermediate::Intermediate) -> Option<Box<dyn CircuitPreview>> {
+        Some(Box::new(Preview { template: self.template.clone() }))
+    }
 }
 
 pub fn draw_from_path(ctx: &PaintContext, semi_transparent: bool, size: Vec2, path: &[PathItem]) {

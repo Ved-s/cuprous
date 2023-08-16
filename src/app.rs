@@ -13,13 +13,14 @@ use crate::{
     time::Instant,
     ui::{Inventory, InventoryItem, InventoryItemGroup},
     vector::{Vec2f, Vector},
-    BasicLoadingContext, DynStaticStr, PaintContext, PanAndZoom, RwLock, TileDrawBounds,
+    BasicLoadingContext, DynStaticStr, PaintContext, PanAndZoom, PastePreview, RwLock,
+    TileDrawBounds,
 };
 
 pub struct App {
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(feature = "wasm"))]
     last_win_pos: Option<Pos2>,
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(feature = "wasm"))]
     last_win_size: Vec2,
 
     pub pan_zoom: PanAndZoom,
@@ -27,6 +28,7 @@ pub struct App {
 
     pub debug: bool,
 
+    paste: Option<PastePreview>,
     inventory_items: Vec<InventoryItemGroup>,
     selected_id: Option<String>,
     circuit_previews: HashMap<String, Arc<Box<dyn CircuitPreview>>>,
@@ -35,7 +37,7 @@ pub struct App {
 // TODO: fix coi sometimes not working by re-registering it and reloading
 impl eframe::App for App {
     fn update(&mut self, ctx: &eframe::egui::Context, frame: &mut eframe::Frame) {
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(not(feature = "wasm"))]
         {
             let int_info = frame.info();
             if let Some(win_pos) = int_info.window_info.position {
@@ -55,16 +57,39 @@ impl eframe::App for App {
         #[cfg(feature = "single_thread")]
         self.board.board.read().unwrap().states.update();
 
+        #[cfg(not(feature = "wasm"))]
+        let paste = ctx.input(|input| {
+            input
+                .events
+                .iter()
+                .find_map(|e| match e {
+                    egui::Event::Paste(s) => Some(s),
+                    _ => None,
+                })
+                .and_then(|p| ron::from_str::<crate::io::CopyPasteData>(p).ok())
+        });
+        #[cfg(feature = "wasm")]
+        let paste = ctx
+            .input(|input| input.modifiers.ctrl && input.key_pressed(egui::Key::V))
+            .then(|| crate::io::GLOBAL_CLIPBOARD.lock().unwrap().clone())
+            .flatten();
+
+        if let Some(paste) = paste {
+            self.paste = Some(PastePreview::new(
+                paste,
+                &BasicLoadingContext {
+                    previews: &self.circuit_previews,
+                },
+            ));
+            self.selected_id = Some("paste".to_owned());
+        }
+
         if ctx.input(|input| input.key_pressed(Key::F9)) {
             self.debug = !self.debug;
-        }
-
-        if ctx.input(|input| input.key_pressed(Key::F8)) {
+        } else if ctx.input(|input| input.key_pressed(Key::F8)) {
             let board = self.board.board.clone();
             self.board = ActiveCircuitBoard::new(board, 0).unwrap();
-        }
-
-        if ctx.input(|input| input.key_pressed(Key::R)) {
+        } else if ctx.input(|input| input.key_pressed(Key::R)) {
             let state = &self.board.state;
             state.reset();
             state.update_all_circuits();
@@ -76,7 +101,6 @@ impl eframe::App for App {
                 self.main_update(ui, ctx);
 
                 let mut selected = self.selected_id.take();
-
                 if ui.input(|input| input.key_pressed(Key::Escape)) {
                     selected = None;
                 }
@@ -89,6 +113,12 @@ impl eframe::App for App {
                     margin: Margin::same(10.0),
                 });
 
+                match (selected.as_deref(), &self.paste) {
+                    (Some("paste"), Some(_)) => (),
+                    (Some("paste"), None) => selected = None,
+                    (_, Some(_)) => self.paste = None,
+                    _ => (),
+                }
                 self.selected_id = selected;
             });
     }
@@ -203,9 +233,9 @@ impl App {
         Self {
             pan_zoom: PanAndZoom::new(0.0.into(), 16.0),
 
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(not(feature = "wasm"))]
             last_win_pos: None,
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(not(feature = "wasm"))]
             last_win_size: Default::default(),
             board: ActiveCircuitBoard::new(board, state_id).unwrap(),
             debug: false,
@@ -220,6 +250,7 @@ impl App {
                 .into_iter()
                 .map(|(id, arc)| (id.deref().to_owned(), arc))
                 .collect(),
+            paste: None,
         }
     }
 
@@ -380,6 +411,10 @@ impl App {
 
         let selected_item = match self.selected_id.as_deref() {
             None => SelectedBoardItem::None,
+            Some("paste") => match &self.paste {
+                Some(p) => SelectedBoardItem::Paste(p),
+                None => SelectedBoardItem::None,
+            },
             Some("selection") => SelectedBoardItem::Selection,
             Some("wire") => SelectedBoardItem::Wire,
             Some(circ) => match self.circuit_previews.get(circ) {
@@ -389,6 +424,7 @@ impl App {
         };
 
         self.board.update(&ctx, selected_item, self.debug);
+
         let update_time = Instant::now() - start_time;
 
         paint.text(

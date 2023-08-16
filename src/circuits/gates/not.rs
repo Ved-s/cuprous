@@ -88,4 +88,8 @@ impl CircuitPreview for Preview {
     fn type_name(&self) -> DynStaticStr {
         "not".into()
     }
+
+    fn load_impl_data(&self, _: &serde_intermediate::Intermediate) -> Option<Box<dyn CircuitPreview>> {
+        Some(Box::new(Preview {}))
+    }
 }

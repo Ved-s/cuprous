@@ -1,10 +1,10 @@
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(feature = "wasm"))]
 pub type Instant = std::time::Instant;
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(feature = "wasm")]
 pub use time_web::Instant;
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(feature = "wasm")]
 mod time_web {
     use std::{ops::{Add, Sub}, time::Duration};
 
