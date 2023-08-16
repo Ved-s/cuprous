@@ -35,7 +35,7 @@ pub struct CircuitBoard {
     pub states: StateCollection,
 
     // RwLock for blocking simulation while modifying board
-    pub sim_lock: Arc<RwLock<()>>
+    pub sim_lock: Arc<RwLock<()>>,
 }
 
 impl CircuitBoard {
@@ -44,7 +44,7 @@ impl CircuitBoard {
             wires: vec![].into(),
             circuits: vec![].into(),
             states: StateCollection::new(),
-            sim_lock: Default::default()
+            sim_lock: Default::default(),
         }
     }
 
@@ -222,7 +222,7 @@ impl CircuitBoard {
             wires,
             circuits,
             states: StateCollection::new(),
-            sim_lock: Default::default()
+            sim_lock: Default::default(),
         };
         let board = Arc::new(RwLock::new(board));
 
@@ -383,18 +383,21 @@ impl ActiveCircuitBoard {
         let selected_something = !self.selection.borrow().selection.is_empty();
 
         if selected_something {
-            #[cfg(feature = "wasm")]
-            let copy_request = ctx.egui_ctx.input(|input| {
-                input.modifiers.ctrl
-                    && (input.key_pressed(egui::Key::C) || input.key_pressed(egui::Key::X))
-            });
-            #[cfg(not(feature = "wasm"))]
-            let copy_request = ctx.egui_ctx.input(|input| {
-                input
-                    .events
-                    .iter()
-                    .any(|e| matches!(e, egui::Event::Copy | egui::Event::Cut))
-            });
+            cfg_if::cfg_if! {
+                if #[cfg(all(not(web_sys_unstable_apis), feature = "wasm"))] {
+                    let copy_request = ctx.egui_ctx.input(|input| {
+                        input.modifiers.ctrl
+                            && (input.key_pressed(egui::Key::C) || input.key_pressed(egui::Key::X))
+                    });
+                } else {
+                    let copy_request = ctx.egui_ctx.input(|input| {
+                        input
+                            .events
+                            .iter()
+                            .any(|e| matches!(e, egui::Event::Copy | egui::Event::Cut))
+                    });
+                }
+            }
 
             if copy_request {
                 let selection = self.selection.borrow();
@@ -443,26 +446,28 @@ impl ActiveCircuitBoard {
                             }
                         }
                     }
-                    #[cfg(not(feature = "wasm"))]
-                    {
-                        let copy_text = ron::to_string(&copy).unwrap();
-                        ctx.ui.output_mut(|output| output.copied_text = copy_text);
-                    }
-                    #[cfg(feature = "wasm")]
-                    {
-                        *crate::io::GLOBAL_CLIPBOARD.lock().unwrap() = Some(copy);
+                    cfg_if::cfg_if! {
+                        if #[cfg(all(not(web_sys_unstable_apis), feature = "wasm"))] {
+                            *crate::io::GLOBAL_CLIPBOARD.lock().unwrap() = Some(copy);
+                        } else {
+                            let copy_text = ron::to_string(&copy).unwrap();
+                            ctx.ui.output_mut(|output| output.copied_text = copy_text);
+                        }
                     }
                 }
             }
 
-            #[cfg(feature = "wasm")]
-            let delete_request = ctx
-                .egui_ctx
-                .input(|input| input.modifiers.ctrl && input.key_pressed(egui::Key::X));
-            #[cfg(not(feature = "wasm"))]
-            let delete_request = ctx
-                .egui_ctx
-                .input(|input| input.events.iter().any(|e| matches!(e, egui::Event::Cut)));
+            cfg_if::cfg_if! {
+                if #[cfg(all(not(web_sys_unstable_apis), feature = "wasm"))] {
+                    let delete_request = ctx
+                        .egui_ctx
+                        .input(|input| input.modifiers.ctrl && input.key_pressed(egui::Key::X));
+                } else {
+                    let delete_request = ctx
+                        .egui_ctx
+                        .input(|input| input.events.iter().any(|e| matches!(e, egui::Event::Cut)));
+                }   
+            }
 
             if delete_request
                 || ctx.egui_ctx.input(|input| {
@@ -948,12 +953,7 @@ impl ActiveCircuitBoard {
         Rect::from_min_size(pos.into(), rect_size.into())
     }
 
-    fn draw_wire_point(
-        ctx: &PaintContext,
-        pos: Vec2i,
-        color: Color32,
-        pin_debug: bool,
-    ) {
+    fn draw_wire_point(ctx: &PaintContext, pos: Vec2i, color: Color32, pin_debug: bool) {
         let screen = &ctx.screen;
 
         let rect = Self::calc_wire_point_rect(screen, pos);
@@ -975,9 +975,7 @@ impl ActiveCircuitBoard {
         let part = unwrap_option_or_return!(self.optimize_wire_part(part), None);
 
         let sim_lock = { self.board.read().unwrap().sim_lock.clone() };
-        let sim_lock = {
-            lock_sim.then(|| sim_lock.write())
-        };
+        let sim_lock = { lock_sim.then(|| sim_lock.write()) };
         let wires_crossed = {
             let mut wires_crossed = HashSet::new();
             for (i, pos) in part.iter_pos(true).enumerate() {
@@ -1766,9 +1764,7 @@ impl ActiveCircuitBoard {
         let size = preview.size();
 
         let sim_lock = { self.board.read().unwrap().sim_lock.clone() };
-        let sim_lock = {
-            lock_sim.then(|| sim_lock.write())
-        };
+        let sim_lock = { lock_sim.then(|| sim_lock.write()) };
 
         let cid = {
             self.board

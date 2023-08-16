@@ -11,7 +11,7 @@ use std::{
     hash::Hash,
     num::NonZeroU32,
     ops::{Deref, Range},
-    sync::Arc,
+    sync::Arc, thread::JoinHandle,
 };
 
 use board::{selection::Selection, ActiveCircuitBoard};

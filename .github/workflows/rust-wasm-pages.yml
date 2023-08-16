@@ -25,7 +25,7 @@ jobs:
         components: cargo, rustc, rust-std
 
     - name: Build
-      run: cargo build --target wasm32-unknown-unknown -F wasm --release
+      run: RUSTFLAGS=--cfg=web_sys_unstable_apis cargo build --target wasm32-unknown-unknown -F wasm --release
 
     - name: Install wasm-bindgen
       run: cargo install wasm-bindgen-cli

@@ -73,7 +73,7 @@ pub struct CircuitBoardData {
     pub states: Vec<Option<StateData>>,
 }
 
-#[cfg(feature = "wasm")]
+#[cfg(all(not(web_sys_unstable_apis), feature = "wasm"))]
 pub static GLOBAL_CLIPBOARD: crate::Mutex<Option<crate::io::CopyPasteData>> = crate::Mutex::new(None); 
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

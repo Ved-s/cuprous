@@ -56,23 +56,25 @@ impl eframe::App for App {
 
         #[cfg(feature = "single_thread")]
         self.board.board.read().unwrap().states.update();
-
-        #[cfg(not(feature = "wasm"))]
-        let paste = ctx.input(|input| {
-            input
-                .events
-                .iter()
-                .find_map(|e| match e {
-                    egui::Event::Paste(s) => Some(s),
-                    _ => None,
-                })
-                .and_then(|p| ron::from_str::<crate::io::CopyPasteData>(p).ok())
-        });
-        #[cfg(feature = "wasm")]
-        let paste = ctx
-            .input(|input| input.modifiers.ctrl && input.key_pressed(egui::Key::V))
-            .then(|| crate::io::GLOBAL_CLIPBOARD.lock().unwrap().clone())
-            .flatten();
+        cfg_if::cfg_if! {
+            if #[cfg(all(not(web_sys_unstable_apis), feature = "wasm"))] {
+                let paste = ctx
+                    .input(|input| input.modifiers.ctrl && input.key_pressed(egui::Key::V))
+                    .then(|| crate::io::GLOBAL_CLIPBOARD.lock().unwrap().clone())
+                    .flatten();
+            } else {
+                let paste = ctx.input(|input| {
+                    input
+                        .events
+                        .iter()
+                        .find_map(|e| match e {
+                            egui::Event::Paste(s) => Some(s),
+                            _ => None,
+                        })
+                        .and_then(|p| ron::from_str::<crate::io::CopyPasteData>(p).ok())
+                });
+            }
+        }
 
         if let Some(paste) = paste {
             self.paste = Some(PastePreview::new(
