@@ -1,8 +1,7 @@
 use std::{
     cell::RefCell,
-    collections::{hash_map::DefaultHasher, HashMap, HashSet},
+    collections::{HashMap, HashSet},
     f32::consts::TAU,
-    hash::Hasher,
     num::NonZeroU32,
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -504,7 +503,7 @@ impl ActiveCircuitBoard {
             &self,
             |node| !node.is_empty(),
             |node, pos, ctx, this, lookaround| {
-                this.draw_wire_node(ctx, node, pos, lookaround);
+                this.draw_wire_node(ctx, node, pos, lookaround, debug);
             },
         );
 
@@ -539,6 +538,7 @@ impl ActiveCircuitBoard {
         node: &WireNode,
         pos: Vec2i,
         lookaround: &ChunksLookaround<'_, 16, WireNode>,
+        debug: bool,
     ) {
         struct WireDrawInfo {
             dist: Option<u32>,
@@ -635,8 +635,7 @@ impl ActiveCircuitBoard {
                         ctx,
                         pos,
                         wire.color(&self.state),
-                        wire.points.get(&pos).is_some_and(|p| p.pin.is_some()),
-                        Some(wire.id),
+                        debug && wire.points.get(&pos).is_some_and(|p| p.pin.is_some()),
                     )
                 }
             }
@@ -856,19 +855,6 @@ impl ActiveCircuitBoard {
             {
                 self.try_toggle_node_intersection(mouse_pos);
             }
-
-            for dir in Direction4::iter_all() {
-                if let Some(found) = self.find_wire_node(mouse_pos, dir) {
-                    let world_pos = ctx.screen.world_to_screen_tile(found.pos);
-                    let size = vec2(ctx.screen.scale, ctx.screen.scale);
-                    let rect = Rect::from_min_size(world_pos.into(), size);
-
-                    let r = if dir.is_vertical() { 255 } else { 0 };
-                    let g = if dir.is_right_bottom() { 255 } else { 0 };
-                    let color = Color32::from_rgba_unmultiplied(r, g, 0, 128);
-                    ctx.paint.rect_filled(rect, Rounding::none(), color);
-                }
-            }
         }
     }
 
@@ -966,8 +952,7 @@ impl ActiveCircuitBoard {
         ctx: &PaintContext,
         pos: Vec2i,
         color: Color32,
-        pin: bool,
-        wire_id: Option<usize>,
+        pin_debug: bool,
     ) {
         let screen = &ctx.screen;
 
@@ -975,24 +960,9 @@ impl ActiveCircuitBoard {
         ctx.paint.rect_filled(rect, Rounding::none(), color);
 
         // DEBUG: visuals
-        if pin {
+        if pin_debug {
             ctx.paint
                 .rect_stroke(rect, Rounding::none(), Stroke::new(1.0, Color32::RED));
-        }
-
-        if let Some(wire) = wire_id {
-            let thickness = screen.scale * 0.15;
-
-            let pos = screen.world_to_screen_tile(pos) + ((screen.scale - thickness) * 0.5);
-            let rect = Rect::from_min_size(pos.into(), vec2(thickness, thickness));
-
-            let mut hasher = DefaultHasher::new();
-            hasher.write_usize(wire);
-            hasher.write_usize(1999573);
-            let [r, _, g, _, b, _, _, _] = hasher.finish().to_le_bytes();
-
-            ctx.paint
-                .rect_filled(rect, Rounding::none(), Color32::from_rgb(r, g, b));
         }
     }
 
