@@ -9,7 +9,7 @@ use emath::{pos2, vec2, Align2, Pos2, Rect, Vec2};
 
 use crate::{
     board::{ActiveCircuitBoard, CircuitBoard, SelectedBoardItem},
-    circuits::{self, CircuitPreview},
+    circuits::{self, CircuitPreview, CircuitPreviewImpl},
     time::Instant,
     ui::{Inventory, InventoryItem, InventoryItemGroup},
     vector::{Vec2f, Vector},
@@ -31,7 +31,7 @@ pub struct App {
     paste: Option<PastePreview>,
     inventory_items: Vec<InventoryItemGroup>,
     selected_id: Option<String>,
-    circuit_previews: HashMap<String, Arc<Box<dyn CircuitPreview>>>,
+    circuit_previews: HashMap<String, Arc<CircuitPreview>>,
 }
 
 // TODO: fix coi sometimes not working by re-registering it and reloading
@@ -91,7 +91,7 @@ impl eframe::App for App {
         } else if ctx.input(|input| input.key_pressed(Key::F8)) {
             let board = self.board.board.clone();
             self.board = ActiveCircuitBoard::new(board, 0).unwrap();
-        } else if ctx.input(|input| input.key_pressed(Key::R)) {
+        } else if ctx.input(|input| input.key_pressed(Key::F4)) {
             let state = &self.board.state;
             state.reset();
             state.update_everything();
@@ -129,6 +129,11 @@ impl eframe::App for App {
         let board = self.board.board.read().unwrap();
         let data = board.save();
         _storage.set_string("board", ron::to_string(&data).unwrap());
+
+        let previews = crate::io::CircuitPreviewCollectionData(HashMap::from_iter(
+            self.circuit_previews.iter().filter_map(|(ty, p)| p.save().map(|d| (Arc::<str>::from(ty.clone()).into(), d)))),
+        );
+        _storage.set_string("previews", ron::to_string(&previews).unwrap());
     }
 }
 
@@ -139,7 +144,7 @@ static INVENTORY_CIRCUIT_ORDER: [&str; 10] = [
 impl App {
     pub fn create(cc: &CreationContext) -> Self {
         let previews = [
-            Box::new(circuits::test::Preview {}) as Box<dyn CircuitPreview>,
+            Box::new(circuits::test::Preview {}) as Box<dyn CircuitPreviewImpl>,
             Box::new(circuits::button::Preview {}),
             Box::new(circuits::gates::gate::Preview {
                 template: circuits::gates::or::TEMPLATE,
@@ -162,8 +167,21 @@ impl App {
             Box::new(circuits::gates::not::Preview {}),
             Box::new(circuits::pullup::Preview {}),
         ];
-        let previews =
-            HashMap::from_iter(previews.into_iter().map(|p| (p.type_name(), Arc::new(p))));
+        let empty_map = HashMap::default();
+        let empty_loading_context = BasicLoadingContext::<'_, DynStaticStr> { previews: &empty_map };
+        let preview_data = cc.storage.and_then(|s| s.get_string("previews")).and_then(|s| ron::from_str::<crate::io::CircuitPreviewCollectionData>(&s).ok());
+        let previews = HashMap::from_iter(
+            previews
+                .into_iter()
+                .map(|p| {
+                    let data = preview_data.as_ref().and_then(|d| d.0.get(p.type_name().deref()));
+                    let p = match data {
+                        Some(d) => CircuitPreview::load_with_data(p, d, &empty_loading_context),
+                        None => CircuitPreview::from_impl(p),
+                    };
+                    (p.imp.type_name(), Arc::new(p))
+                }),
+        );
 
         let ctx = BasicLoadingContext {
             previews: &previews,
@@ -173,7 +191,7 @@ impl App {
             .then_some(cc.storage)
             .flatten()
             .and_then(|s| s.get_string("board"))
-            .map(|s| ron::from_str::<crate::io::CircuitBoardData>(&s).unwrap())
+            .and_then(|s| ron::from_str::<crate::io::CircuitBoardData>(&s).ok())
             .map(|d| CircuitBoard::load(&d, &ctx));
 
         Self::new(board, previews)
@@ -181,7 +199,7 @@ impl App {
 
     pub fn new(
         board: Option<Arc<RwLock<CircuitBoard>>>,
-        previews: HashMap<DynStaticStr, Arc<Box<dyn CircuitPreview>>>,
+        previews: HashMap<DynStaticStr, Arc<CircuitPreview>>,
     ) -> Self {
         let board = board.unwrap_or_else(|| Arc::new(RwLock::new(CircuitBoard::new())));
 
@@ -226,7 +244,7 @@ impl App {
                     previews.get(id).map(|preview| {
                         Box::new(crate::CircuitInventoryItem {
                             preview: preview.clone(),
-                            id: preview.type_name().deref().to_owned(),
+                            id: preview.imp.type_name().deref().to_owned(),
                         }) as Box<dyn InventoryItem>
                     })
                 })
@@ -420,10 +438,17 @@ impl App {
             Some("selection") => SelectedBoardItem::Selection,
             Some("wire") => SelectedBoardItem::Wire,
             Some(circ) => match self.circuit_previews.get(circ) {
-                Some(p) => SelectedBoardItem::Circuit(&***p),
+                Some(p) => SelectedBoardItem::Circuit(p.as_ref()),
                 None => SelectedBoardItem::None,
             },
         };
+
+        if let SelectedBoardItem::Circuit(pre) = selected_item {
+            if ctx.egui_ctx.input(|input| input.key_pressed(Key::R)) {
+                pre.props
+                    .write(|p: &mut circuits::props::DirectionProp| p.0 = p.0.rotate_clockwise());
+            }
+        }
 
         self.board.update(&ctx, selected_item, self.debug);
 
@@ -441,7 +466,8 @@ Selected: {:?}
 
 [F9] Debug: {}
 [F8] Board reload
-[R] State reset
+[F4] State reset
+[R] Rotate
 
 Wire parts drawn: {}
 Pressed keys: {:?}

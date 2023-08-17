@@ -33,7 +33,7 @@ impl CircuitImpl for Circuit {
 #[derive(Debug)]
 pub struct Preview {}
 
-impl CircuitPreview for Preview {
+impl CircuitPreviewImpl for Preview {
     fn draw_preview(&self, ctx: &PaintContext) {
         Circuit::draw(ctx, true);
     }

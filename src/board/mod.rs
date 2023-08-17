@@ -16,7 +16,10 @@ use eframe::{
 use emath::{vec2, Align2, Rect};
 
 use crate::{
-    circuits::{Circuit, CircuitNode, CircuitPin, CircuitPreview, CircuitStateContext},
+    circuits::{
+        props::CircuitPropertyStore, Circuit, CircuitNode, CircuitPin, CircuitPreview,
+        CircuitStateContext,
+    },
     containers::{Chunks2D, ChunksLookaround, FixedVec},
     state::{State, StateCollection},
     unwrap_option_or_continue, unwrap_option_or_return,
@@ -48,9 +51,14 @@ impl CircuitBoard {
         }
     }
 
-    pub fn create_circuit(&mut self, pos: Vec2i, preview: &dyn CircuitPreview) -> usize {
+    pub fn create_circuit(
+        &mut self,
+        pos: Vec2i,
+        preview: &CircuitPreview,
+        props_override: Option<CircuitPropertyStore>,
+    ) -> usize {
         let id = self.circuits.first_free_pos();
-        let circ = Circuit::create(id, pos, preview);
+        let circ = Circuit::create(id, pos, preview, props_override);
         self.circuits.set(circ, id);
         id
     }
@@ -190,7 +198,8 @@ impl CircuitBoard {
                 .map(|(i, c)| {
                     c.as_ref().and_then(|c| {
                         let preview = ctx.get_circuit_preview(&c.ty)?;
-                        let circ = Circuit::create(i, c.pos, preview);
+                        let props = CircuitPropertyStore::load(&c.props, ctx);
+                        let circ = Circuit::create(i, c.pos, preview, Some(props));
                         if !matches!(c.imp, serde_intermediate::Intermediate::Unit) {
                             circ.imp.write().unwrap().load(&c.imp);
                         }
@@ -255,7 +264,7 @@ pub enum SelectedBoardItem<'a> {
     None,
     Selection,
     Wire,
-    Circuit(&'a dyn CircuitPreview),
+    Circuit(&'a CircuitPreview),
     Paste(&'a PastePreview),
 }
 
@@ -272,7 +281,7 @@ impl<'a> SelectedBoardItem<'a> {
         matches!(self, SelectedBoardItem::Wire)
     }
 
-    pub fn circuit(&self) -> Option<&'a dyn CircuitPreview> {
+    pub fn circuit(&self) -> Option<&'a CircuitPreview> {
         match self {
             SelectedBoardItem::Circuit(c) => Some(*c),
             _ => None,
@@ -294,8 +303,8 @@ pub struct ActiveCircuitBoard {
 }
 
 impl ActiveCircuitBoard {
-    const WIRE_THICKNESS: f32 = 0.2;
-    const WIRE_POINT_THICKNESS: f32 = 0.35;
+    pub const WIRE_THICKNESS: f32 = 0.2;
+    pub const WIRE_POINT_THICKNESS: f32 = 0.35;
 
     pub fn new(board: Arc<RwLock<CircuitBoard>>, state: usize) -> Option<Self> {
         let state = {
@@ -466,7 +475,7 @@ impl ActiveCircuitBoard {
                     let delete_request = ctx
                         .egui_ctx
                         .input(|input| input.events.iter().any(|e| matches!(e, egui::Event::Cut)));
-                }   
+                }
             }
 
             if delete_request
@@ -882,7 +891,7 @@ impl ActiveCircuitBoard {
         };
 
         if let SelectedBoardItem::Circuit(p) = selected {
-            let size = p.size();
+            let size = p.imp.size();
             if size.x() == 0 || size.y() == 0 {
                 return;
             }
@@ -891,12 +900,12 @@ impl ActiveCircuitBoard {
                 ctx.screen.world_to_screen_tile(place_pos).into(),
                 (size.convert(|v| v as f32) * ctx.screen.scale).into(),
             );
-            p.draw_preview(&ctx.with_rect(rect), true);
+            p.draw(&ctx.with_rect(rect), true);
             let interaction = ctx.ui.interact(ctx.rect, ctx.ui.id(), Sense::click());
 
             if interaction.clicked_by(eframe::egui::PointerButton::Primary) {
                 fn empty_handler(_: &mut ActiveCircuitBoard, _: usize) {}
-                self.place_circuit(place_pos, true, p, &empty_handler);
+                self.place_circuit(place_pos, true, p, None, &empty_handler);
             }
         } else if let SelectedBoardItem::Paste(p) = selected {
             let size = p.size;
@@ -1755,13 +1764,14 @@ impl ActiveCircuitBoard {
         &mut self,
         place_pos: Vec2i,
         lock_sim: bool,
-        preview: &dyn CircuitPreview,
+        preview: &CircuitPreview,
+        props_override: Option<CircuitPropertyStore>,
         handler: &dyn Fn(&mut ActiveCircuitBoard, usize),
     ) -> Option<usize> {
-        if !self.can_place_preview(preview, place_pos) {
+        let size = preview.imp.size();
+        if !self.can_place_circuit_at(size, place_pos) {
             return None;
         }
-        let size = preview.size();
 
         let sim_lock = { self.board.read().unwrap().sim_lock.clone() };
         let sim_lock = { lock_sim.then(|| sim_lock.write()) };
@@ -1770,7 +1780,7 @@ impl ActiveCircuitBoard {
             self.board
                 .write()
                 .unwrap()
-                .create_circuit(place_pos, preview)
+                .create_circuit(place_pos, preview, props_override)
         };
 
         for j in 0..size.y() {
@@ -1825,15 +1835,10 @@ impl ActiveCircuitBoard {
         Some(cid)
     }
 
-    pub fn can_place_preview(
-        &mut self,
-        preview: &dyn CircuitPreview,
-        place_pos: crate::vector::Vector<2, i32>,
-    ) -> bool {
-        let size = preview.size();
+    pub fn can_place_circuit_at(&mut self, size: Vec2u, pos: Vec2i) -> bool {
         for j in 0..size.y() as i32 {
             for i in 0..size.x() as i32 {
-                let pos = place_pos + [i, j];
+                let pos = pos + [i, j];
                 if self
                     .circuit_nodes
                     .get(pos.convert(|v| v as isize))

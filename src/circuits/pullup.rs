@@ -2,6 +2,8 @@ use eframe::epaint::{Color32, Stroke};
 
 use crate::circuits::*;
 
+use super::props::CircuitPropertyStore;
+
 struct Circuit {
     pin: CircuitPinInfo,
 }
@@ -27,7 +29,7 @@ impl CircuitImpl for Circuit {
         Circuit::draw(paint_ctx, false);
     }
 
-    fn create_pins(&self) -> Box<[CircuitPinInfo]> {
+    fn create_pins(&mut self, _: &CircuitPropertyStore) -> Box<[CircuitPinInfo]> {
         vec![self.pin.clone()].into_boxed_slice()
     }
 
@@ -48,8 +50,8 @@ impl CircuitImpl for Circuit {
 #[derive(Debug)]
 pub struct Preview {}
 
-impl CircuitPreview for Preview {
-    fn draw_preview(&self, ctx: &PaintContext, in_world: bool) {
+impl CircuitPreviewImpl for Preview {
+    fn draw_preview(&self, _: &CircuitPropertyStore, ctx: &PaintContext, in_world: bool) {
         Circuit::draw(ctx, in_world);
     }
 
@@ -65,7 +67,11 @@ impl CircuitPreview for Preview {
         "pullup".into()
     }
 
-    fn load_impl_data(&self, _: &serde_intermediate::Intermediate) -> Option<Box<dyn CircuitPreview>> {
+    fn load_impl_data(&self, _: &serde_intermediate::Intermediate) -> Option<Box<dyn CircuitPreviewImpl>> {
         Some(Box::new(Preview {}))
+    }
+
+    fn default_props(&self) -> CircuitPropertyStore {
+        Default::default()
     }
 }

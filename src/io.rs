@@ -1,16 +1,20 @@
-use std::time::Duration;
+use std::{time::Duration, collections::HashMap};
 
 use serde::{Deserialize, Serialize};
 use serde_intermediate::Intermediate;
 
 use crate::{
-    circuits::{PinDirection, CircuitPreview},
+    circuits::{PinDirection, CircuitPreview, props::CircuitProperty},
     state::{UpdateTask, WireState},
     vector::{Vec2i, Vec2u}, DynStaticStr, Direction2,
 };
 
+#[cfg(all(not(web_sys_unstable_apis), feature = "wasm"))]
+pub static GLOBAL_CLIPBOARD: crate::Mutex<Option<crate::io::CopyPasteData>> = crate::Mutex::new(None); 
+
 pub trait LoadingContext {
-    fn get_circuit_preview<'a>(&'a self, ty: &str) -> Option<&'a dyn CircuitPreview>;
+    fn get_circuit_preview<'a>(&'a self, ty: &str) -> Option<&'a CircuitPreview>;
+    fn create_property(&self, ty: &str) -> Option<Box<dyn CircuitProperty>>;
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -42,6 +46,9 @@ pub struct CircuitData {
     pub ty: DynStaticStr,
     pub pos: Vec2i,
     pub pin_wires: Vec<(DynStaticStr, usize)>,
+    #[serde(skip_serializing_if = "is_prop_store_empty")]
+    #[serde(default)]
+    pub props: CircuitPropertyStoreData,
     #[serde(skip_serializing_if = "is_unit")]
     #[serde(default)]
     pub imp: Intermediate,
@@ -73,9 +80,6 @@ pub struct CircuitBoardData {
     pub states: Vec<Option<StateData>>,
 }
 
-#[cfg(all(not(web_sys_unstable_apis), feature = "wasm"))]
-pub static GLOBAL_CLIPBOARD: crate::Mutex<Option<crate::io::CopyPasteData>> = crate::Mutex::new(None); 
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct CircuitCopyData {
     pub ty: DynStaticStr,
@@ -83,6 +87,9 @@ pub struct CircuitCopyData {
     #[serde(skip_serializing_if = "is_unit")]
     #[serde(default)]
     pub imp: Intermediate,
+    #[serde(skip_serializing_if = "is_prop_store_empty")]
+    #[serde(default)]
+    pub props: CircuitPropertyStoreData,
     #[serde(skip_serializing_if = "is_unit")]
     #[serde(default)]
     pub internal: Intermediate,
@@ -101,6 +108,23 @@ pub struct WirePartCopyData {
 pub struct CopyPasteData {
     pub wires: Vec<WirePartCopyData>,
     pub circuits: Vec<CircuitCopyData>
+}
+
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+pub struct CircuitPropertyStoreData(pub HashMap<DynStaticStr, Intermediate>);
+
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+pub struct CircuitPreviewData {
+    #[serde(skip_serializing_if = "is_prop_store_empty")]
+    #[serde(default)]
+    pub props: CircuitPropertyStoreData
+}
+
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+pub struct CircuitPreviewCollectionData(pub HashMap<DynStaticStr, CircuitPreviewData>);
+
+fn is_prop_store_empty(props: &CircuitPropertyStoreData) -> bool {
+    props.0.is_empty()
 }
 
 fn is_unit(v: &Intermediate) -> bool {

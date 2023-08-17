@@ -38,7 +38,7 @@ mod containers;
 use crate::containers::*;
 
 mod circuits;
-use circuits::CircuitPreview;
+use circuits::{CircuitPreview, props::CircuitProperty};
 
 mod wires;
 
@@ -68,12 +68,22 @@ type RwLock<T> = std::sync::RwLock<T>;
 type Mutex<T> = std::sync::Mutex<T>;
 
 struct BasicLoadingContext<'a, K: Borrow<str> + Eq + Hash> {
-    previews: &'a HashMap<K, Arc<Box<dyn CircuitPreview>>>,
+    previews: &'a HashMap<K, Arc<CircuitPreview>>,
 }
 
 impl<K: Borrow<str> + Eq + Hash> io::LoadingContext for BasicLoadingContext<'_, K> {
-    fn get_circuit_preview<'a>(&'a self, ty: &str) -> Option<&'a dyn CircuitPreview> {
-        self.previews.get(ty).map(|b| b.deref().deref())
+    fn get_circuit_preview<'a>(&'a self, ty: &str) -> Option<&'a CircuitPreview> {
+        self.previews.get(ty).map(|b| b.deref())
+    }
+
+    fn create_property(&self, ty: &str) -> Option<Box<dyn CircuitProperty>> {
+
+        use circuits::props::*;
+
+        match ty {
+            "dir" => Some(Box::<DirectionProp>::default()),
+            _ => None
+        }
     }
 }
 
@@ -400,7 +410,7 @@ impl InventoryItem for WireInventoryItem {
 }
 
 struct CircuitInventoryItem {
-    preview: Arc<Box<dyn CircuitPreview>>,
+    preview: Arc<CircuitPreview>,
     id: String,
 }
 impl InventoryItem for CircuitInventoryItem {
@@ -409,7 +419,7 @@ impl InventoryItem for CircuitInventoryItem {
     }
 
     fn draw(&self, ctx: &PaintContext) {
-        let size = self.preview.size().convert(|v| v as f32);
+        let size = self.preview.imp.size().convert(|v| v as f32);
         let scale = Vec2f::from(ctx.rect.size()) / size;
         let scale = scale.x().min(scale.y());
         let size = size * scale;
@@ -423,7 +433,7 @@ impl InventoryItem for CircuitInventoryItem {
             rect,
             ..*ctx
         };
-        self.preview.draw_preview(&circ_ctx, false);
+        self.preview.draw(&circ_ctx, false);
     }
 }
 
@@ -551,7 +561,7 @@ macro_rules! impl_optional_int {
 impl_optional_int!(OptionalInt, (if T::SIGNED { T::MIN } else { T::MAX }));
 impl_optional_int!(OptionalNonzeroInt, (T::ZERO));
 
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub enum Direction4 {
     Up,
     Left,
@@ -559,6 +569,23 @@ pub enum Direction4 {
     Right,
 }
 
+impl<'de> Deserialize<'de> for Direction4 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de> {
+        Ok(Direction4::from_char(char::deserialize(deserializer)?).unwrap_or(Direction4::Up))
+    }
+}
+
+impl Serialize for Direction4 {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer {
+        self.into_char().serialize(serializer)
+    }
+}
+
+#[allow(unused)]
 impl Direction4 {
     pub fn iter_all() -> impl Iterator<Item = Self> {
         [Self::Left, Self::Up, Self::Right, Self::Down].into_iter()
@@ -618,10 +645,10 @@ impl Direction4 {
     /// Returns: (direction, forward)
     pub fn into_dir2(self) -> (Direction2, bool) {
         match self {
-            Direction4::Up => (Direction2::Up, true),
-            Direction4::Left => (Direction2::Left, true),
-            Direction4::Down => (Direction2::Up, false),
-            Direction4::Right => (Direction2::Left, false),
+            Self::Up => (Direction2::Up, true),
+            Self::Left => (Direction2::Left, true),
+            Self::Down => (Direction2::Up, false),
+            Self::Right => (Direction2::Left, false),
         }
     }
 
@@ -644,6 +671,43 @@ impl Direction4 {
             pos,
             remaining: dist,
             dir,
+        }
+    }
+
+    pub fn rotate_clockwise(self) -> Self {
+        match self {
+            Self::Up => Self::Right,
+            Self::Left => Self::Up,
+            Self::Down => Self::Left,
+            Self::Right => Self::Down,
+        }
+    }
+
+    pub fn rotate_counterclockwise(self) -> Self {
+        match self {
+            Self::Up => Self::Left,
+            Self::Left => Self::Down,
+            Self::Down => Self::Right,
+            Self::Right => Self::Up,
+        }
+    }
+
+    pub fn into_char(self) -> char {
+        match self {
+            Direction4::Up => 'u',
+            Direction4::Left => 'l',
+            Direction4::Down => 'd',
+            Direction4::Right => 'r',
+        }
+    }
+
+    pub fn from_char(char: char) -> Option<Self> {
+        match char {
+            'u' => Some(Direction4::Up),
+            'l' => Some(Direction4::Left),
+            'd' => Some(Direction4::Down),
+            'r' => Some(Direction4::Right),
+            _ => None
         }
     }
 }
@@ -733,10 +797,19 @@ impl Iterator for DirectionPosItreator {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub enum DynStaticStr {
     Static(&'static str),
     Dynamic(Arc<str>),
+}
+
+impl std::fmt::Debug for DynStaticStr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Static(s) => f.write_fmt(format_args!("static \"{s}\"")),
+            Self::Dynamic(s) => f.write_fmt(format_args!("dynamic \"{}\"", s.deref())),
+        }
+    }
 }
 
 impl Serialize for DynStaticStr {
@@ -809,7 +882,7 @@ impl From<Arc<str>> for DynStaticStr {
 
 pub struct PastePreview {
     wires: Vec<crate::io::WirePartCopyData>,
-    circuits: Vec<(crate::io::CircuitCopyData, Box<dyn CircuitPreview>)>,
+    circuits: Vec<(crate::io::CircuitCopyData, CircuitPreview)>,
     size: Vec2u,
 }
 
@@ -821,7 +894,7 @@ impl PastePreview {
             .into_iter()
             .filter_map(|d| {
                 ctx.get_circuit_preview(&d.ty)
-                    .and_then(|p| p.load_impl_data(&d.imp).map(|b| (d, b)))
+                    .and_then(|p| p.load_new(&d.imp, &d.props, ctx).map(|b| (d, b)))
             })
             .collect();
 
@@ -835,7 +908,7 @@ impl PastePreview {
                 .into()
             }
             for (circuit, preview) in circuits.iter() {
-                let br = circuit.pos + preview.size();
+                let br = circuit.pos + preview.imp.size();
                 size = [size.x().max(br.x()), size.y().max(br.y())].into()
             }
             size
@@ -871,7 +944,7 @@ impl PastePreview {
         }
 
         for (circuit, preview) in self.circuits.iter() {
-            let size = preview.size();
+            let size = preview.imp.size();
             if size.x() == 0 || size.y() == 0 {
                 return;
             }
@@ -880,7 +953,7 @@ impl PastePreview {
                 ctx.screen.world_to_screen_tile(pos).into(),
                 (size.convert(|v| v as f32) * ctx.screen.scale).into(),
             );
-            preview.draw_preview(&ctx.with_rect(rect), true);
+            preview.draw(&ctx.with_rect(rect), true);
         }
     }
 
@@ -888,7 +961,7 @@ impl PastePreview {
         if self
             .circuits
             .iter()
-            .any(|(c, p)| !board.can_place_preview(p.as_ref(), pos + c.pos.convert(|v| v as i32)))
+            .any(|(c, p)| !board.can_place_circuit_at(p.imp.size(), pos + c.pos.convert(|v| v as i32)))
         {
             return;
         }
@@ -913,7 +986,8 @@ impl PastePreview {
             let id = board.place_circuit(
                 pos + circuit_data.pos.convert(|v| v as i32),
                 false,
-                preview.as_ref(),
+                preview,
+                None,
                 &|board, id| {
                     let board = board.board.read().unwrap();
                     if let Some(circuit) = board.circuits.get(id) {

@@ -2,7 +2,7 @@
 use eframe::epaint::{Rounding, Color32};
 use emath::Align2;
 
-use super::*;
+use super::{*, props::CircuitPropertyStore};
 
 #[derive(Default, Serialize, Deserialize)]
 pub struct State {
@@ -77,7 +77,7 @@ impl CircuitImpl for Circuit {
         }
     }
 
-    fn create_pins(&self) -> Box<[CircuitPinInfo]> {
+    fn create_pins(&mut self, _: &CircuitPropertyStore) -> Box<[CircuitPinInfo]> {
         vec![
             self.clock_pin.clone(),
             self.dir_pin.clone(),
@@ -154,8 +154,8 @@ impl CircuitImpl for Circuit {
 #[derive(Debug)]
 pub struct Preview {}
 
-impl CircuitPreview for Preview {
-    fn draw_preview(&self, ctx: &PaintContext, _: bool) {
+impl CircuitPreviewImpl for Preview {
+    fn draw_preview(&self, _: &CircuitPropertyStore, ctx: &PaintContext, _: bool) {
         ctx.paint.rect_filled(
             ctx.rect,
             Rounding::none(),
@@ -175,7 +175,11 @@ impl CircuitPreview for Preview {
         "test".into()
     }
 
-    fn load_impl_data(&self, _: &serde_intermediate::Intermediate) -> Option<Box<dyn CircuitPreview>> {
+    fn load_impl_data(&self, _: &serde_intermediate::Intermediate) -> Option<Box<dyn CircuitPreviewImpl>> {
         Some(Box::new(Preview {}))
+    }
+
+    fn default_props(&self) -> CircuitPropertyStore {
+        Default::default()
     }
 }

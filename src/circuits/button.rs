@@ -1,5 +1,10 @@
-use eframe::{epaint::{Color32, Rounding, FontId}, egui::{Sense, PointerButton}};
-use emath::Align2;
+use eframe::{
+    egui::{PointerButton, Sense},
+    epaint::{Color32, FontId, Rounding},
+};
+use emath::{Align2, Vec2};
+
+use crate::{Direction4, board::ActiveCircuitBoard};
 
 use super::*;
 
@@ -34,11 +39,18 @@ impl Circuit {
             Color32::from_rgb(200, 30, 30)
         }
         .linear_multiply(color_mul);
-        ctx.paint.circle_filled(ctx.rect.center(), ctx.screen.scale * 0.75, color);
-        
+        ctx.paint
+            .circle_filled(ctx.rect.center(), ctx.screen.scale * 0.75, color);
+
         let font = FontId::monospace(ctx.screen.scale * 0.5);
 
-        ctx.paint.text(ctx.rect.center(), Align2::CENTER_CENTER, "PUSH", font, Color32::WHITE);
+        ctx.paint.text(
+            ctx.rect.center(),
+            Align2::CENTER_CENTER,
+            "PUSH",
+            font,
+            Color32::WHITE,
+        );
     }
 }
 
@@ -48,15 +60,34 @@ impl CircuitImpl for Circuit {
 
         // HACK: write proper circuit interactables
         let rect = paint_ctx.rect.expand(paint_ctx.screen.scale * -0.75);
-        let interaction = paint_ctx.ui.interact(rect, paint_ctx.ui.auto_id_with(state_ctx.circuit.pos), Sense::drag());
+        let interaction = paint_ctx.ui.interact(
+            rect,
+            paint_ctx.ui.auto_id_with(state_ctx.circuit.pos),
+            Sense::drag(),
+        );
         let shift = paint_ctx.egui_ctx.input(|input| input.modifiers.shift);
-        if interaction.drag_started_by(PointerButton::Primary) || !shift && interaction.drag_released_by(PointerButton::Primary) {
-            let new_state = state_ctx.write_circuit_internal_state::<State, _>(|s| { s.state = !s.state; s.state });
+        if interaction.drag_started_by(PointerButton::Primary)
+            || !shift && interaction.drag_released_by(PointerButton::Primary)
+        {
+            let new_state = state_ctx.write_circuit_internal_state::<State, _>(|s| {
+                s.state = !s.state;
+                s.state
+            });
             self.out_pin.set_output(state_ctx, new_state.into());
         }
     }
 
-    fn create_pins(&self) -> Box<[CircuitPinInfo]> {
+    fn create_pins(&mut self, props: &CircuitPropertyStore) -> Box<[CircuitPinInfo]> {
+
+        let dir = props.read(|p: &props::DirectionProp| p.0).unwrap_or(Direction4::Right);
+        let pos = match dir {
+            Direction4::Up => [1, 0],
+            Direction4::Left => [0, 1],
+            Direction4::Down => [1, 2],
+            Direction4::Right => [2, 1],
+        };
+        self.out_pin = CircuitPinInfo::new(pos, InternalPinDirection::Outside, "out");
+
         vec![self.out_pin.clone()].into_boxed_slice()
     }
 
@@ -67,8 +98,13 @@ impl CircuitImpl for Circuit {
         self.out_pin.set_output(state_ctx, state.into());
     }
 
-    fn load_internal(&self, data: &serde_intermediate::Intermediate) -> Option<Box<dyn InternalCircuitState>> {
-        serde_intermediate::de::intermediate::deserialize::<State>(data).ok().map(|s| Box::new(s) as Box<dyn InternalCircuitState>)
+    fn load_internal(
+        &self,
+        data: &serde_intermediate::Intermediate,
+    ) -> Option<Box<dyn InternalCircuitState>> {
+        serde_intermediate::de::intermediate::deserialize::<State>(data)
+            .ok()
+            .map(|s| Box::new(s) as Box<dyn InternalCircuitState>)
     }
 }
 
@@ -86,9 +122,12 @@ impl InternalCircuitState for State {
 #[derive(Debug)]
 pub struct Preview {}
 
-impl CircuitPreview for Preview {
-    fn draw_preview(&self, ctx: &PaintContext, in_world: bool) {
+impl CircuitPreviewImpl for Preview {
+    fn draw_preview(&self, props: &CircuitPropertyStore, ctx: &PaintContext, in_world: bool) {
         Circuit::draw(None, ctx, in_world);
+        let dir = props.read_clone::<props::DirectionProp>().map(|p| p.0).unwrap_or(Direction4::Right);
+        let pos = ctx.rect.center() + Vec2::from(dir.unit_vector().convert(|v| v as f32 * ctx.screen.scale));
+        ctx.paint.circle_filled(pos, ActiveCircuitBoard::WIRE_THICKNESS * 0.5 * ctx.screen.scale, WireState::False.color());
     }
 
     fn size(&self) -> Vec2u {
@@ -103,7 +142,16 @@ impl CircuitPreview for Preview {
         "button".into()
     }
 
-    fn load_impl_data(&self, _: &serde_intermediate::Intermediate) -> Option<Box<dyn CircuitPreview>> {
+    fn load_impl_data(
+        &self,
+        _: &serde_intermediate::Intermediate,
+    ) -> Option<Box<dyn CircuitPreviewImpl>> {
         Some(Box::new(Preview {}))
+    }
+
+    fn default_props(&self) -> CircuitPropertyStore {
+        CircuitPropertyStore::new([
+            Box::new(props::DirectionProp(Direction4::Right)) as Box<dyn CircuitProperty>
+        ])
     }
 }

@@ -2,7 +2,7 @@ use eframe::epaint::{Color32, Stroke};
 use emath::{vec2, Vec2};
 
 use crate::{
-    circuits::*,
+    circuits::{*, props::CircuitPropertyStore},
     path::{PathItem, PathItemIterator},
 };
 
@@ -40,7 +40,7 @@ impl CircuitImpl for Circuit {
         (self.template.drawer)(paint_ctx, false);
     }
 
-    fn create_pins(&self) -> Box<[CircuitPinInfo]> {
+    fn create_pins(&mut self, _: &CircuitPropertyStore) -> Box<[CircuitPinInfo]> {
         let mut vec = vec![self.output.clone()];
         vec.extend(self.inputs.iter().cloned());
         vec.into_boxed_slice()
@@ -76,8 +76,8 @@ pub struct Preview {
     pub template: GateTemplate,
 }
 
-impl CircuitPreview for Preview {
-    fn draw_preview(&self, ctx: &PaintContext, in_world: bool) {
+impl CircuitPreviewImpl for Preview {
+    fn draw_preview(&self, _: &CircuitPropertyStore, ctx: &PaintContext, in_world: bool) {
         (self.template.drawer)(ctx, in_world);
     }
 
@@ -93,8 +93,12 @@ impl CircuitPreview for Preview {
         self.template.id.into()
     }
 
-    fn load_impl_data(&self, _: &serde_intermediate::Intermediate) -> Option<Box<dyn CircuitPreview>> {
+    fn load_impl_data(&self, _: &serde_intermediate::Intermediate) -> Option<Box<dyn CircuitPreviewImpl>> {
         Some(Box::new(Preview { template: self.template.clone() }))
+    }
+
+    fn default_props(&self) -> CircuitPropertyStore {
+        Default::default()
     }
 }
 

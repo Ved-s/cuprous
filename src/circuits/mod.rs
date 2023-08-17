@@ -3,14 +3,18 @@ use std::{sync::Arc, time::Duration};
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    io::LoadingContext,
     state::{CircuitState, InternalCircuitState, State, StateCollection, WireState},
     time::Instant,
     vector::{Vec2i, Vec2u, Vector},
     DynStaticStr, OptionalInt, PaintContext, RwLock,
 };
 
+use self::props::{CircuitProperty, CircuitPropertyStore};
+
 pub mod button;
 pub mod gates;
+pub mod props;
 pub mod pullup;
 pub mod test;
 
@@ -275,25 +279,33 @@ pub struct Circuit {
 
     pub info: Arc<RwLock<CircuitInfo>>,
     pub imp: Arc<RwLock<Box<dyn CircuitImpl>>>,
+    pub props: CircuitPropertyStore,
 }
 
 impl Circuit {
-    pub fn create(id: usize, pos: Vec2i, preview: &dyn CircuitPreview) -> Self {
-        let imp = preview.create_impl();
-        let mut pins = imp.create_pins();
+    pub fn create(
+        id: usize,
+        pos: Vec2i,
+        preview: &CircuitPreview,
+        props_override: Option<CircuitPropertyStore>,
+    ) -> Self {
+        let mut imp = preview.imp.create_impl();
+        let props = props_override.unwrap_or_else(|| preview.props.clone());
+        let mut pins = imp.create_pins(&props);
         for pin in pins.iter_mut().enumerate() {
             pin.1.pin.write().unwrap().id = CircuitPinId::new(pin.0, id);
         }
 
         Self {
+            ty: preview.imp.type_name(),
             id,
             pos,
             info: Arc::new(RwLock::new(CircuitInfo {
-                size: preview.size(),
+                size: preview.imp.size(),
                 pins,
             })),
             imp: Arc::new(RwLock::new(imp)),
-            ty: preview.type_name(),
+            props,
         }
     }
 
@@ -311,6 +323,7 @@ impl Circuit {
                 })
                 .collect(),
             imp: self.imp.read().unwrap().save(),
+            props: self.props.save(),
         }
     }
 
@@ -341,6 +354,7 @@ impl Circuit {
                     (*id == self.id).then(|| time.checked_duration_since(Instant::now()))
                 })
                 .flatten(),
+            props: self.props.save(),
         }
     }
 }
@@ -396,13 +410,18 @@ impl<'a> CircuitStateContext<'a> {
         self.global_state
             .set_circuit_update_interval(self.circuit.id, interval);
     }
+
+    pub fn props(&self) -> &CircuitPropertyStore {
+        &self.circuit.props
+    }
 }
 
 #[allow(unused_variables)]
 pub trait CircuitImpl: Send + Sync {
     fn draw(&self, state_ctx: &CircuitStateContext, paint_ctx: &PaintContext);
 
-    fn create_pins(&self) -> Box<[CircuitPinInfo]>;
+    /// After calling this, consider all connected pins invalid
+    fn create_pins(&mut self, props: &CircuitPropertyStore) -> Box<[CircuitPinInfo]>;
 
     fn update_signals(&mut self, state_ctx: &CircuitStateContext, changed_pin: Option<usize>);
 
@@ -444,16 +463,76 @@ pub trait CircuitImpl: Send + Sync {
         state: &mut WireState,
     ) {
     }
+
+    fn prop_changed(
+        &self,
+        prop: &dyn CircuitProperty,
+        resize: &mut bool,
+        recreate_pins: &mut bool,
+    ) {
+    }
 }
-pub trait CircuitPreview {
+
+pub struct CircuitPreview {
+    pub imp: Box<dyn CircuitPreviewImpl>,
+    pub props: CircuitPropertyStore,
+}
+
+impl CircuitPreview {
+    pub fn new(imp: Box<dyn CircuitPreviewImpl>, props: CircuitPropertyStore) -> Self {
+        Self { imp, props }
+    }
+
+    pub fn load_with_data(
+        imp: Box<dyn CircuitPreviewImpl>,
+        data: &crate::io::CircuitPreviewData,
+        ctx: &impl crate::io::LoadingContext,
+    ) -> Self {
+        Self::new(imp, CircuitPropertyStore::load(&data.props, ctx))
+    }
+
+    pub fn load_new(
+        &self,
+        imp: &serde_intermediate::Intermediate,
+        props: &crate::io::CircuitPropertyStoreData,
+        ctx: &impl LoadingContext,
+    ) -> Option<Self> {
+        let imp = self.imp.load_impl_data(imp)?;
+        let props = CircuitPropertyStore::load(props, ctx);
+        Some(Self { imp, props })
+    }
+
+    pub fn from_impl(p: Box<dyn CircuitPreviewImpl>) -> Self {
+        let props = p.default_props();
+        Self { imp: p, props }
+    }
+
+    pub fn draw(&self, ctx: &PaintContext, in_world: bool) {
+        self.imp.draw_preview(&self.props, ctx, in_world)
+    }
+
+    /// Returns None if data is equal to default
+    pub fn save(&self) -> Option<crate::io::CircuitPreviewData> {
+        if self.props.is_empty() {
+            None
+        } else {
+            Some(crate::io::CircuitPreviewData {
+                props: self.props.save(),
+            })
+        }
+    }
+}
+
+pub trait CircuitPreviewImpl {
     fn type_name(&self) -> DynStaticStr;
-    fn draw_preview(&self, ctx: &PaintContext, in_world: bool);
+    fn draw_preview(&self, props: &CircuitPropertyStore, ctx: &PaintContext, in_world: bool);
     fn size(&self) -> Vec2u;
     fn create_impl(&self) -> Box<dyn CircuitImpl>;
     fn load_impl_data(
         &self,
         data: &serde_intermediate::Intermediate,
-    ) -> Option<Box<dyn CircuitPreview>>;
+    ) -> Option<Box<dyn CircuitPreviewImpl>>;
+    fn default_props(&self) -> CircuitPropertyStore;
 }
 
 #[derive(Default)]
