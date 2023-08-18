@@ -47,6 +47,10 @@ impl Circuit {
             Stroke::new(2.0, border_color),
         );
     }
+
+    fn size(_: &CircuitPropertyStore) -> Vec2u {
+        [2, 1].into()
+    }
 }
 
 impl CircuitImpl for Circuit {
@@ -68,6 +72,10 @@ impl CircuitImpl for Circuit {
         };
         self.output.set_output(state_ctx, state);
     }
+
+    fn size(&self, props: &CircuitPropertyStore) -> Vec2u {
+        Circuit::size(props)
+    }
 }
 
 pub struct Preview {}
@@ -77,8 +85,8 @@ impl CircuitPreviewImpl for Preview {
         Circuit::draw(ctx, in_world)
     }
 
-    fn size(&self) -> Vec2u {
-        [2, 1].into()
+    fn size(&self, props: &CircuitPropertyStore) -> Vec2u {
+        Circuit::size(props)
     }
 
     fn create_impl(&self) -> Box<dyn CircuitImpl> {

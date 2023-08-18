@@ -1,12 +1,15 @@
-use std::{collections::HashSet, sync::Arc};
+use std::{any::TypeId, collections::HashSet, ops::Deref, sync::Arc};
 
 use eframe::{
-    egui::{Id, Key, Margin, PointerButton, Sense, Ui, Widget},
+    egui::{Grid, Id, Key, Margin, PointerButton, Response, Sense, Ui, Widget},
     epaint::{Color32, Rounding, Stroke},
 };
 use emath::{vec2, Rect, Vec2};
 
-use crate::{PaintContext, RwLock};
+use crate::{
+    circuits::props::{CircuitProperty, CircuitPropertyImpl, CircuitPropertyStore},
+    DynStaticStr, PaintContext, RwLock,
+};
 
 pub enum InventoryItemGroup {
     SingleItem(Box<dyn InventoryItem>),
@@ -325,6 +328,152 @@ impl Widget for Inventory<'_> {
         }
 
         response
+    }
+}
+
+#[derive(PartialEq, Eq, Hash, Clone)]
+struct PropertyId {
+    id: DynStaticStr,
+    name: DynStaticStr,
+    ty: TypeId,
+}
+
+impl PropertyId {
+    pub fn id_of(prop: &CircuitProperty) -> Self {
+        Self {
+            id: prop.id(),
+            name: prop.name(),
+            ty: prop.imp().type_id(),
+        }
+    }
+}
+
+pub struct PropertyStoreItem<'a, T: Clone> {
+    pub store: &'a CircuitPropertyStore,
+    pub id: T,
+}
+
+impl<'a, T: Clone> PropertyStoreItem<'a, T> {
+    pub fn new(id: T, store: &'a CircuitPropertyStore) -> Self {
+        Self { store, id }
+    }
+}
+
+impl<'a, T: Clone> From<(T, &'a CircuitPropertyStore)> for PropertyStoreItem<'a, T> {
+    fn from(value: (T, &'a CircuitPropertyStore)) -> Self {
+        Self::new(value.0, value.1)
+    }
+}
+
+pub struct PropertyEditor {
+    ids_cache: HashSet<PropertyId>,
+    ids_cache_remove: HashSet<PropertyId>,
+}
+
+pub struct PropertyEditorResponse<T> {
+    pub response: Response,
+    pub changes: Vec<ChangedProperty<T>>,
+}
+
+pub struct ChangedProperty<T> {
+    pub id: DynStaticStr,
+    pub affected_values: Vec<T>,
+    pub old_value: Box<dyn CircuitPropertyImpl>,
+}
+
+// awful code
+impl PropertyEditor {
+    pub fn new() -> Self {
+        Self {
+            ids_cache: HashSet::new(),
+            ids_cache_remove: HashSet::new(),
+        }
+    }
+
+    pub fn ui<'a, T: Clone>(
+        &'a mut self,
+        ui: &mut Ui,
+        props: impl IntoIterator<Item = PropertyStoreItem<'a, T>>,
+    ) -> PropertyEditorResponse<T> {
+        let mut stores = vec![];
+        self.ids_cache.clear();
+        self.ids_cache_remove.clear();
+
+        for (i, store) in props.into_iter().enumerate() {
+            let map = store.store.inner().read().unwrap();
+            if i == 0 {
+                self.ids_cache.extend(map.values().map(PropertyId::id_of));
+            } else {
+                self.ids_cache_remove.clear();
+                self.ids_cache_remove
+                    .extend(
+                        self.ids_cache
+                            .iter()
+                            .filter_map(|id| match map.get(&id.id) {
+                                None => Some(id.clone()),
+                                Some(p) => (PropertyId::id_of(p) != *id).then(|| id.clone()),
+                            }),
+                    );
+                for str in self.ids_cache_remove.iter() {
+                    self.ids_cache.remove(str.deref());
+                }
+            }
+            stores.push(store);
+        }
+
+        let response = Grid::new(("prop_editor", stores.len())).show(ui, |ui| {
+            let mut guards: Vec<_> = stores
+                .iter()
+                .map(|s| (s.id.clone(), s.store.inner().write().unwrap()))
+                .collect();
+            let mut changes = Vec::new();
+            for id in self.ids_cache.iter() {
+                let mut props: Vec<_> = guards
+                    .iter_mut()
+                    .filter_map(|(i, s)| {
+                        s.get_mut(&id.id)
+                            .filter(|p| p.imp().type_id() == id.ty)
+                            .map(|p| (i.clone(), p))
+                    })
+                    .collect();
+
+                if props.is_empty() {
+                    continue;
+                }
+
+                let equal = props.windows(2).all(|w| w[0].1.imp().equals(w[1].1.imp()));
+
+                ui.label(id.name.deref());
+
+                
+                    if let Some(old) = props[0].1.imp_mut().ui(ui, !equal) {
+                        let mut vec = vec![];
+                        let (id, prop) = props.remove(0);
+                        vec.push(id);
+                        for other_prop in props {
+                            if !other_prop.1.imp().equals(prop.imp()) {
+                                prop.imp().copy_into(other_prop.1.imp_mut());
+                                vec.push(other_prop.0);
+                            }
+                        }
+                        changes.push(ChangedProperty { id: prop.id(), affected_values: vec, old_value: old });
+                    }
+                
+
+                ui.end_row();
+            }
+            changes
+        });
+        PropertyEditorResponse {
+            response: response.response,
+            changes: response.inner,
+        }
+    }
+}
+
+impl Default for PropertyEditor {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

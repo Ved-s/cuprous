@@ -1,20 +1,20 @@
 use std::{collections::HashMap, ops::Deref, sync::Arc};
 
 use eframe::{
-    egui::{self, Context, Key, Margin, TextStyle, Ui},
-    epaint::{Color32, Stroke},
+    egui::{self, Context, Frame, Key, Margin, SidePanel, TextStyle, Ui},
+    epaint::{Color32, Rounding, Stroke},
     CreationContext,
 };
 use emath::{pos2, vec2, Align2, Pos2, Rect, Vec2};
 
 use crate::{
-    board::{ActiveCircuitBoard, CircuitBoard, SelectedBoardItem},
-    circuits::{self, CircuitPreview, CircuitPreviewImpl},
+    board::{ActiveCircuitBoard, CircuitBoard, SelectedItem},
+    circuits::{self, props::CircuitPropertyImpl, CircuitPreview, CircuitPreviewImpl},
     time::Instant,
-    ui::{Inventory, InventoryItem, InventoryItemGroup},
+    ui::{Inventory, InventoryItem, InventoryItemGroup, PropertyEditor, PropertyStoreItem},
     vector::{Vec2f, Vector},
-    BasicLoadingContext, DynStaticStr, PaintContext, PanAndZoom, PastePreview, RwLock,
-    TileDrawBounds, Direction4,
+    BasicLoadingContext, Direction4, DynStaticStr, PaintContext, PanAndZoom, PastePreview, RwLock,
+    TileDrawBounds,
 };
 
 pub struct App {
@@ -28,10 +28,12 @@ pub struct App {
 
     pub debug: bool,
 
-    paste: Option<PastePreview>,
+    paste: Option<Arc<PastePreview>>,
     inventory_items: Vec<InventoryItemGroup>,
     selected_id: Option<String>,
     circuit_previews: HashMap<String, Arc<CircuitPreview>>,
+
+    props_ui: crate::ui::PropertyEditor,
 }
 
 // TODO: fix coi sometimes not working by re-registering it and reloading
@@ -77,12 +79,12 @@ impl eframe::App for App {
         }
 
         if let Some(paste) = paste {
-            self.paste = Some(PastePreview::new(
+            self.paste = Some(Arc::new(PastePreview::new(
                 paste,
                 &BasicLoadingContext {
                     previews: &self.circuit_previews,
                 },
-            ));
+            )));
             self.selected_id = Some("paste".to_owned());
         }
 
@@ -122,6 +124,40 @@ impl eframe::App for App {
                     _ => (),
                 }
                 self.selected_id = selected;
+
+                if let SelectedItem::Circuit(p) = self.selected_item() {
+                    let props = [((), &p.props).into()];
+                    App::properties_ui(&mut self.props_ui, ui, props);
+                } else {
+                    let selection = self.board.selection.borrow();
+                    if !selection.selection.is_empty() {
+                        let selected_circuit_props =
+                            selection.selection.iter().filter_map(|o| match o {
+                                crate::board::selection::SelectedWorldObject::Circuit { id } => {
+                                    Some(*id)
+                                }
+                                _ => None,
+                            });
+                        let board = self.board.board.read().unwrap();
+                        let stores: Vec<_> = selected_circuit_props
+                            .filter_map(|id| board.circuits.get(id).map(|c| (id, &c.props).into()))
+                            .collect();
+
+                        let response = App::properties_ui(&mut self.props_ui, ui, stores);
+                        drop(selection);
+                        drop(board);
+
+                        for property in response.inner {
+                            for circuit in property.affected_values {
+                                self.board.circuit_property_changed(
+                                    circuit,
+                                    &property.id,
+                                    property.old_value.as_ref(),
+                                );
+                            }
+                        }
+                    }
+                }
             });
     }
 
@@ -131,8 +167,10 @@ impl eframe::App for App {
         _storage.set_string("board", ron::to_string(&data).unwrap());
 
         let previews = crate::io::CircuitPreviewCollectionData(HashMap::from_iter(
-            self.circuit_previews.iter().filter_map(|(ty, p)| p.save().map(|d| (Arc::<str>::from(ty.clone()).into(), d)))),
-        );
+            self.circuit_previews
+                .iter()
+                .filter_map(|(ty, p)| p.save().map(|d| (Arc::<str>::from(ty.clone()).into(), d))),
+        ));
         _storage.set_string("previews", ron::to_string(&previews).unwrap());
     }
 }
@@ -167,19 +205,20 @@ impl App {
             Box::new(circuits::gates::not::Preview {}),
             Box::new(circuits::pullup::Preview {}),
         ];
-        let preview_data = cc.storage.and_then(|s| s.get_string("previews")).and_then(|s| ron::from_str::<crate::io::CircuitPreviewCollectionData>(&s).ok());
-        let previews = HashMap::from_iter(
-            previews
-                .into_iter()
-                .map(|p| {
-                    let data = preview_data.as_ref().and_then(|d| d.0.get(p.type_name().deref()));
-                    let p = match data {
-                        Some(d) => CircuitPreview::load_with_data(p, d),
-                        None => CircuitPreview::from_impl(p),
-                    };
-                    (p.imp.type_name(), Arc::new(p))
-                }),
-        );
+        let preview_data = cc
+            .storage
+            .and_then(|s| s.get_string("previews"))
+            .and_then(|s| ron::from_str::<crate::io::CircuitPreviewCollectionData>(&s).ok());
+        let previews = HashMap::from_iter(previews.into_iter().map(|p| {
+            let data = preview_data
+                .as_ref()
+                .and_then(|d| d.0.get(p.type_name().deref()));
+            let p = match data {
+                Some(d) => CircuitPreview::load_with_data(p, d),
+                None => CircuitPreview::from_impl(p),
+            };
+            (p.imp.type_name(), Arc::new(p))
+        }));
 
         let ctx = BasicLoadingContext {
             previews: &previews,
@@ -269,6 +308,7 @@ impl App {
                 .map(|(id, arc)| (id.deref().to_owned(), arc))
                 .collect(),
             paste: None,
+            props_ui: Default::default(),
         }
     }
 
@@ -427,24 +467,42 @@ impl App {
             egui_ctx: ctx,
         };
 
-        let selected_item = match self.selected_id.as_deref() {
-            None => SelectedBoardItem::None,
-            Some("paste") => match &self.paste {
-                Some(p) => SelectedBoardItem::Paste(p),
-                None => SelectedBoardItem::None,
-            },
-            Some("selection") => SelectedBoardItem::Selection,
-            Some("wire") => SelectedBoardItem::Wire,
-            Some(circ) => match self.circuit_previews.get(circ) {
-                Some(p) => SelectedBoardItem::Circuit(p.as_ref()),
-                None => SelectedBoardItem::None,
-            },
-        };
+        let selected_item = self.selected_item();
 
-        if let SelectedBoardItem::Circuit(pre) = selected_item {
-            if ctx.egui_ctx.input(|input| input.key_pressed(Key::R)) {
+        if ctx.egui_ctx.input(|input| input.key_pressed(Key::R)) {
+            if let SelectedItem::Circuit(pre) = &selected_item {
                 pre.props
                     .write("dir", |p: &mut Direction4| *p = p.rotate_clockwise());
+            } else {
+                let selected_circuits: Vec<_> = self
+                    .board
+                    .selection
+                    .borrow()
+                    .selection
+                    .iter()
+                    .filter_map(|o| match o {
+                        crate::board::selection::SelectedWorldObject::Circuit { id } => Some(*id),
+                        _ => None,
+                    })
+                    .collect();
+
+                let mut vec = vec![];
+                let board = self.board.board.read().unwrap();
+                for circuit_id in selected_circuits {
+                    let circuit = board.circuits.get(circuit_id);
+                    let circuit = unwrap_option_or_continue!(circuit);
+                    let old = circuit.props.write("dir", |p: &mut Direction4| {
+                        let old = *p;
+                        *p = p.rotate_clockwise();
+                        Box::new(old) as Box<dyn CircuitPropertyImpl>
+                    });
+                    let old = unwrap_option_or_continue!(old);
+                    vec.push((circuit_id, old))
+                }
+                drop(board);
+                for (circuit, old) in vec {
+                    self.board.circuit_property_changed(circuit, "dir", old.as_ref());
+                }
             }
         }
 
@@ -486,5 +544,47 @@ Pressed keys: {:?}
             font_id,
             Color32::WHITE,
         );
+    }
+
+    fn selected_item(&self) -> SelectedItem {
+        match self.selected_id.as_deref() {
+            None => SelectedItem::None,
+            Some("paste") => match &self.paste {
+                Some(p) => SelectedItem::Paste(p.clone()),
+                None => SelectedItem::None,
+            },
+            Some("selection") => SelectedItem::Selection,
+            Some("wire") => SelectedItem::Wire,
+            Some(circ) => match self.circuit_previews.get(circ) {
+                Some(p) => SelectedItem::Circuit(p.clone()),
+                None => SelectedItem::None,
+            },
+        }
+    }
+
+    fn properties_ui<'a, T: Clone>(
+        editor: &'a mut PropertyEditor,
+        ui: &mut Ui,
+        props: impl IntoIterator<Item = PropertyStoreItem<'a, T>>,
+    ) -> egui::InnerResponse<Vec<crate::ui::ChangedProperty<T>>> {
+        let frame = Frame::side_top_panel(ui.style())
+            .outer_margin(Margin::symmetric(0.0, 10.0))
+            .rounding(Rounding {
+                nw: 10.0,
+                ne: 0.0,
+                sw: 10.0,
+                se: 0.0,
+            })
+            .stroke(ui.style().visuals.window_stroke);
+
+        SidePanel::right("props")
+            .show_separator_line(false)
+            .resizable(false)
+            .frame(frame)
+            .show(ui.ctx(), |ui| {
+                ui.vertical_centered(|ui| ui.label("Circuit properties"));
+                let response = editor.ui(ui, props);
+                response.changes
+            })
     }
 }

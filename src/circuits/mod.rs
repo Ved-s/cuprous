@@ -9,7 +9,7 @@ use crate::{
     DynStaticStr, OptionalInt, PaintContext, RwLock,
 };
 
-use self::props::{CircuitPropertyImpl, CircuitPropertyStore};
+use self::props::CircuitPropertyStore;
 
 pub mod button;
 pub mod gates;
@@ -300,7 +300,7 @@ impl Circuit {
             id,
             pos,
             info: Arc::new(RwLock::new(CircuitInfo {
-                size: preview.imp.size(),
+                size: preview.size(),
                 pins,
             })),
             imp: Arc::new(RwLock::new(imp)),
@@ -463,13 +463,11 @@ pub trait CircuitImpl: Send + Sync {
     ) {
     }
 
-    fn prop_changed(
-        &self,
-        prop: &dyn CircuitPropertyImpl,
-        resize: &mut bool,
-        recreate_pins: &mut bool,
-    ) {
-    }
+    fn prop_changed(&self, prop_id: &str, resize: &mut bool, recreate_pins: &mut bool) {}
+
+    fn apply_prop(&mut self, prop_id: &str) {}
+
+    fn size(&self, props: &CircuitPropertyStore) -> Vec2u;
 }
 
 pub struct CircuitPreview {
@@ -484,7 +482,7 @@ impl CircuitPreview {
 
     pub fn load_with_data(
         imp: Box<dyn CircuitPreviewImpl>,
-        data: &crate::io::CircuitPreviewData
+        data: &crate::io::CircuitPreviewData,
     ) -> Self {
         let props = imp.default_props();
         props.load(&data.props);
@@ -521,12 +519,16 @@ impl CircuitPreview {
             })
         }
     }
+
+    pub fn size(&self) -> Vec2u {
+        self.imp.size(&self.props)
+    }
 }
 
 pub trait CircuitPreviewImpl {
     fn type_name(&self) -> DynStaticStr;
     fn draw_preview(&self, props: &CircuitPropertyStore, ctx: &PaintContext, in_world: bool);
-    fn size(&self) -> Vec2u;
+    fn size(&self, props: &CircuitPropertyStore) -> Vec2u;
     fn create_impl(&self) -> Box<dyn CircuitImpl>;
     fn load_impl_data(
         &self,

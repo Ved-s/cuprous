@@ -36,6 +36,10 @@ impl Circuit {
             ),
         }
     }
+
+    fn size(_: &CircuitPropertyStore) -> Vec2u {
+        [2, 2].into()
+    }
 }
 
 impl CircuitImpl for Circuit {
@@ -149,6 +153,10 @@ impl CircuitImpl for Circuit {
     fn init_state(&self, state_ctx: &CircuitStateContext) {
         state_ctx.set_update_interval(self.update_interval(state_ctx));
     }
+
+    fn size(&self, props: &CircuitPropertyStore) -> Vec2u {
+        Circuit::size(props)
+    }
 }
 
 #[derive(Debug)]
@@ -163,8 +171,8 @@ impl CircuitPreviewImpl for Preview {
         );
     }
 
-    fn size(&self) -> Vec2u {
-        [2, 2].into()
+    fn size(&self, props: &CircuitPropertyStore) -> Vec2u {
+        Circuit::size(props)
     }
 
     fn create_impl(&self) -> Box<dyn CircuitImpl> {

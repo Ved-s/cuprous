@@ -17,8 +17,8 @@ use emath::{vec2, Align2, Rect};
 
 use crate::{
     circuits::{
-        props::CircuitPropertyStore, Circuit, CircuitNode, CircuitPin, CircuitPreview,
-        CircuitStateContext,
+        props::{CircuitPropertyImpl, CircuitPropertyStore},
+        Circuit, CircuitNode, CircuitPin, CircuitPreview, CircuitStateContext,
     },
     containers::{Chunks2D, ChunksLookaround, FixedVec},
     state::{State, StateCollection},
@@ -261,30 +261,31 @@ impl Default for CircuitBoard {
     }
 }
 
-pub enum SelectedBoardItem<'a> {
+#[derive(Clone)]
+pub enum SelectedItem {
     None,
     Selection,
     Wire,
-    Circuit(&'a CircuitPreview),
-    Paste(&'a PastePreview),
+    Circuit(Arc<CircuitPreview>),
+    Paste(Arc<PastePreview>),
 }
 
-impl<'a> SelectedBoardItem<'a> {
+impl SelectedItem {
     pub fn none(&self) -> bool {
-        matches!(self, SelectedBoardItem::None)
+        matches!(self, SelectedItem::None)
     }
 
     pub fn selection(&self) -> bool {
-        matches!(self, SelectedBoardItem::Selection)
+        matches!(self, SelectedItem::Selection)
     }
 
     pub fn wire(&self) -> bool {
-        matches!(self, SelectedBoardItem::Wire)
+        matches!(self, SelectedItem::Wire)
     }
 
-    pub fn circuit(&self) -> Option<&'a CircuitPreview> {
+    pub fn circuit(&self) -> Option<&CircuitPreview> {
         match self {
-            SelectedBoardItem::Circuit(c) => Some(*c),
+            SelectedItem::Circuit(c) => Some(c.as_ref()),
             _ => None,
         }
     }
@@ -298,7 +299,7 @@ pub struct ActiveCircuitBoard {
     pub circuit_nodes: Chunks2D<16, CircuitNode>,
 
     wire_drag_pos: Option<Vec2i>,
-    selection: RefCell<Selection>,
+    pub selection: RefCell<Selection>,
 
     pub wires_drawn: AtomicUsize,
 }
@@ -384,7 +385,7 @@ impl ActiveCircuitBoard {
         })
     }
 
-    pub fn update(&mut self, ctx: &PaintContext, selected: SelectedBoardItem, debug: bool) {
+    pub fn update(&mut self, ctx: &PaintContext, selected: SelectedItem, debug: bool) {
         self.wires_drawn.store(0, Ordering::Relaxed);
         self.selection
             .borrow_mut()
@@ -873,13 +874,13 @@ impl ActiveCircuitBoard {
         }
     }
 
-    fn update_previews(&mut self, ctx: &PaintContext, selected: SelectedBoardItem) {
+    fn update_previews(&mut self, ctx: &PaintContext, selected: SelectedItem) {
         match selected {
-            SelectedBoardItem::None => return,
-            SelectedBoardItem::Selection => return,
-            SelectedBoardItem::Wire => return,
-            SelectedBoardItem::Circuit(_) => (),
-            SelectedBoardItem::Paste(_) => (),
+            SelectedItem::None => return,
+            SelectedItem::Selection => return,
+            SelectedItem::Wire => return,
+            SelectedItem::Circuit(_) => (),
+            SelectedItem::Paste(_) => (),
         };
 
         let mouse_tile_pos = ctx
@@ -891,8 +892,8 @@ impl ActiveCircuitBoard {
             Some(v) => v.convert(|v| v.floor() as i32),
         };
 
-        if let SelectedBoardItem::Circuit(p) = selected {
-            let size = p.imp.size();
+        if let SelectedItem::Circuit(p) = selected {
+            let size = p.size();
             if size.x() == 0 || size.y() == 0 {
                 return;
             }
@@ -906,9 +907,9 @@ impl ActiveCircuitBoard {
 
             if interaction.clicked_by(eframe::egui::PointerButton::Primary) {
                 fn empty_handler(_: &mut ActiveCircuitBoard, _: usize) {}
-                self.place_circuit(place_pos, true, p, None, &empty_handler);
+                self.place_circuit(place_pos, true, p.as_ref(), None, &empty_handler);
             }
-        } else if let SelectedBoardItem::Paste(p) = selected {
+        } else if let SelectedItem::Paste(p) = selected {
             let size = p.size;
             if size.x() == 0 || size.y() == 0 {
                 return;
@@ -1769,8 +1770,8 @@ impl ActiveCircuitBoard {
         props_override: Option<CircuitPropertyStore>,
         handler: &dyn Fn(&mut ActiveCircuitBoard, usize),
     ) -> Option<usize> {
-        let size = preview.imp.size();
-        if !self.can_place_circuit_at(size, place_pos) {
+        let size = preview.size();
+        if !self.can_place_circuit_at(size, place_pos, None) {
             return None;
         }
 
@@ -1784,32 +1785,32 @@ impl ActiveCircuitBoard {
                 .create_circuit(place_pos, preview, props_override)
         };
 
-        for j in 0..size.y() {
-            for i in 0..size.x() {
-                let pos = place_pos + [i as i32, j as i32];
-                let node = self
-                    .circuit_nodes
-                    .get_or_create_mut(pos.convert(|v| v as isize));
-
-                node.circuit.set(Some(cid));
-                node.origin_dist = [i, j].into();
-            }
-        }
-        let circ_info = {
-            self.board
-                .read()
-                .unwrap()
-                .circuits
-                .get(cid)
-                .unwrap()
-                .info
-                .clone()
-        };
+        self.set_circuit_nodes(size, place_pos, Some(cid));
         handler(self, cid);
-        for pin in circ_info.read().unwrap().pins.iter() {
-            let pos = place_pos + pin.pos.convert(|v| v as i32);
+        self.connect_circuit_to_wires(cid);
+        let board = self.board.read().unwrap();
+        let circ = board.circuits.get(cid).unwrap();
+        board.states.init_circuit(circ);
+        board.states.update_circuit_signals(cid, None);
+        drop(sim_lock);
+        Some(cid)
+    }
+
+    fn connect_circuit_to_wires(&mut self, circuit: usize) {
+        let board = self.board.read().unwrap();
+        let circuit = board.circuits.get(circuit);
+        let circuit = unwrap_option_or_return!(circuit);
+        let info = circuit.info.clone();
+        let pos = circuit.pos;
+
+        let states = board.states.clone();
+        drop(board);
+
+        for pin in info.read().unwrap().pins.iter() {
+            let pos = pos + pin.pos.convert(|v| v as i32);
             if let Some(wire) = self.create_wire_intersection(pos) {
-                let wire = if let Some(wire) = self.board.write().unwrap().wires.get_mut(wire) {
+                let mut board = self.board.write().unwrap();
+                let wire = if let Some(wire) = board.wires.get_mut(wire) {
                     if let Some(p) = wire.points.get_mut(&pos) {
                         p.pin = Some(pin.pin.clone());
                     }
@@ -1819,31 +1820,49 @@ impl ActiveCircuitBoard {
                 };
 
                 if let Some(wire) = wire {
-                    pin.pin.write().unwrap().set_wire(
-                        &self.board.read().unwrap().states.clone(),
-                        Some(wire),
-                        true,
-                        false,
-                    );
+                    pin.pin
+                        .write()
+                        .unwrap()
+                        .set_wire(&states, Some(wire), true, false);
                 }
             }
         }
-        let board = self.board.read().unwrap();
-        let circ = board.circuits.get(cid).unwrap();
-        board.states.init_circuit(circ);
-        board.states.update_circuit_signals(cid, None);
-        drop(sim_lock);
-        Some(cid)
     }
 
-    pub fn can_place_circuit_at(&mut self, size: Vec2u, pos: Vec2i) -> bool {
+    fn set_circuit_nodes(&mut self, size: Vec2u, pos: Vec2i, id: Option<usize>) {
+        for j in 0..size.y() {
+            for i in 0..size.x() {
+                let pos = pos + [i as i32, j as i32];
+                let node = self
+                    .circuit_nodes
+                    .get_or_create_mut(pos.convert(|v| v as isize));
+
+                node.circuit.set(id);
+                node.origin_dist = if id.is_some() {
+                    [i, j].into()
+                } else {
+                    Vec2u::single_value(0)
+                };
+            }
+        }
+    }
+
+    pub fn can_place_circuit_at(
+        &mut self,
+        size: Vec2u,
+        pos: Vec2i,
+        ignore_circuit: Option<usize>,
+    ) -> bool {
         for j in 0..size.y() as i32 {
             for i in 0..size.x() as i32 {
                 let pos = pos + [i, j];
                 if self
                     .circuit_nodes
                     .get(pos.convert(|v| v as isize))
-                    .is_some_and(|n| n.circuit.is_some())
+                    .is_some_and(|n| {
+                        n.circuit
+                            .is_some_and(|id| !ignore_circuit.is_some_and(|ign| ign == id))
+                    })
                 {
                     return false;
                 }
@@ -1921,40 +1940,19 @@ impl ActiveCircuitBoard {
         let circuit = unwrap_option_or_return!(board.circuits.get(id));
 
         let pos = circuit.pos;
-        let circuit_info = circuit.info.read().unwrap();
-        let size = circuit_info.size;
-        let pins: Vec<_> = circuit
-            .info
-            .read()
-            .unwrap()
-            .pins
-            .iter()
-            .map(|p| (p.pos.convert(|v| v as i32) + pos, p.pin.clone()))
-            .collect();
+        let info = circuit.info.clone();
+        let size = info.read().unwrap().size;
 
-        drop(circuit_info);
         drop(board);
-
-        for y in pos.y()..(pos.y() + size.y() as i32) {
-            for x in pos.x()..(pos.x() + size.x() as i32) {
-                let node = self.circuit_nodes.get_mut([x as isize, y as isize]);
-                let node = unwrap_option_or_continue!(node);
-
-                if node.circuit.get() != Some(id) {
-                    continue;
-                }
-
-                node.circuit.set(None);
-                node.origin_dist = Default::default();
-            }
-        }
+        self.set_circuit_nodes(size, pos, None);
 
         let mut board = self.board.write().unwrap();
 
-        for (pos, pin) in pins {
-            let wire_id = pin.read().unwrap().connected_wire();
+        for pin in info.read().unwrap().pins.iter() {
+            let wire_id = pin.pin.read().unwrap().connected_wire();
             let wire_id = unwrap_option_or_continue!(wire_id);
             let wire = unwrap_option_or_continue!(board.wires.get_mut(wire_id));
+            let pos = pos + pin.pos.convert(|v| v as i32);
             let point = unwrap_option_or_continue!(wire.points.get_mut(&pos));
             point.pin = None;
 
@@ -1963,5 +1961,111 @@ impl ActiveCircuitBoard {
 
         board.circuits.remove(id);
         board.states.reset_circuit(id);
+    }
+
+    // Todo: result
+    fn try_updating_circuit_property(&mut self, circuit_id: usize, property: &str) -> bool {
+        let sim_lock = { self.board.read().unwrap().sim_lock.clone() };
+        let sim_lock = sim_lock.write();
+
+        let board = self.board.read().unwrap();
+        let circuit = board.circuits.get(circuit_id);
+        let circuit = unwrap_option_or_return!(circuit, false);
+
+        let mut resize = false;
+        let mut recreate_pins = false;
+        circuit
+            .imp
+            .read()
+            .unwrap()
+            .prop_changed(property, &mut resize, &mut recreate_pins);
+
+        if resize {
+            let new_size = circuit.imp.read().unwrap().size(&circuit.props);
+            let size_changed = new_size != circuit.info.read().unwrap().size;
+            drop(board);
+
+            if size_changed && !self.try_change_circuit_size(circuit_id, new_size) {
+                return false;
+            }
+        } else {
+            drop(board);
+        }
+
+        if recreate_pins {
+            let mut board = self.board.write().unwrap();
+            let circuit = board.circuits.get(circuit_id);
+            let circuit = unwrap_option_or_return!(circuit, false);
+
+            let pins: Vec<_> = circuit
+                .info
+                .read()
+                .unwrap()
+                .pins
+                .iter()
+                .map(|p| (p.pos.convert(|v| v as i32) + circuit.pos, p.pin.clone()))
+                .collect();
+
+            let states = board.states.clone();
+            // disconnect all older pins
+            for (pos, pin) in pins {
+                let pin_wire = pin.read().unwrap().connected_wire();
+                if let Some(wire) = pin_wire {
+                    if let Some(wire) = board.wires.get_mut(wire) {
+                        if let Some(point) = wire.points.get_mut(&pos) {
+                            point.pin = None;
+                            states.update_wire(wire.id, true);
+                        }
+                    }
+                }
+            }
+
+            let circuit = board.circuits.get(circuit_id).expect("unexpected");
+
+            let new_pins = circuit.imp.write().unwrap().create_pins(&circuit.props);
+            circuit.info.write().unwrap().pins = new_pins;
+            drop(board);
+
+            self.connect_circuit_to_wires(circuit_id);
+        }
+
+        drop(sim_lock);
+        true
+    }
+
+    pub fn circuit_property_changed(
+        &mut self,
+        circuit: usize,
+        property: &str,
+        old_value: &dyn CircuitPropertyImpl,
+    ) {
+        if !self.try_updating_circuit_property(circuit, property) {
+            let board = self.board.write().unwrap();
+            if let Some(circuit) = board.circuits.get(circuit) {
+                circuit
+                    .props
+                    .write_dyn(property, |p| old_value.copy_into(p.imp_mut()));
+            }
+        }
+    }
+
+    // todo: result
+    fn try_change_circuit_size(&mut self, circuit_id: usize, new_size: Vec2u) -> bool {
+        let board = self.board.read().unwrap();
+        let circuit = board.circuits.get(circuit_id);
+        let circuit = unwrap_option_or_return!(circuit, false);
+        let circuit_pos = circuit.pos;
+        let old_size = circuit.info.read().unwrap().size;
+        let info = circuit.info.clone();
+        drop(board);
+
+        if !self.can_place_circuit_at(new_size, circuit_pos, Some(circuit_id)) {
+            return false;
+        }
+        self.set_circuit_nodes(old_size, circuit_pos, None);
+        self.set_circuit_nodes(new_size, circuit_pos, Some(circuit_id));
+
+        info.write().unwrap().size = new_size;
+        true
     }
 }

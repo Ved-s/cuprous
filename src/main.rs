@@ -409,7 +409,7 @@ impl InventoryItem for CircuitInventoryItem {
     }
 
     fn draw(&self, ctx: &PaintContext) {
-        let size = self.preview.imp.size().convert(|v| v as f32);
+        let size = self.preview.size().convert(|v| v as f32);
         let scale = Vec2f::from(ctx.rect.size()) / size;
         let scale = scale.x().min(scale.y());
         let size = size * scale;
@@ -700,6 +700,15 @@ impl Direction4 {
             _ => None
         }
     }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Direction4::Up => "Up",
+            Direction4::Left => "Left",
+            Direction4::Down => "Down",
+            Direction4::Right => "Right",
+        }
+    }
 }
 
 impl From<Direction2> for Direction4 {
@@ -898,7 +907,7 @@ impl PastePreview {
                 .into()
             }
             for (circuit, preview) in circuits.iter() {
-                let br = circuit.pos + preview.imp.size();
+                let br = circuit.pos + preview.size();
                 size = [size.x().max(br.x()), size.y().max(br.y())].into()
             }
             size
@@ -934,7 +943,7 @@ impl PastePreview {
         }
 
         for (circuit, preview) in self.circuits.iter() {
-            let size = preview.imp.size();
+            let size = preview.size();
             if size.x() == 0 || size.y() == 0 {
                 return;
             }
@@ -951,7 +960,7 @@ impl PastePreview {
         if self
             .circuits
             .iter()
-            .any(|(c, p)| !board.can_place_circuit_at(p.imp.size(), pos + c.pos.convert(|v| v as i32)))
+            .any(|(c, p)| !board.can_place_circuit_at(p.size(), pos + c.pos.convert(|v| v as i32), None))
         {
             return;
         }

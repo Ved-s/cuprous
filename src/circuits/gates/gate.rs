@@ -33,6 +33,10 @@ impl Circuit {
             input_bools: Vec::with_capacity(2)
         }
     }
+
+    fn size(_: &CircuitPropertyStore) -> Vec2u {
+        [4, 3].into()
+    }
 }
 
 impl CircuitImpl for Circuit {
@@ -70,6 +74,10 @@ impl CircuitImpl for Circuit {
             self.output.set_output(state_ctx, (self.template.process_inputs)(&self.input_bools).into());
         }
     }
+
+    fn size(&self, props: &CircuitPropertyStore) -> Vec2u {
+        Circuit::size(props)
+    }
 }
 
 pub struct Preview {
@@ -81,8 +89,8 @@ impl CircuitPreviewImpl for Preview {
         (self.template.drawer)(ctx, in_world);
     }
 
-    fn size(&self) -> Vec2u {
-        [4, 3].into()
+    fn size(&self, props: &CircuitPropertyStore) -> Vec2u {
+        Circuit::size(props)
     }
 
     fn create_impl(&self) -> Box<dyn CircuitImpl> {

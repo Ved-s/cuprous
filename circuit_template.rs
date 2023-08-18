@@ -14,6 +14,10 @@ impl Circuit {
     fn draw(ctx: &PaintContext, preview: bool) {
         todo!()
     }
+
+    fn size(props: &CircuitPropertyStore) -> Vec2u {
+        todo!()
+    }
 }
 
 impl CircuitImpl for Circuit {
@@ -28,6 +32,10 @@ impl CircuitImpl for Circuit {
     fn update_signals(&mut self, state_ctx: &CircuitStateContext, changed_pin: Option<usize>) {
         todo!()
     }
+
+    fn size(&self, props: &CircuitPropertyStore) -> Vec2u {
+        Circuit::size(props)
+    }
 }
 
 #[derive(Debug)]
@@ -38,11 +46,11 @@ impl CircuitPreviewImpl for Preview {
         Circuit::draw(ctx, true);
     }
 
-    fn size(&self) -> Vec2u {
-        todo!()
-    }
-
     fn create_impl(&self) -> Box<dyn CircuitImpl> {
         Box::new(Circuit::new())
+    }
+
+    fn size(&self, props: &CircuitPropertyStore) -> Vec2u {
+        Circuit::size(props)
     }
 }

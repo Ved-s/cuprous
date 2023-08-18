@@ -52,6 +52,10 @@ impl Circuit {
             Color32::WHITE,
         );
     }
+
+    fn size(_: &CircuitPropertyStore) -> Vec2u {
+        [3, 3].into()
+    }
 }
 
 impl CircuitImpl for Circuit {
@@ -74,6 +78,12 @@ impl CircuitImpl for Circuit {
                 s.state
             });
             self.out_pin.set_output(state_ctx, new_state.into());
+        }
+    }
+
+    fn prop_changed(&self, prop_id: &str, _: &mut bool, recreate_pins: &mut bool) {
+        if prop_id == "dir" {
+            *recreate_pins = true
         }
     }
 
@@ -106,6 +116,10 @@ impl CircuitImpl for Circuit {
             .ok()
             .map(|s| Box::new(s) as Box<dyn InternalCircuitState>)
     }
+
+    fn size(&self, props: &CircuitPropertyStore) -> Vec2u {
+        Circuit::size(props)
+    }
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -130,8 +144,8 @@ impl CircuitPreviewImpl for Preview {
         ctx.paint.circle_filled(pos, ActiveCircuitBoard::WIRE_THICKNESS * 0.5 * ctx.screen.scale, WireState::False.color());
     }
 
-    fn size(&self) -> Vec2u {
-        [3, 3].into()
+    fn size(&self, props: &CircuitPropertyStore) -> Vec2u {
+        Circuit::size(props)
     }
 
     fn create_impl(&self) -> Box<dyn CircuitImpl> {
