@@ -167,8 +167,6 @@ impl App {
             Box::new(circuits::gates::not::Preview {}),
             Box::new(circuits::pullup::Preview {}),
         ];
-        let empty_map = HashMap::default();
-        let empty_loading_context = BasicLoadingContext::<'_, DynStaticStr> { previews: &empty_map };
         let preview_data = cc.storage.and_then(|s| s.get_string("previews")).and_then(|s| ron::from_str::<crate::io::CircuitPreviewCollectionData>(&s).ok());
         let previews = HashMap::from_iter(
             previews
@@ -176,7 +174,7 @@ impl App {
                 .map(|p| {
                     let data = preview_data.as_ref().and_then(|d| d.0.get(p.type_name().deref()));
                     let p = match data {
-                        Some(d) => CircuitPreview::load_with_data(p, d, &empty_loading_context),
+                        Some(d) => CircuitPreview::load_with_data(p, d),
                         None => CircuitPreview::from_impl(p),
                     };
                     (p.imp.type_name(), Arc::new(p))

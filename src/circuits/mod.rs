@@ -3,7 +3,6 @@ use std::{sync::Arc, time::Duration};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    io::LoadingContext,
     state::{CircuitState, InternalCircuitState, State, StateCollection, WireState},
     time::Instant,
     vector::{Vec2i, Vec2u, Vector},
@@ -485,20 +484,21 @@ impl CircuitPreview {
 
     pub fn load_with_data(
         imp: Box<dyn CircuitPreviewImpl>,
-        data: &crate::io::CircuitPreviewData,
-        ctx: &impl crate::io::LoadingContext,
+        data: &crate::io::CircuitPreviewData
     ) -> Self {
-        Self::new(imp, CircuitPropertyStore::load(&data.props, ctx))
+        let props = imp.default_props();
+        props.load(&data.props);
+        Self::new(imp, props)
     }
 
     pub fn load_new(
         &self,
         imp: &serde_intermediate::Intermediate,
-        props: &crate::io::CircuitPropertyStoreData,
-        ctx: &impl LoadingContext,
+        props_data: &crate::io::CircuitPropertyStoreData,
     ) -> Option<Self> {
         let imp = self.imp.load_impl_data(imp)?;
-        let props = CircuitPropertyStore::load(props, ctx);
+        let props = imp.default_props();
+        props.load(props_data);
         Some(Self { imp, props })
     }
 

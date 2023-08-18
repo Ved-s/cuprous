@@ -198,7 +198,8 @@ impl CircuitBoard {
                 .map(|(i, c)| {
                     c.as_ref().and_then(|c| {
                         let preview = ctx.get_circuit_preview(&c.ty)?;
-                        let props = CircuitPropertyStore::load(&c.props, ctx);
+                        let props = preview.imp.default_props();
+                        props.load(&c.props);
                         let circ = Circuit::create(i, c.pos, preview, Some(props));
                         if !matches!(c.imp, serde_intermediate::Intermediate::Unit) {
                             circ.imp.write().unwrap().load(&c.imp);

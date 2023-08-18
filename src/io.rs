@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_intermediate::Intermediate;
 
 use crate::{
-    circuits::{PinDirection, CircuitPreview, props::CircuitProperty},
+    circuits::{PinDirection, CircuitPreview},
     state::{UpdateTask, WireState},
     vector::{Vec2i, Vec2u}, DynStaticStr, Direction2,
 };
@@ -14,7 +14,6 @@ pub static GLOBAL_CLIPBOARD: crate::Mutex<Option<crate::io::CopyPasteData>> = cr
 
 pub trait LoadingContext {
     fn get_circuit_preview<'a>(&'a self, ty: &str) -> Option<&'a CircuitPreview>;
-    fn create_property(&self, ty: &str) -> Option<Box<dyn CircuitProperty>>;
 }
 
 #[derive(Serialize, Deserialize, Debug)]

@@ -1,12 +1,11 @@
 use std::{
     any::{Any, TypeId},
     collections::HashMap,
-    ops::Deref,
 };
 
 use eframe::egui::Ui;
 
-use crate::{unwrap_option_or_return, Direction4, DynStaticStr, RwLock};
+use crate::{unwrap_option_or_return, Direction4, DynStaticStr, RwLock, unwrap_option_or_continue};
 
 #[derive(Default)]
 pub struct CircuitPropertyStore(RwLock<HashMap<TypeId, Box<dyn CircuitProperty>>>);
@@ -64,15 +63,15 @@ impl CircuitPropertyStore {
     }
 
     pub fn load(
-        data: &crate::io::CircuitPropertyStoreData,
-        ctx: &impl crate::io::LoadingContext,
-    ) -> CircuitPropertyStore {
-        Self::new(data.0.iter().filter_map(|(ty, data)| {
-            ctx.create_property(ty.deref()).map(|mut p| {
-                p.load(data);
-                p
-            })
-        }))
+        &self,
+        data: &crate::io::CircuitPropertyStoreData
+    ) {
+        let mut lock = self.0.write().unwrap();
+        for (ty, data) in data.0.iter() {
+            let prop = lock.values_mut().find(|p| p.type_name() == *ty);
+            let prop = unwrap_option_or_continue!(prop);
+            prop.load(data);
+        }
     }
 
     pub fn is_empty(&self) -> bool {

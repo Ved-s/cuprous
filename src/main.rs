@@ -38,7 +38,7 @@ mod containers;
 use crate::containers::*;
 
 mod circuits;
-use circuits::{CircuitPreview, props::CircuitProperty};
+use circuits::CircuitPreview;
 
 mod wires;
 
@@ -74,16 +74,6 @@ struct BasicLoadingContext<'a, K: Borrow<str> + Eq + Hash> {
 impl<K: Borrow<str> + Eq + Hash> io::LoadingContext for BasicLoadingContext<'_, K> {
     fn get_circuit_preview<'a>(&'a self, ty: &str) -> Option<&'a CircuitPreview> {
         self.previews.get(ty).map(|b| b.deref())
-    }
-
-    fn create_property(&self, ty: &str) -> Option<Box<dyn CircuitProperty>> {
-
-        use circuits::props::*;
-
-        match ty {
-            "dir" => Some(Box::<DirectionProp>::default()),
-            _ => None
-        }
     }
 }
 
@@ -894,7 +884,7 @@ impl PastePreview {
             .into_iter()
             .filter_map(|d| {
                 ctx.get_circuit_preview(&d.ty)
-                    .and_then(|p| p.load_new(&d.imp, &d.props, ctx).map(|b| (d, b)))
+                    .and_then(|p| p.load_new(&d.imp, &d.props).map(|b| (d, b)))
             })
             .collect();
 
