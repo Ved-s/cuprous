@@ -9,7 +9,7 @@ use crate::{
     DynStaticStr, OptionalInt, PaintContext, RwLock,
 };
 
-use self::props::{CircuitProperty, CircuitPropertyStore};
+use self::props::{CircuitPropertyImpl, CircuitPropertyStore};
 
 pub mod button;
 pub mod gates;
@@ -465,7 +465,7 @@ pub trait CircuitImpl: Send + Sync {
 
     fn prop_changed(
         &self,
-        prop: &dyn CircuitProperty,
+        prop: &dyn CircuitPropertyImpl,
         resize: &mut bool,
         recreate_pins: &mut bool,
     ) {

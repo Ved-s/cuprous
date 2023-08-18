@@ -14,7 +14,7 @@ use crate::{
     ui::{Inventory, InventoryItem, InventoryItemGroup},
     vector::{Vec2f, Vector},
     BasicLoadingContext, DynStaticStr, PaintContext, PanAndZoom, PastePreview, RwLock,
-    TileDrawBounds,
+    TileDrawBounds, Direction4,
 };
 
 pub struct App {
@@ -444,7 +444,7 @@ impl App {
         if let SelectedBoardItem::Circuit(pre) = selected_item {
             if ctx.egui_ctx.input(|input| input.key_pressed(Key::R)) {
                 pre.props
-                    .write(|p: &mut circuits::props::DirectionProp| p.0 = p.0.rotate_clockwise());
+                    .write("dir", |p: &mut Direction4| *p = p.rotate_clockwise());
             }
         }
 
