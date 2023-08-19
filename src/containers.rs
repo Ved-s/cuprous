@@ -1,7 +1,7 @@
 use std::{
     collections::hash_map::RandomState,
     hash::{BuildHasher, Hasher},
-    ops::Range,
+    ops::{Range, Index}, mem::MaybeUninit,
 };
 
 use serde::{Deserialize, Serialize};
@@ -10,6 +10,7 @@ use crate::{
     unwrap_option_or_continue,
     vector::{Vec2isize, Vec2usize, Vector},
     Intersect,
+    r#const::*
 };
 
 #[derive(Debug, Clone)]
@@ -746,9 +747,153 @@ impl<T, S: BuildHasher> RandomQueue<T, S> {
     }
 }
 
+pub struct ConstRingBuffer<const SIZE: usize, T> {
+    array: [MaybeUninit<T>; SIZE],
+
+    /// Points to position after last valid item 
+    pos: usize,
+    len: usize
+
+    //    /---len---\
+    // ---###########------
+    //               ^- pos 
+}
+
+#[allow(clippy::uninit_assumed_init)]
+#[allow(unused)]
+impl<T, const SIZE: usize> ConstRingBuffer<SIZE, T> {
+    pub fn new() -> Self {
+        Self {
+            array: unsafe { MaybeUninit::uninit().assume_init() },
+            pos: 0,
+            len: 0,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_continious(&self) -> bool {
+        self.pos >= self.len || self.pos == 0
+    }
+
+    pub fn as_slice(&self) -> Option<&[T]> {
+        if self.pos >= self.len {
+            let start = self.pos - self.len;
+            Some(unsafe { std::mem::transmute(&self.array[start..start+self.len]) })
+        } else if self.pos == 0 {
+            Some(unsafe { std::mem::transmute(&self.array[SIZE-self.len..]) })
+        } else {
+            None
+        }
+    }
+
+    pub fn as_mut_slice(&mut self) -> Option<&mut [T]> {
+        if self.pos >= self.len {
+            let start = self.pos - self.len;
+            Some(unsafe { std::mem::transmute(&mut self.array[start..start+self.len]) })
+        } else if self.pos == 0 {
+            Some(unsafe { std::mem::transmute(&mut self.array[SIZE-self.len..]) })
+        } else {
+            None
+        }
+    }
+}
+
+#[allow(unused)]
+impl<T, const SIZE: usize> ConstRingBuffer<SIZE, T> where Bool<{SIZE > 0}>: True {
+    pub fn push_back(&mut self, value: T) {
+        if self.len >= SIZE {
+            unsafe { self.array[self.pos].assume_init_drop() }
+        }
+        self.array[self.pos].write(value);
+        self.len = (self.len + 1).min(SIZE);
+        self.pos = (self.pos + 1) % SIZE;
+    }
+    pub fn push_front(&mut self, value: T) {
+        let pos = (self.pos + SIZE - self.len - 1) % SIZE;
+        if self.len >= SIZE {
+            unsafe { self.array[pos].assume_init_drop() }
+            self.pos = (self.pos - 1 + SIZE) % SIZE;
+        }
+        self.array[pos].write(value);
+        self.len = (self.len + 1).min(SIZE);
+    }
+
+    pub fn pop_back(&mut self) -> Option<T> {
+        if self.len == 0 {
+            None
+        } else {
+            let pos = (self.pos - 1 + SIZE) % SIZE;
+            self.len -= 1;
+            Some(unsafe { self.array[pos].assume_init_read() })
+        }
+    }
+
+    pub fn pop_front(&mut self) -> Option<T> {
+        if self.len == 0 {
+            None
+        } else {
+            let pos = (self.pos + SIZE - self.len) % SIZE;
+            self.len -= 1;
+            Some(unsafe { self.array[pos].assume_init_read() })
+        }
+    }
+
+    pub fn iter(&self) -> ConstRingBufferRefIterator<'_, T> {
+        let start = (self.pos + SIZE - self.len) % SIZE;
+        ConstRingBufferRefIterator { buf: unsafe { std::mem::transmute(self.array.as_ref()) }, start, len: self.len, pos: 0 }
+    }
+}
+
+impl<const SIZE: usize, T: Default> Default for ConstRingBuffer<SIZE, T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T, const SIZE: usize> Index<usize> for ConstRingBuffer<SIZE, T> {
+    type Output = T;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        assert!(index < self.len, "oob read");
+        let back = self.len - index;
+        let pos = (self.pos + SIZE - back) % SIZE;
+        unsafe { self.array[pos].assume_init_ref() }
+    }
+}
+
+pub struct ConstRingBufferRefIterator<'a, T> {
+    buf: &'a [T],
+    start: usize,
+    len: usize,
+
+    // max: len
+    pos: usize,
+}
+
+impl<'a, T> Iterator for ConstRingBufferRefIterator<'a, T> {
+    type Item = &'a T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.pos >= self.len {
+            None
+        } else {
+            self.pos += 1;
+            Some(&self.buf[(self.start + self.pos - 1) % self.buf.len()])
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let size = self.len - self.pos;
+        (size, Some(size))
+    }
+}
+
 #[cfg(test)]
 mod test {
-    use super::FixedVec;
+    use super::*;
 
     #[test]
     fn fixed_vec_remove_shrink() {
@@ -779,5 +924,24 @@ mod test {
 
         fv.remove(1);
         assert_eq!(fv.first_free_pos(), 1);
+    }
+
+    #[test]
+    fn ring_buf_basic() {
+        let mut buf = ConstRingBuffer::<4, i32>::new();
+
+        buf.push_back(1);
+        buf.push_back(2);
+        buf.push_back(3);
+        buf.push_back(4);
+        buf.push_back(5);
+
+        let vec: Vec<_> = buf.iter().cloned().collect();
+        assert_eq!(vec, [2, 3, 4, 5]);
+
+        assert_eq!(buf[0], 2);
+        assert_eq!(buf[1], 3);
+        assert_eq!(buf[2], 4);
+        assert_eq!(buf[3], 5);
     }
 }

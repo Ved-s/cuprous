@@ -407,10 +407,10 @@ impl State {
 
     #[cfg(feature = "single_thread")]
     pub fn update(&self) {
-        self.update_once(Some(100));
+        self.update_once(5000);
     }
 
-    fn update_once(&self, queue_limit: Option<usize>) -> Option<Instant> {
+    fn update_once(&self, queue_limit: usize) -> Option<Instant> {
         
         // Lock shared simulation, so placing/deleting won't interrupt anything 
         let sim_lock = { self.board.read().unwrap().sim_lock.clone() };
@@ -457,7 +457,7 @@ impl State {
         };
 
         let mut queue_counter = 0;
-        while !nearest_update.is_some_and(|nu| nu <= Instant::now()) && !queue_limit.is_some_and(|l| queue_counter >= l) {
+        while !nearest_update.is_some_and(|nu| nu <= Instant::now()) && queue_counter < queue_limit {
             let deq = { self.queue.lock().unwrap().dequeue() };
             let task = unwrap_option_or_break!(deq);
 
@@ -482,7 +482,11 @@ impl State {
             queue_counter += 1;
         }
         drop(sim_lock);
-        nearest_update
+        match nearest_update {
+            Some(t) => Some(t),
+            None if queue_counter >= queue_limit => Some(Instant::now()),
+            _ => None
+        }
     }
 
     fn init_circuit(&self, circuit: &Circuit) {
@@ -683,7 +687,7 @@ impl StateThread {
                 }
             }
 
-            let wait = self.state.update_once(None);
+            let wait = self.state.update_once(5000);
 
             match wait {
                 Some(nu) => {

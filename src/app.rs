@@ -175,8 +175,8 @@ impl eframe::App for App {
     }
 }
 
-static INVENTORY_CIRCUIT_ORDER: [&str; 10] = [
-    "button", "or", "nor", "and", "nand", "xor", "xnor", "not", "pullup", "test",
+static INVENTORY_CIRCUIT_ORDER: &[&str] = &[
+    "button", "or", "nor", "and", "nand", "xor", "xnor", "not", "pullup", "freq_meter", "test",
 ];
 
 impl App {
@@ -204,6 +204,7 @@ impl App {
             }),
             Box::new(circuits::gates::not::Preview {}),
             Box::new(circuits::pullup::Preview {}),
+            Box::new(circuits::freq_meter::Preview {}),
         ];
         let preview_data = cc
             .storage
