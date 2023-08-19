@@ -7,7 +7,7 @@
 use std::{
     borrow::Borrow,
     collections::{HashMap, HashSet},
-    f32::consts::PI,
+    f32::consts::{PI, TAU},
     hash::Hash,
     num::NonZeroU32,
     ops::{Deref, Range},
@@ -632,6 +632,24 @@ impl Direction4 {
         }
     }
 
+    pub fn inverted_ud(self) -> Self {
+        match self {
+            Self::Up => Self::Down,
+            Self::Left => Self::Left,
+            Self::Down => Self::Up,
+            Self::Right => Self::Right,
+        }
+    }
+
+    pub fn inverted_lr(self) -> Self {
+        match self {
+            Self::Up => Self::Up,
+            Self::Left => Self::Right,
+            Self::Down => Self::Down,
+            Self::Right => Self::Left,
+        }
+    }
+
     /// Returns: (direction, forward)
     pub fn into_dir2(self) -> (Direction2, bool) {
         match self {
@@ -707,6 +725,15 @@ impl Direction4 {
             Direction4::Left => "Left",
             Direction4::Down => "Down",
             Direction4::Right => "Right",
+        }
+    }
+
+    pub fn angle_to_right(self) -> f32 {
+        match self {
+            Direction4::Right => TAU * 0.0,
+            Direction4::Up =>    TAU * 0.25,
+            Direction4::Left =>  TAU * 0.5,
+            Direction4::Down =>  TAU * 0.75,
         }
     }
 }

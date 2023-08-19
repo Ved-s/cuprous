@@ -1,22 +1,28 @@
 use eframe::epaint::{Color32, Stroke};
-use emath::{vec2, Vec2};
+use emath::Vec2;
 
 use crate::{
-    circuits::{*, props::CircuitPropertyStore},
+    circuits::{
+        props::{CircuitProperty, CircuitPropertyStore},
+        *,
+    },
     path::{PathItem, PathItemIterator},
+    vector::Vec2f,
+    Direction4,
 };
 
 #[derive(Clone)]
 pub struct GateTemplate {
     pub id: &'static str,
     pub process_inputs: fn(&[bool]) -> bool,
-    pub drawer: fn(&PaintContext, bool),
+    pub drawer: fn(&PaintContext, f32, bool),
 }
 
 struct Circuit {
     template: GateTemplate,
     inputs: Box<[CircuitPinInfo]>,
     input_bools: Vec<bool>,
+    dir: Direction4,
     output: CircuitPinInfo,
 }
 
@@ -30,31 +36,53 @@ impl Circuit {
             ]
             .into_boxed_slice(),
             output: CircuitPinInfo::new([3, 1], InternalPinDirection::Outside, "out"),
-            input_bools: Vec::with_capacity(2)
+            input_bools: Vec::with_capacity(2),
+            dir: Direction4::Right,
         }
     }
 
-    fn size(_: &CircuitPropertyStore) -> Vec2u {
-        [4, 3].into()
+    fn size(props: &CircuitPropertyStore) -> Vec2u {
+        let dir = props.read_clone("dir").unwrap_or(Direction4::Right);
+        if dir.is_horizontal() {
+            [4, 3].into()
+        } else {
+            [3, 4].into()
+        }
+    }
+
+    fn pin_positions(props: &CircuitPropertyStore) -> [[u32; 2]; 3] {
+        let dir = props.read_clone("dir").unwrap_or(Direction4::Right);
+        match dir {
+            Direction4::Up => [[0, 3], [2, 3], [1, 0]],
+            Direction4::Left => [[3, 0], [3, 2], [0, 1]],
+            Direction4::Down => [[0, 0], [2, 0], [1, 3]],
+            Direction4::Right => [[0, 0], [0, 2], [3, 1]],
+        }
     }
 }
 
 impl CircuitImpl for Circuit {
     fn draw(&self, _: &CircuitStateContext, paint_ctx: &PaintContext) {
-        (self.template.drawer)(paint_ctx, false);
+        let angle = self.dir.inverted_ud().angle_to_right();
+        (self.template.drawer)(paint_ctx, angle, false);
     }
 
-    fn create_pins(&mut self, _: &CircuitPropertyStore) -> Box<[CircuitPinInfo]> {
+    fn create_pins(&mut self, props: &CircuitPropertyStore) -> Box<[CircuitPinInfo]> {
+        
+        let pin_positions = Circuit::pin_positions(props);
+        self.inputs = vec![
+            CircuitPinInfo::new(pin_positions[0], InternalPinDirection::Inside, "in_0"),
+            CircuitPinInfo::new(pin_positions[1], InternalPinDirection::Inside, "in_1"),
+        ]
+        .into_boxed_slice();
+        self.output = CircuitPinInfo::new(pin_positions[2], InternalPinDirection::Outside, "out");
         let mut vec = vec![self.output.clone()];
         vec.extend(self.inputs.iter().cloned());
         vec.into_boxed_slice()
     }
 
     fn update_signals(&mut self, state_ctx: &CircuitStateContext, _: Option<usize>) {
-        let states = self
-            .inputs
-            .iter()
-            .map(|i| i.get_input(state_ctx));
+        let states = self.inputs.iter().map(|i| i.get_input(state_ctx));
         self.input_bools.clear();
         for state in states {
             match state {
@@ -64,19 +92,32 @@ impl CircuitImpl for Circuit {
                 WireState::Error => {
                     self.output.set_output(state_ctx, WireState::Error);
                     return;
-                },
+                }
             }
         }
         if self.input_bools.is_empty() {
             self.output.set_output(state_ctx, WireState::None);
-        }
-        else {
-            self.output.set_output(state_ctx, (self.template.process_inputs)(&self.input_bools).into());
+        } else {
+            self.output.set_output(
+                state_ctx,
+                (self.template.process_inputs)(&self.input_bools).into(),
+            );
         }
     }
 
     fn size(&self, props: &CircuitPropertyStore) -> Vec2u {
         Circuit::size(props)
+    }
+
+    fn prop_changed(&self, prop_id: &str, resize: &mut bool, recreate_pins: &mut bool) {
+        if prop_id == "dir" {
+            *resize = true;
+            *recreate_pins = true;
+        }
+    }
+
+    fn apply_props(&mut self, props: &CircuitPropertyStore, _: Option<&str>) {
+        self.dir = props.read_clone("dir").unwrap_or(Direction4::Right);
     }
 }
 
@@ -85,8 +126,15 @@ pub struct Preview {
 }
 
 impl CircuitPreviewImpl for Preview {
-    fn draw_preview(&self, _: &CircuitPropertyStore, ctx: &PaintContext, in_world: bool) {
-        (self.template.drawer)(ctx, in_world);
+    fn draw_preview(&self, props: &CircuitPropertyStore, ctx: &PaintContext, in_world: bool) {
+        let angle = props
+            .read_clone("dir")
+            .unwrap_or(Direction4::Right)
+            .inverted_ud()
+            .angle_to_right();
+        (self.template.drawer)(ctx, angle, in_world);
+
+        draw_pins_preview(ctx, self.size(props), Circuit::pin_positions(props))
     }
 
     fn size(&self, props: &CircuitPropertyStore) -> Vec2u {
@@ -101,16 +149,27 @@ impl CircuitPreviewImpl for Preview {
         self.template.id.into()
     }
 
-    fn load_impl_data(&self, _: &serde_intermediate::Intermediate) -> Option<Box<dyn CircuitPreviewImpl>> {
-        Some(Box::new(Preview { template: self.template.clone() }))
+    fn load_impl_data(
+        &self,
+        _: &serde_intermediate::Intermediate,
+    ) -> Option<Box<dyn CircuitPreviewImpl>> {
+        Some(Box::new(Preview {
+            template: self.template.clone(),
+        }))
     }
 
     fn default_props(&self) -> CircuitPropertyStore {
-        Default::default()
+        CircuitPropertyStore::new([CircuitProperty::new("dir", "Direction", Direction4::Right)])
     }
 }
 
-pub fn draw_from_path(ctx: &PaintContext, semi_transparent: bool, size: Vec2, path: &[PathItem]) {
+pub fn draw_from_path(
+    ctx: &PaintContext,
+    semi_transparent: bool,
+    size: Vec2,
+    angle: f32,
+    path: &[PathItem],
+) {
     let opacity = if semi_transparent { 0.6 } else { 1.0 };
 
     let border_color = Color32::BLACK.linear_multiply(opacity);
@@ -118,14 +177,16 @@ pub fn draw_from_path(ctx: &PaintContext, semi_transparent: bool, size: Vec2, pa
     let straightness = (0.3 / (ctx.screen.scale.sqrt())).max(0.01);
 
     path.iter().cloned().create_path_shapes(
-        ctx.rect.left_top().to_vec2(),
-        vec2(
-            1.0 / size.x * ctx.rect.width(),
-            1.0 / size.y * ctx.rect.height(),
-        ),
         fill_color,
         Stroke::new(2.0, border_color),
         straightness,
+        |p| {
+            ctx.rect.lerp_inside(
+                Vec2f::from(p.to_vec2() / size)
+                    .rotated_xy(angle, 0.5)
+                    .into(),
+            )
+        },
         |_, s| {
             ctx.paint.add(s);
         },

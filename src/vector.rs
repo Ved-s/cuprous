@@ -3,7 +3,7 @@
 use std::{
     f32::consts::TAU,
     fmt::Display,
-    ops::{Add, Div, Mul},
+    ops::{Add, Div, Mul, Sub},
 };
 
 use crate::r#const::*;
@@ -37,7 +37,7 @@ impl<const SIZE: usize, T: VectorValue> Vector<SIZE, T> {
         Self([value; SIZE])
     }
 
-    pub fn length_squared(&self) -> T
+    pub fn length_squared(self) -> T
     where
         T: Add<Output = T> + Mul<Output = T> + Default,
     {
@@ -51,27 +51,26 @@ impl<const SIZE: usize, T: VectorValue> Vector<SIZE, T> {
         len_sq
     }
 
-    pub fn length(&self) -> T
+    pub fn length(self) -> T
     where
         T: Add<Output = T> + Mul<Output = T> + Default + FloatMath,
     {
         self.length_squared().sqrt()
     }
 
-    pub fn at<const INDEX: usize>(&self) -> T
+    pub fn at<const INDEX: usize>(self) -> T
     where
         Bool<{ SIZE > INDEX }>: True,
     {
         self.0[INDEX]
     }
 
-    pub fn with<const INDEX: usize>(&self, value: T) -> Self
+    pub fn with<const INDEX: usize>(mut self, value: T) -> Self
     where
         Bool<{ SIZE > INDEX }>: True,
     {
-        let mut c = *self;
-        c.0[INDEX] = value;
-        c
+        self.0[INDEX] = value;
+        self
     }
 
     pub fn into_type<I>(self) -> Vector<SIZE, I>
@@ -86,7 +85,7 @@ impl<const SIZE: usize, T: VectorValue> Vector<SIZE, T> {
         v.into()
     }
 
-    pub fn convert<I: VectorValue>(&self, converter: impl Fn(T) -> I) -> Vector<SIZE, I> {
+    pub fn convert<I: VectorValue>(self, converter: impl Fn(T) -> I) -> Vector<SIZE, I> {
         let mut v = [I::default(); SIZE];
         (0..SIZE).for_each(|i| {
             v[i] = converter(self.0[i]);
@@ -95,7 +94,7 @@ impl<const SIZE: usize, T: VectorValue> Vector<SIZE, T> {
     }
 
     pub fn combine_with<I: VectorValue, O: VectorValue>(
-        &self,
+        self,
         other: Vector<SIZE, I>,
         combiner: impl Fn(T, I) -> O,
     ) -> Vector<SIZE, O> {
@@ -105,6 +104,8 @@ impl<const SIZE: usize, T: VectorValue> Vector<SIZE, T> {
         });
         v.into()
     }
+
+    
 }
 
 impl<
@@ -112,7 +113,7 @@ impl<
         T: VectorValue + FloatMath + Add<Output = T> + Mul<Output = T> + Div<Output = T>,
     > Vector<SIZE, T>
 {
-    pub fn angle_to(&self, other: Self) -> T {
+    pub fn angle_to(self, other: Self) -> T {
         let mut a = T::default();
         for i in 0..SIZE {
             a = a + self.0[i] * other.0[i];
@@ -120,6 +121,52 @@ impl<
         let b = self.length() * other.length();
         (a / b).acos()
     }
+}
+
+macro_rules! impl_rotated_2d_plane {
+    ($name:ident, $ax1:literal, $ax2:literal, $size:literal) => {
+        paste::paste! {
+            pub fn [<rotated_ $name>](self, angle: T, origin: impl Into<Self>) -> Self
+            where 
+                T: FloatMath + Mul<Output = T> + Sub<Output = T> + Add<Output = T>,
+                Bool<{SIZE > ($size-1)}>: True
+            {
+                let origin = origin.into();
+                (self - origin).rotated_2d::<$ax1, $ax2>(angle) + origin
+            }
+        }
+
+
+    };
+}
+
+impl<
+        const SIZE: usize,
+        T: VectorValue + FloatMath + Mul<Output = T> + Sub<Output = T> + Add<Output = T>,
+    > Vector<SIZE, T>
+{
+    fn rotated_2d<const AXIS1: usize, const AXIS2: usize>(self, angle: T) -> Self {
+        let sin = angle.sin();
+        let cos = angle.cos();
+        let mut res = [T::default(); SIZE];
+
+        let axis1 = self.0[AXIS1];
+        let axis2 = self.0[AXIS2];
+        (0..SIZE).for_each(|i| {
+            res[i] = if i == AXIS1 {
+                axis1 * cos - axis2 * sin
+            } else if i == AXIS2 {
+                axis1 * sin + axis2 * cos
+            } else {
+                self.0[i]
+            };
+        });
+        Self(res)
+    }
+
+    impl_rotated_2d_plane!(xy, 0, 1, 2);
+    impl_rotated_2d_plane!(xz, 0, 2, 3);
+    impl_rotated_2d_plane!(yz, 1, 2, 3);
 }
 
 macro_rules! impl_vec_component {

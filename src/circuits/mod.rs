@@ -6,7 +6,7 @@ use crate::{
     state::{CircuitState, InternalCircuitState, State, StateCollection, WireState},
     time::Instant,
     vector::{Vec2i, Vec2u, Vector},
-    DynStaticStr, OptionalInt, PaintContext, RwLock,
+    DynStaticStr, OptionalInt, PaintContext, RwLock, board::ActiveCircuitBoard,
 };
 
 use self::props::CircuitPropertyStore;
@@ -290,19 +290,21 @@ impl Circuit {
     ) -> Self {
         let mut imp = preview.imp.create_impl();
         let props = props_override.unwrap_or_else(|| preview.props.clone());
+        imp.apply_props(&props, None);
         let mut pins = imp.create_pins(&props);
         for pin in pins.iter_mut().enumerate() {
             pin.1.pin.write().unwrap().id = CircuitPinId::new(pin.0, id);
         }
+        let info = Arc::new(RwLock::new(CircuitInfo {
+            size: imp.size(&props),
+            pins,
+        }));
 
         Self {
             ty: preview.imp.type_name(),
             id,
             pos,
-            info: Arc::new(RwLock::new(CircuitInfo {
-                size: preview.size(),
-                pins,
-            })),
+            info,
             imp: Arc::new(RwLock::new(imp)),
             props,
         }
@@ -463,9 +465,11 @@ pub trait CircuitImpl: Send + Sync {
     ) {
     }
 
+    /// Called to determine which circuit parameters need to be recalculated
     fn prop_changed(&self, prop_id: &str, resize: &mut bool, recreate_pins: &mut bool) {}
 
-    fn apply_prop(&mut self, prop_id: &str) {}
+    /// Called after all circuit parameters were successfully updated
+    fn apply_props(&mut self, props: &CircuitPropertyStore, changed: Option<&str>) {}
 
     fn size(&self, props: &CircuitPropertyStore) -> Vec2u;
 }
@@ -541,4 +545,12 @@ pub trait CircuitPreviewImpl {
 pub struct CircuitNode {
     pub origin_dist: Vector<2, u32>,
     pub circuit: OptionalInt<usize>,
+}
+
+pub fn draw_pins_preview<T: Into<Vec2u>>(ctx: &PaintContext, size: impl Into<Vec2u>, pins: impl IntoIterator<Item = T>) {
+    let size = size.into().convert(|v| v as f32);
+    for pin in pins.into_iter() {
+        let pos = ctx.rect.lerp_inside((pin.into().convert(|v| v as f32 + 0.5) / size).into());
+        ctx.paint.circle_filled(pos, ActiveCircuitBoard::WIRE_THICKNESS * 0.5 * ctx.screen.scale, WireState::False.color());
+    }
 }

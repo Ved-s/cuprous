@@ -11,7 +11,7 @@ use super::gate::GateTemplate;
 pub const TEMPLATE: GateTemplate = GateTemplate {
     id: "xor",
     process_inputs: |i| i.iter().filter(|b| **b).count() == 1,
-    drawer: |ctx, semi_transparent| {
+    drawer: |ctx, angle, semi_transparent| {
         let opacity = if semi_transparent { 0.6 } else { 1.0 };
 
         let border_color = Color32::BLACK.linear_multiply(opacity);
@@ -28,22 +28,22 @@ pub const TEMPLATE: GateTemplate = GateTemplate {
             PathItem::ClosePath,
         ];
 
+        let size = vec2(4.0, 3.0);
+        let transformer = |p: Pos2| ctx.rect.lerp_inside(Vec2f::from(p.to_vec2() / size).rotated_xy(angle, 0.5).into());
         path.iter().cloned().create_path_shapes(
-            ctx.rect.left_top().to_vec2(),
-            vec2(1.0 / 4.0 * ctx.rect.width(), 1.0 / 3.0 * ctx.rect.height()),
             fill_color,
             Stroke::new(2.0, border_color),
             straightness,
+            transformer,
             |_, s| {
                 ctx.paint.add(s);
             },
         );
 
         let arc_points: Vec<_> = bezier_nd::Bezier::quadratic(
-            &Vec2f::from(ctx.rect.left_top()),
-            &(Vec2f::from([0.25 * ctx.rect.width(), ctx.rect.height() * 0.5])
-                + ctx.rect.left_top()),
-            &Vec2f::from(ctx.rect.left_bottom()),
+            &Vec2f::from(transformer(pos2(0.0, 0.0))),
+            &Vec2f::from(transformer(pos2(1.0, 1.5))),
+            &Vec2f::from(transformer(pos2(0.0, 3.0))),
         )
         .as_points(straightness)
         .map(Pos2::from)

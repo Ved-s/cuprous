@@ -47,7 +47,7 @@ impl WireState {
             (WireState::False, WireState::True) => WireState::Error,
 
             (WireState::True, WireState::True) => WireState::True,
-            (WireState::False, WireState::False) => WireState::True,
+            (WireState::False, WireState::False) => WireState::False,
         }
     }
 

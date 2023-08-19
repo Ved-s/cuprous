@@ -7,7 +7,7 @@ use super::gate::{GateTemplate, draw_from_path};
 pub const TEMPLATE: GateTemplate = GateTemplate {
     id: "and",
     process_inputs: |i| i.iter().all(|b| *b),
-    drawer: |ctx, semi_transparent| {
+    drawer: |ctx, angle, semi_transparent| {
         let path = [
             PathItem::MoveTo(pos2(0.5, 0.0)),
             PathItem::LineTo(pos2(2.0, 0.0)),
@@ -15,6 +15,6 @@ pub const TEMPLATE: GateTemplate = GateTemplate {
             PathItem::LineTo(pos2(0.5, 3.0)),
             PathItem::ClosePath
         ];
-        draw_from_path(ctx, semi_transparent, vec2(4.0, 3.0), &path);
+        draw_from_path(ctx, semi_transparent, vec2(4.0, 3.0), angle, &path);
     },
 };

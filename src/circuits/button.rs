@@ -2,9 +2,9 @@ use eframe::{
     egui::{PointerButton, Sense},
     epaint::{Color32, FontId, Rounding},
 };
-use emath::{Align2, Vec2};
+use emath::Align2;
 
-use crate::{Direction4, board::ActiveCircuitBoard};
+use crate::Direction4;
 
 use super::{*, props::CircuitProperty};
 
@@ -140,8 +140,10 @@ impl CircuitPreviewImpl for Preview {
     fn draw_preview(&self, props: &CircuitPropertyStore, ctx: &PaintContext, in_world: bool) {
         Circuit::draw(None, ctx, in_world);
         let dir = props.read_clone("dir").unwrap_or(Direction4::Right);
-        let pos = ctx.rect.center() + Vec2::from(dir.unit_vector().convert(|v| v as f32 * ctx.screen.scale));
-        ctx.paint.circle_filled(pos, ActiveCircuitBoard::WIRE_THICKNESS * 0.5 * ctx.screen.scale, WireState::False.color());
+        let pos = (dir.unit_vector() + [1, 1]).convert(|v| v as u32);
+        let size = [3, 3];
+
+        draw_pins_preview(ctx, size, [pos]);
     }
 
     fn size(&self, props: &CircuitPropertyStore) -> Vec2u {

@@ -18,7 +18,7 @@ use emath::{vec2, Align2, Rect};
 use crate::{
     circuits::{
         props::{CircuitPropertyImpl, CircuitPropertyStore},
-        Circuit, CircuitNode, CircuitPin, CircuitPreview, CircuitStateContext,
+        Circuit, CircuitNode, CircuitPin, CircuitPinId, CircuitPreview, CircuitStateContext,
     },
     containers::{Chunks2D, ChunksLookaround, FixedVec},
     state::{State, StateCollection},
@@ -1825,6 +1825,11 @@ impl ActiveCircuitBoard {
                         .unwrap()
                         .set_wire(&states, Some(wire), true, false);
                 }
+            } else {
+                pin.pin
+                    .write()
+                    .unwrap()
+                    .set_wire(&states, None, true, false);
             }
         }
     }
@@ -1994,8 +1999,7 @@ impl ActiveCircuitBoard {
 
         if recreate_pins {
             let mut board = self.board.write().unwrap();
-            let circuit = board.circuits.get(circuit_id);
-            let circuit = unwrap_option_or_return!(circuit, false);
+            let circuit = board.circuits.get(circuit_id).expect("unexpected");
 
             let pins: Vec<_> = circuit
                 .info
@@ -2017,17 +2021,31 @@ impl ActiveCircuitBoard {
                             states.update_wire(wire.id, true);
                         }
                     }
+                    pin.write().unwrap().set_wire(&states, None, false, false);
                 }
             }
 
             let circuit = board.circuits.get(circuit_id).expect("unexpected");
 
             let new_pins = circuit.imp.write().unwrap().create_pins(&circuit.props);
+            for pin in new_pins.iter().enumerate() {
+                pin.1.pin.write().unwrap().id = CircuitPinId::new(pin.0, circuit_id);
+            }
             circuit.info.write().unwrap().pins = new_pins;
             drop(board);
 
             self.connect_circuit_to_wires(circuit_id);
         }
+
+        let board = self.board.read().unwrap();
+        let circuit = board.circuits.get(circuit_id).expect("unexpected");
+        circuit
+            .imp
+            .write()
+            .unwrap()
+            .apply_props(&circuit.props, Some(property));
+
+        board.states.update_circuit_signals(circuit_id, None);
 
         drop(sim_lock);
         true

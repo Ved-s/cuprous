@@ -1,5 +1,5 @@
 use eframe::epaint::{Color32, PathShape, Stroke};
-use emath::{pos2, Pos2, Vec2};
+use emath::{pos2, Pos2};
 
 use crate::vector::Vec2f;
 
@@ -15,11 +15,10 @@ pub enum PathItem {
 pub trait PathItemIterator: Iterator<Item = PathItem> {
     fn create_path_shapes(
         &mut self,
-        offset: Vec2,
-        scale: Vec2,
         fill: impl Into<Color32>,
         stroke: impl Into<Stroke>,
         bezier_straightness: f32,
+        point_proc: impl Fn(Pos2) -> Pos2,
         consumer: impl Fn(usize, PathShape),
     ) {
         let fill = fill.into();
@@ -32,7 +31,7 @@ pub trait PathItemIterator: Iterator<Item = PathItem> {
         for item in self {
             match item {
                 PathItem::MoveTo(p) => {
-                    let p = (offset + p.to_vec2() * scale).to_pos2();
+                    let p = point_proc(p);
                     if !points.is_empty() {
                         consumer(path_index, PathShape {
                             points,
@@ -46,7 +45,7 @@ pub trait PathItemIterator: Iterator<Item = PathItem> {
                     pos = p;
                 }
                 PathItem::LineTo(p) => {
-                    let p = (offset + p.to_vec2() * scale).to_pos2();
+                    let p = point_proc(p);
                     if points.is_empty() {
                         points.push(pos);
                     }
@@ -54,8 +53,8 @@ pub trait PathItemIterator: Iterator<Item = PathItem> {
                     pos = p;
                 }
                 PathItem::QuadraticBezier(a, b) => {
-                    let a = offset + a.to_vec2() * scale;
-                    let b = offset + b.to_vec2() * scale;
+                    let a = point_proc(a);
+                    let b = point_proc(b);
                     if points.is_empty() {
                         points.push(pos);
                     }
@@ -73,12 +72,12 @@ pub trait PathItemIterator: Iterator<Item = PathItem> {
                         .filter(|(i, p)| *i > 0 || points_empty || *p != pos)
                         .map(|(_, p)| p),
                     );
-                    pos = b.to_pos2();
+                    pos = b;
                 }
                 PathItem::CubicBezier(a, b, c) => {
-                    let a = offset + a.to_vec2() * scale;
-                    let b = offset + b.to_vec2() * scale;
-                    let c = offset + c.to_vec2() * scale;
+                    let a = point_proc(a);
+                    let b = point_proc(b);
+                    let c = point_proc(c);
                     if points.is_empty() {
                         points.push(pos);
                     }
@@ -96,7 +95,7 @@ pub trait PathItemIterator: Iterator<Item = PathItem> {
                         .filter(|(i, p)| *i > 0 || *p != pos)
                         .map(|(_, p)| p),
                     );
-                    pos = b.to_pos2();
+                    pos = b;
                 }
                 PathItem::ClosePath => {
                     if !points.is_empty() {
