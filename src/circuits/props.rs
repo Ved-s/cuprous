@@ -83,6 +83,14 @@ impl CircuitPropertyStore {
         }
     }
 
+    pub fn has_property(&self, id: &str, ty: Option<TypeId>) -> bool {
+        let lock = self.0.read().unwrap();
+        match ty {
+            Some(ty) => lock.get(id).is_some_and(|v| v.imp().type_id() == ty),
+            None => lock.contains_key(id),
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.0.read().unwrap().is_empty()
     }

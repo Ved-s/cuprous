@@ -39,10 +39,9 @@ pub enum WireState {
 impl WireState {
     pub fn combine(self, state: WireState) -> WireState {
         match (self, state) {
-            (WireState::None, other) => other,
-            (other, WireState::None) => other,
-            (WireState::Error, _) => WireState::Error,
-            (_, WireState::Error) => WireState::Error,
+            (WireState::None, other) | (other, WireState::None) => other,
+            (WireState::Error, _) | (_, WireState::Error) => WireState::Error,
+            
             (WireState::True, WireState::False) => WireState::Error,
             (WireState::False, WireState::True) => WireState::Error,
 

@@ -50,6 +50,7 @@ impl Circuit {
         }
     }
 
+    /// [in_1, in_2, out]
     fn pin_positions(props: &CircuitPropertyStore) -> [[u32; 2]; 3] {
         let dir = props.read_clone("dir").unwrap_or(Direction4::Right);
         match dir {
