@@ -74,9 +74,9 @@ impl Circuit {
         let dir = props.read_clone("dir").unwrap_or(Direction4::Right);
         match dir {
             Direction4::Up => [[0, 1], [0, 0]],
-            Direction4::Left => [[0, 0], [1, 0]],
+            Direction4::Left => [[1, 0], [0, 0]],
             Direction4::Down => [[0, 0], [0, 1]],
-            Direction4::Right => [[1, 0], [0, 0]],
+            Direction4::Right => [[0, 0], [1, 0]],
         }
     }
 }
