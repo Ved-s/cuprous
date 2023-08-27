@@ -425,10 +425,10 @@ pub trait CircuitImpl: Send + Sync {
     /// After calling this, consider all connected pins invalid
     fn create_pins(&mut self, props: &CircuitPropertyStore) -> Box<[CircuitPinInfo]>;
 
-    fn update_signals(&mut self, state_ctx: &CircuitStateContext, changed_pin: Option<usize>);
+    fn update_signals(&self, state_ctx: &CircuitStateContext, changed_pin: Option<usize>);
 
     /// Called once every period determined by `Self::update_interval`
-    fn update(&mut self, state_ctx: &CircuitStateContext) {}
+    fn update(&self, state_ctx: &CircuitStateContext) {}
 
     /// Called once on circuit creation, use for update interval setup
     fn init_state(&self, state_ctx: &CircuitStateContext) {}

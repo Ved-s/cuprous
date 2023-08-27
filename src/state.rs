@@ -7,8 +7,8 @@ use std::{
 #[cfg(not(feature = "single_thread"))]
 use std::thread::{self, JoinHandle};
 
-use eframe::epaint::Color32;
 use crate::time::Instant;
+use eframe::epaint::Color32;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -41,7 +41,7 @@ impl WireState {
         match (self, state) {
             (WireState::None, other) | (other, WireState::None) => other,
             (WireState::Error, _) | (_, WireState::Error) => WireState::Error,
-            
+
             (WireState::True, WireState::False) => WireState::Error,
             (WireState::False, WireState::True) => WireState::Error,
 
@@ -326,7 +326,7 @@ impl State {
                 .iter()
                 .map(|cs| cs.as_ref().map(|cs| cs.read().unwrap().save()))
                 .collect(),
-            queue: self.queue.lock().unwrap().inner().iter().copied().collect(),
+            queue: self.queue.lock().unwrap().iter().copied().collect(),
             updates: self
                 .updates
                 .lock()
@@ -377,7 +377,10 @@ impl State {
     }
 
     pub fn update_wire(&self, wire: usize, skip_state_ckeck: bool) {
-        self.schedule_update(UpdateTask::WireState { id: wire, skip_state_ckeck });
+        self.schedule_update(UpdateTask::WireState {
+            id: wire,
+            skip_state_ckeck,
+        });
     }
 
     pub fn update_circuit_signals(&self, circuit: usize, pin: Option<usize>) {
@@ -411,8 +414,7 @@ impl State {
     }
 
     fn update_once(&self, queue_limit: usize) -> Option<Instant> {
-        
-        // Lock shared simulation, so placing/deleting won't interrupt anything 
+        // Lock shared simulation, so placing/deleting won't interrupt anything
         let sim_lock = { self.board.read().unwrap().sim_lock.clone() };
         let sim_lock = sim_lock.read();
         let mut circuit_updates_removes = self.circuit_updates_removes.lock().unwrap();
@@ -427,7 +429,7 @@ impl State {
                     let board = self.board.read().unwrap();
                     let circ = board.circuits.get(upd.0);
                     if let Some(circ) = circ {
-                        let mut imp = circ.imp.write().unwrap();
+                        let mut imp = circ.imp.read().unwrap();
 
                         let state = CircuitStateContext::new(self, circ);
                         imp.update(&state);
@@ -457,13 +459,18 @@ impl State {
         };
 
         let mut queue_counter = 0;
-        while !nearest_update.is_some_and(|nu| nu <= Instant::now()) && queue_counter < queue_limit {
+
+        while !nearest_update.is_some_and(|nu| nu <= Instant::now()) && queue_counter < queue_limit
+        {
             let deq = { self.queue.lock().unwrap().dequeue() };
             let task = unwrap_option_or_break!(deq);
 
             let board = self.board.read().unwrap();
             match task {
-                UpdateTask::WireState {id, skip_state_ckeck } => {
+                UpdateTask::WireState {
+                    id,
+                    skip_state_ckeck,
+                } => {
                     if let Some(wire) = board.wires.get(id) {
                         self.update_wire_now(wire, skip_state_ckeck);
                     }
@@ -485,7 +492,7 @@ impl State {
         match nearest_update {
             Some(t) => Some(t),
             None if queue_counter >= queue_limit => Some(Instant::now()),
-            _ => None
+            _ => None,
         }
     }
 
@@ -546,7 +553,7 @@ impl State {
     fn update_circuit_signals_now(&self, circuit: &Circuit, pin: Option<usize>) {
         circuit
             .imp
-            .write()
+            .read()
             .unwrap()
             .update_signals(&CircuitStateContext::new(self, circuit), pin)
     }
@@ -624,7 +631,6 @@ impl State {
     }
 
     pub fn reset(&self) {
-
         // Important to lock everything, so thread won't do anything
         let mut queue = self.queue.lock().unwrap();
         let mut circuits = self.circuits.write().unwrap();
@@ -640,14 +646,24 @@ impl State {
 
         let board = self.board.read().unwrap();
         for circuit in board.circuits.iter() {
-            queue.enqueue(UpdateTask::CircuitSignals { id: circuit.id, pin: None });
+            queue.enqueue(UpdateTask::CircuitSignals {
+                id: circuit.id,
+                pin: None,
+            });
         }
         for wire in board.wires.iter() {
-            queue.enqueue(UpdateTask::WireState { id: wire.id, skip_state_ckeck: true });
+            queue.enqueue(UpdateTask::WireState {
+                id: wire.id,
+                skip_state_ckeck: true,
+            });
         }
         drop(queue);
         #[cfg(not(feature = "single_thread"))]
         self.poke_thread(true, false);
+    }
+
+    pub fn queue_len(&self) -> usize {
+        self.queue.lock().unwrap().len()
     }
 }
 
@@ -673,10 +689,7 @@ struct StateThread {
 #[cfg(not(feature = "single_thread"))]
 impl StateThread {
     pub fn new(state: State, sync: Arc<(Condvar, Mutex<bool>)>) -> Self {
-        Self {
-            state,
-            sync,
-        }
+        Self { state, sync }
     }
 
     fn run(&mut self) {

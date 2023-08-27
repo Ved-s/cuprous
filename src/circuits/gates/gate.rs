@@ -8,7 +8,7 @@ use crate::{
     },
     path::{PathItem, PathItemIterator},
     vector::Vec2f,
-    Direction4,
+    Direction4, Mutex,
 };
 
 #[derive(Clone)]
@@ -18,10 +18,13 @@ pub struct GateTemplate {
     pub drawer: fn(&PaintContext, f32, bool),
 }
 
+thread_local! {
+    static INPUT_BOOLS: Mutex<Vec<bool>> = Default::default();
+}
+
 struct Circuit {
     template: GateTemplate,
     inputs: Box<[CircuitPinInfo]>,
-    input_bools: Vec<bool>,
     dir: Direction4,
     output: CircuitPinInfo,
 }
@@ -36,7 +39,6 @@ impl Circuit {
             ]
             .into_boxed_slice(),
             output: CircuitPinInfo::new([3, 1], InternalPinDirection::Outside, "out"),
-            input_bools: Vec::with_capacity(2),
             dir: Direction4::Right,
         }
     }
@@ -82,28 +84,32 @@ impl CircuitImpl for Circuit {
         vec.into_boxed_slice()
     }
 
-    fn update_signals(&mut self, state_ctx: &CircuitStateContext, _: Option<usize>) {
+    fn update_signals(&self, state_ctx: &CircuitStateContext, _: Option<usize>) {
         let states = self.inputs.iter().map(|i| i.get_input(state_ctx));
-        self.input_bools.clear();
-        for state in states {
-            match state {
-                WireState::None => continue,
-                WireState::True => self.input_bools.push(true),
-                WireState::False => self.input_bools.push(false),
-                WireState::Error => {
-                    self.output.set_output(state_ctx, WireState::Error);
-                    return;
+        INPUT_BOOLS.with(|b| {
+            let mut b = b.lock().unwrap();
+
+            b.clear();
+            for state in states {
+                match state {
+                    WireState::None => continue,
+                    WireState::True => b.push(true),
+                    WireState::False => b.push(false),
+                    WireState::Error => {
+                        self.output.set_output(state_ctx, WireState::Error);
+                        return;
+                    }
                 }
             }
-        }
-        if self.input_bools.is_empty() {
-            self.output.set_output(state_ctx, WireState::None);
-        } else {
-            self.output.set_output(
-                state_ctx,
-                (self.template.process_inputs)(&self.input_bools).into(),
-            );
-        }
+            if b.is_empty() {
+                self.output.set_output(state_ctx, WireState::None);
+            } else {
+                self.output.set_output(
+                    state_ctx,
+                    (self.template.process_inputs)(&b).into(),
+                );
+            }
+        });
     }
 
     fn size(&self, props: &CircuitPropertyStore) -> Vec2u {

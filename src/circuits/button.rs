@@ -101,7 +101,7 @@ impl CircuitImpl for Circuit {
         vec![self.out_pin.clone()].into_boxed_slice()
     }
 
-    fn update_signals(&mut self, state_ctx: &CircuitStateContext, _: Option<usize>) {
+    fn update_signals(&self, state_ctx: &CircuitStateContext, _: Option<usize>) {
         let state = state_ctx
             .read_circuit_internal_state::<State, _>(|state| state.state)
             .unwrap_or_default();

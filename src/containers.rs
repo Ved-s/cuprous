@@ -88,6 +88,23 @@ impl<T> FixedVec<T> {
         None
     }
 
+    pub fn get_nth_existing_index_filtered(&self, pos: usize, f: impl Fn(&T) -> bool) -> Option<usize> {
+        if pos >= self.vec.len() {
+            return None;
+        }
+
+        let mut n = 0;
+        for i in 0..self.vec.len() {
+            if self.vec[i].as_ref().is_some_and(&f) {
+                if n == pos {
+                    return Some(i);
+                }
+                n += 1;
+            }
+        }
+        None
+    }
+
     pub fn get(&self, pos: usize) -> Option<&T> {
         self.vec.get(pos)?.as_ref()
     }
@@ -215,6 +232,10 @@ impl<T> FixedVec<T> {
     pub fn clear(&mut self) {
         self.vec.clear();
         self.first_free = None;
+    }
+
+    fn len(&self) -> usize {
+        self.vec.iter().filter(|o| o.is_some()).count()
     }
 }
 
@@ -738,12 +759,43 @@ impl<T, S: BuildHasher> RandomQueue<T, S> {
         Some(item)
     }
 
+    pub fn dequeue_filtered(&mut self, f: impl Fn(&T) -> bool) -> Option<T> {
+        if self.vec.is_empty() {
+            return None;
+        }
+
+        let len = self.vec.iter().filter(|v| f(*v)).count();
+        if len == 0 {
+            return None;
+        }
+
+        let pos = (self.hasher.finish() % len as u64) as usize;
+        let real_pos = match self.vec.get_nth_existing_index_filtered(pos, f) {
+            Some(v) => v,
+            None => unreachable!(
+                "Queue length ({}) does not match internal vector ({})!",
+                len,
+                self.vec.iter().count()
+            ),
+        };
+        let item = match self.vec.remove(real_pos) {
+            Some(v) => v,
+            None => unreachable!(),
+        };
+        self.hasher.write_usize(pos);
+        Some(item)
+    }
+
     pub fn clear(&mut self) {
         self.vec.clear();
     }
 
-    pub fn inner(&self) -> &FixedVec<T> {
-        &self.vec
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
+        self.vec.iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.vec.len()
     }
 }
 

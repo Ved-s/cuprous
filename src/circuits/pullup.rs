@@ -37,7 +37,7 @@ impl CircuitImpl for Circuit {
         vec![self.pin.clone()].into_boxed_slice()
     }
 
-    fn update_signals(&mut self, _: &CircuitStateContext, _: Option<usize>) {}
+    fn update_signals(&self, _: &CircuitStateContext, _: Option<usize>) {}
 
     fn custom_pin_mutate_state(
         &self,

@@ -528,6 +528,7 @@ Selected: {:?}
 
 Wire parts drawn: {}
 Pressed keys: {:?}
+Queue len: {}
 "#,
                 self.pan_zoom.pos,
                 bounds.tiles_tl,
@@ -540,7 +541,8 @@ Pressed keys: {:?}
                 self.board
                     .wires_drawn
                     .load(std::sync::atomic::Ordering::Relaxed),
-                ui.input(|input| input.keys_down.iter().cloned().collect::<Vec<_>>())
+                ui.input(|input| input.keys_down.iter().cloned().collect::<Vec<_>>()),
+                self.board.state.queue_len()
             ),
             font_id,
             Color32::WHITE,

@@ -90,7 +90,7 @@ impl CircuitImpl for Circuit {
         .into_boxed_slice()
     }
 
-    fn update_signals(&mut self, state_ctx: &CircuitStateContext, pin: Option<usize>) {
+    fn update_signals(&self, state_ctx: &CircuitStateContext, pin: Option<usize>) {
         match pin {
             Some(1) => {
                 let new_dir_in = matches!(self.dir_pin.get_input(state_ctx), WireState::True);
@@ -131,7 +131,7 @@ impl CircuitImpl for Circuit {
         }
     }
 
-    fn update(&mut self, state_ctx: &CircuitStateContext) {
+    fn update(&self, state_ctx: &CircuitStateContext) {
         let new_state = state_ctx.write_circuit_internal_state::<State, _>(|s| {
             s.state = !s.state;
             s.state

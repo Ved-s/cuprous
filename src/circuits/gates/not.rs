@@ -94,7 +94,7 @@ impl CircuitImpl for Circuit {
         vec![self.input.clone(), self.output.clone()].into_boxed_slice()
     }
 
-    fn update_signals(&mut self, state_ctx: &CircuitStateContext, _: Option<usize>) {
+    fn update_signals(&self, state_ctx: &CircuitStateContext, _: Option<usize>) {
         let state = self.input.get_input(state_ctx);
         let state = match state {
             WireState::None => WireState::None,

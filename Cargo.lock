@@ -1898,6 +1898,7 @@ dependencies = [
  "emath",
  "geo-nd",
  "js-sys",
+ "parking_lot",
  "paste",
  "ron",
  "serde",
