@@ -5,10 +5,11 @@ use std::{
     panic::Location,
     sync::{
         atomic::{AtomicU64, Ordering},
-        LockResult, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard
+        LockResult, PoisonError
     },
 };
 
+use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use serde::{Deserialize, Serialize};
 
 use crate::containers::FixedVec;
@@ -63,9 +64,6 @@ fn new_drwlock_id() -> u64 {
     DRWLOCK_ID.fetch_add(1, Ordering::Relaxed)
 }
 
-// unsafe impl<T> Send for DebugRwLock<T> {}
-// unsafe impl<T> Sync for DebugRwLock<T> {}
-
 impl<T> DebugRwLock<T> {
     pub fn new(value: T) -> Self {
         let id = new_drwlock_id();
@@ -78,7 +76,7 @@ impl<T> DebugRwLock<T> {
 
 impl<T: ?Sized> DebugRwLock<T> {
     #[track_caller]
-    pub fn read(&self) -> LockResult<DebugRwLockReadGuard<'_, T>> {
+    pub fn read(&self) -> DebugRwLockReadGuard<'_, T> {
         let location = Location::caller();
         let (id, deadlock_at) = access_map(|map| {
             if let Some(r) = map.get_mut(&self.id) {
@@ -111,15 +109,15 @@ impl<T: ?Sized> DebugRwLock<T> {
             panic!("deadlock! Lock already held for write! (tried to lock read)\nwrite at: {loc}\nthis read at: {location}\n")
         }
 
-        map_result(self.inner.read(), |guard| DebugRwLockReadGuard {
+        DebugRwLockReadGuard {
             lock_id: self.id,
             id,
-            inner: guard,
-        })
+            inner: self.inner.read(),
+        }
     }
 
     #[track_caller]
-    pub fn write(&self) -> LockResult<DebugRwLockWriteGuard<'_, T>> {
+    pub fn write(&self) -> DebugRwLockWriteGuard<'_, T> {
         let location = Location::caller();
         let (deadlock_at, write_held) = access_map(|map| {
             if let Some(r) = map.get_mut(&self.id) {
@@ -153,10 +151,10 @@ impl<T: ?Sized> DebugRwLock<T> {
             }
         }
 
-        map_result(self.inner.write(), |guard| DebugRwLockWriteGuard {
+        DebugRwLockWriteGuard {
             lock_id: self.id,
-            inner: guard,
-        })
+            inner: self.inner.write(),
+        }
     }
 
 }

@@ -87,7 +87,7 @@ impl CircuitImpl for Circuit {
     fn update_signals(&self, state_ctx: &CircuitStateContext, _: Option<usize>) {
         let states = self.inputs.iter().map(|i| i.get_input(state_ctx));
         INPUT_BOOLS.with(|b| {
-            let mut b = b.lock().unwrap();
+            let mut b = b.lock();
 
             b.clear();
             for state in states {

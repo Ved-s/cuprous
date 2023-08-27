@@ -57,12 +57,12 @@ impl eframe::App for App {
         ctx.request_repaint();
 
         #[cfg(feature = "single_thread")]
-        self.board.board.read().unwrap().states.update();
+        self.board.board.read().states.update();
         cfg_if::cfg_if! {
             if #[cfg(all(not(web_sys_unstable_apis), feature = "wasm"))] {
                 let paste = ctx
                     .input(|input| input.modifiers.ctrl && input.key_pressed(egui::Key::V))
-                    .then(|| crate::io::GLOBAL_CLIPBOARD.lock().unwrap().clone())
+                    .then(|| crate::io::GLOBAL_CLIPBOARD.lock().clone())
                     .flatten();
             } else {
                 let paste = ctx.input(|input| {
@@ -138,7 +138,7 @@ impl eframe::App for App {
                                 }
                                 _ => None,
                             });
-                        let board = self.board.board.read().unwrap();
+                        let board = self.board.board.read();
                         let stores: Vec<_> = selected_circuit_props
                             .filter_map(|id| board.circuits.get(id).map(|c| (id, &c.props).into()))
                             .collect();
@@ -162,7 +162,7 @@ impl eframe::App for App {
     }
 
     fn save(&mut self, _storage: &mut dyn eframe::Storage) {
-        let board = self.board.board.read().unwrap();
+        let board = self.board.board.read();
         let data = board.save();
         _storage.set_string("board", ron::to_string(&data).unwrap());
 
@@ -242,11 +242,11 @@ impl App {
         let board = board.unwrap_or_else(|| Arc::new(RwLock::new(CircuitBoard::new())));
 
         #[cfg(not(feature = "single_thread"))]
-        board.read().unwrap().activate();
+        board.read().activate();
 
         let state_id = {
-            let circuit_board = board.read().unwrap();
-            let states = circuit_board.states.states().read().unwrap();
+            let circuit_board = board.read();
+            let states = circuit_board.states.states().read();
             let first_id = states
                 .inner()
                 .iter()
@@ -488,7 +488,7 @@ impl App {
                     .collect();
 
                 let mut vec = vec![];
-                let board = self.board.board.read().unwrap();
+                let board = self.board.board.read();
                 for circuit_id in selected_circuits {
                     let circuit = board.circuits.get(circuit_id);
                     let circuit = unwrap_option_or_continue!(circuit);

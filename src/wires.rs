@@ -42,7 +42,7 @@ impl Wire {
             None => {
                 if let Some(point) = self.points.remove(&pos) {
                     if let Some(pin) = point.pin {
-                        pin.write().unwrap().set_wire(states, None, false, true)
+                        pin.write().set_wire(states, None, false, true)
                     }
                 }
             }
@@ -126,7 +126,7 @@ impl WirePoint {
             up: self.up,
             left: self.left,
             pin: self.pin.as_ref().map(|pin| {
-                let pin = pin.read().unwrap();
+                let pin = pin.read();
                 crate::io::NamedCircuitPinIdData {
                     name: pin.name(),
                     circuit: pin.id.circuit_id,
@@ -142,7 +142,6 @@ impl WirePoint {
                 .and_then(|circ| {
                     circ.info
                         .read()
-                        .unwrap()
                         .pins
                         .iter()
                         .find(|i| i.name == *data.name)

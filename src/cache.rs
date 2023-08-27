@@ -1,4 +1,6 @@
-use std::{sync::{Arc, Mutex}, collections::HashSet};
+use std::{sync::Arc, collections::HashSet};
+
+use crate::Mutex;
 
 pub static GLOBAL_STR_CACHE: StrCache = StrCache::new();
 
@@ -10,7 +12,7 @@ impl StrCache {
     }
 
     pub fn cache(&self, str: &str) -> Arc<str> {
-        let mut lock = self.0.lock().unwrap();
+        let mut lock = self.0.lock();
         let set = lock.get_or_insert_with(HashSet::new);
         if let Some(arc) = set.get(str) {
             arc.clone()

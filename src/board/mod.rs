@@ -86,7 +86,6 @@ impl CircuitBoard {
         for point in points.values() {
             if let Some(pin) = &point.pin {
                 pin.write()
-                    .unwrap()
                     .set_wire(&self.states, Some(id), false, true);
             }
         }
@@ -139,7 +138,6 @@ impl CircuitBoard {
 
             point.pin = point.pin.map(|p| {
                 p.write()
-                    .unwrap()
                     .set_wire(&self.states, Some(new_wire_id), false, true);
                 p
             });
@@ -179,7 +177,6 @@ impl CircuitBoard {
                 .states
                 .states()
                 .read()
-                .unwrap()
                 .inner()
                 .iter()
                 .map(|s| s.as_ref().map(|s| s.save()))
@@ -202,15 +199,15 @@ impl CircuitBoard {
                         props.load(&c.props);
                         let circ = Circuit::create(i, c.pos, preview, Some(props));
                         if !matches!(c.imp, serde_intermediate::Intermediate::Unit) {
-                            circ.imp.write().unwrap().load(&c.imp);
+                            circ.imp.write().load(&c.imp);
                         }
                         {
-                            let mut info = circ.info.write().unwrap();
+                            let mut info = circ.info.write();
                             for (pin_name, wire) in c.pin_wires.iter() {
                                 if let Some(info) =
                                     info.pins.iter_mut().find(|i| i.name == *pin_name)
                                 {
-                                    info.pin.write().unwrap().wire = Some(*wire);
+                                    info.pin.write().wire = Some(*wire);
                                 }
                             }
                         }
@@ -243,7 +240,7 @@ impl CircuitBoard {
                 .collect(),
         ));
 
-        board.write().unwrap().states = states;
+        board.write().states = states;
 
         board
     }
@@ -310,12 +307,12 @@ impl ActiveCircuitBoard {
 
     pub fn new(board: Arc<RwLock<CircuitBoard>>, state: usize) -> Option<Self> {
         let state = {
-            let board = board.read().unwrap();
+            let board = board.read();
             board.states.get(state)?
         };
 
         let (wires, circuits) = {
-            let board = board.read().unwrap();
+            let board = board.read();
             let mut wires = Chunks2D::<16, WireNode>::default();
             let mut circuits = Chunks2D::<16, CircuitNode>::default();
 
@@ -357,7 +354,7 @@ impl ActiveCircuitBoard {
 
             for circuit in board.circuits.iter() {
                 let id = circuit.id;
-                let info = circuit.info.read().unwrap();
+                let info = circuit.info.read();
 
                 for y in 0..info.size.y() {
                     for x in 0..info.size.x() {
@@ -412,7 +409,7 @@ impl ActiveCircuitBoard {
 
             if copy_request {
                 let selection = self.selection.borrow();
-                let board = self.board.read().unwrap();
+                let board = self.board.read();
 
                 let min_pos = {
                     let mut min_pos = None;
@@ -459,7 +456,7 @@ impl ActiveCircuitBoard {
                     }
                     cfg_if::cfg_if! {
                         if #[cfg(all(not(web_sys_unstable_apis), feature = "wasm"))] {
-                            *crate::io::GLOBAL_CLIPBOARD.lock().unwrap() = Some(copy);
+                            *crate::io::GLOBAL_CLIPBOARD.lock() = Some(copy);
                         } else {
                             let copy_text = ron::to_string(&copy).unwrap();
                             ctx.ui.output_mut(|output| output.copied_text = copy_text);
@@ -490,7 +487,7 @@ impl ActiveCircuitBoard {
                     let mut selection = self.selection.borrow_mut();
                     selection.selection.drain().collect::<Vec<_>>()
                 };
-                let sim_lock = { self.board.read().unwrap().sim_lock.clone() };
+                let sim_lock = { self.board.read().sim_lock.clone() };
                 let sim_lock = sim_lock.write();
                 for obj in drain {
                     match obj {
@@ -506,7 +503,7 @@ impl ActiveCircuitBoard {
                     }
                 }
 
-                let states = self.board.read().unwrap().states.clone();
+                let states = self.board.read().states.clone();
                 for wire in affected_wires {
                     states.update_wire(wire, true);
                 }
@@ -646,7 +643,7 @@ impl ActiveCircuitBoard {
             };
 
             if possible_intersection {
-                if let Some(wire) = self.board.read().unwrap().wires.get(wire) {
+                if let Some(wire) = self.board.read().wires.get(wire) {
                     Self::draw_wire_point(
                         ctx,
                         pos,
@@ -671,7 +668,7 @@ impl ActiveCircuitBoard {
         let font = TextStyle::Monospace.resolve(ctx.ui.style());
 
         if let Some(wire_id) = node.wire.get() {
-            let board = self.board.read().unwrap();
+            let board = self.board.read();
             let wire = board.wires.get(wire_id);
 
             if let Some(wire) = wire {
@@ -793,10 +790,10 @@ impl ActiveCircuitBoard {
         }
         let circ_id = unwrap_option_or_return!(node.circuit.get());
 
-        let board = self.board.read().unwrap();
+        let board = self.board.read();
         let circuit = unwrap_option_or_return!(board.circuits.get(circ_id));
 
-        let circ_info = circuit.info.read().unwrap();
+        let circ_info = circuit.info.read();
 
         let pos = pos - node.origin_dist.convert(|v| v as i32);
         let screen_pos = ctx.screen.world_to_screen_tile(pos);
@@ -804,13 +801,13 @@ impl ActiveCircuitBoard {
         let rect = Rect::from_min_size(screen_pos.into(), screen_size.into());
         let circ_ctx = ctx.with_rect(rect);
 
-        let imp = circuit.imp.read().unwrap();
+        let imp = circuit.imp.read();
         let state_ctx = CircuitStateContext::new(&self.state, circuit);
 
         if imp.draw_pin_points() {
             for pin in circ_info.pins.iter() {
                 let pos = circuit.pos + pin.pos.convert(|v| v as i32);
-                let pin = pin.pin.read().unwrap();
+                let pin = pin.pin.read();
                 if pin.connected_wire().is_some() {
                     continue;
                 }
@@ -985,7 +982,7 @@ impl ActiveCircuitBoard {
     pub fn place_wire_part(&mut self, part: WirePart, lock_sim: bool) -> Option<usize> {
         let part = unwrap_option_or_return!(self.optimize_wire_part(part), None);
 
-        let sim_lock = { self.board.read().unwrap().sim_lock.clone() };
+        let sim_lock = { self.board.read().sim_lock.clone() };
         let sim_lock = { lock_sim.then(|| sim_lock.write()) };
         let wires_crossed = {
             let mut wires_crossed = HashSet::new();
@@ -1024,13 +1021,12 @@ impl ActiveCircuitBoard {
         };
 
         let new_wire = match wires_crossed.len() {
-            0 => self.board.write().unwrap().create_wire(),
+            0 => self.board.write().create_wire(),
             1 => *wires_crossed.iter().next().unwrap(),
             _ => {
                 let main_wire = {
                     self.board
                         .read()
-                        .unwrap()
                         .wires
                         .iter()
                         .filter(|v| wires_crossed.contains(&v.id))
@@ -1065,7 +1061,7 @@ impl ActiveCircuitBoard {
             false,
         );
 
-        let board = self.board.read().unwrap();
+        let board = self.board.read();
         board.states.update_wire(new_wire, true);
         drop(sim_lock);
         Some(new_wire)
@@ -1108,7 +1104,7 @@ impl ActiveCircuitBoard {
             }
         }
 
-        let states = self.board.read().unwrap().states.clone();
+        let states = self.board.read().states.clone();
 
         for pos in part.iter_pos(true) {
             let node = self.wire_nodes.get(pos.convert(|v| v as isize));
@@ -1119,7 +1115,7 @@ impl ActiveCircuitBoard {
                 let pin = self.pin_at(pos);
 
                 {
-                    let mut board = self.board.write().unwrap();
+                    let mut board = self.board.write();
                     if let Some(wire) = board.wires.get_mut(wire) {
                         wire.set_point(
                             pos,
@@ -1135,7 +1131,6 @@ impl ActiveCircuitBoard {
                 }
                 if let Some(pin) = &pin {
                     pin.write()
-                        .unwrap()
                         .set_wire(&states, Some(wire), false, true);
                 }
             }
@@ -1213,15 +1208,15 @@ impl ActiveCircuitBoard {
         {
             let pin = self.pin_at(pos);
             if let Some(pin) = &pin {
-                pin.write().unwrap().set_wire(
-                    &self.board.read().unwrap().states.clone(),
+                pin.write().set_wire(
+                    &self.board.read().states.clone(),
                     wire,
                     false,
                     true,
                 );
             }
 
-            let mut board = self.board.write().unwrap();
+            let mut board = self.board.write();
             let states = board.states.clone();
 
             if let Some(wire) = prev_wire.and_then(|w| board.wires.get_mut(w)) {
@@ -1243,7 +1238,7 @@ impl ActiveCircuitBoard {
         }
 
         if update_state {
-            let states = self.board.read().unwrap().states.clone();
+            let states = self.board.read().states.clone();
 
             if let Some(wire) = prev_wire {
                 states.update_wire(wire, true);
@@ -1319,7 +1314,7 @@ impl ActiveCircuitBoard {
             } => {
                 let wire = if horizontal != vertical {
                     let (h_nodes, v_nodes) = {
-                        let board = self.board.read().unwrap();
+                        let board = self.board.read();
                         (
                             board.wires.get(horizontal).map(|w| w.points.len()),
                             board.wires.get(vertical).map(|w| w.points.len()),
@@ -1400,7 +1395,6 @@ impl ActiveCircuitBoard {
             && self
                 .board
                 .read()
-                .unwrap()
                 .wires
                 .get(wire)
                 .is_some_and(|w| w.points.get(&pos).is_some_and(|p| p.pin.is_some()))
@@ -1465,7 +1459,7 @@ impl ActiveCircuitBoard {
         };
 
         {
-            let mut board = self.board.write().unwrap();
+            let mut board = self.board.write();
             let wire = board.wires.get_mut(wire)?;
             let point = wire.points.get_mut(&wp_pos)?;
 
@@ -1484,7 +1478,7 @@ impl ActiveCircuitBoard {
             self.split_wires(wire, true);
         }
         if update_states {
-            let states = self.board.read().unwrap().states.clone();
+            let states = self.board.read().states.clone();
             states.update_wire(wire, true);
         }
 
@@ -1493,7 +1487,7 @@ impl ActiveCircuitBoard {
 
     fn merge_wires(&mut self, wire: usize, with: usize, update_state: bool) {
         {
-            let board = self.board.read().unwrap();
+            let board = self.board.read();
 
             let with_wire = unwrap_option_or_return!(board.wires.get(with));
 
@@ -1508,7 +1502,6 @@ impl ActiveCircuitBoard {
         }
         self.board
             .write()
-            .unwrap()
             .merge_wires(wire, with, update_state);
     }
 
@@ -1516,14 +1509,14 @@ impl ActiveCircuitBoard {
         let mut groups = vec![];
 
         let mut remaining_nodes: HashSet<_> = {
-            let board = self.board.read().unwrap();
+            let board = self.board.read();
             let wire = unwrap_option_or_return!(board.wires.get(id));
             wire.points.keys().copied().collect()
         };
 
         // empty wire
         if remaining_nodes.is_empty() {
-            let mut board = self.board.write().unwrap();
+            let mut board = self.board.write();
             board.wires.remove(id);
             board.states.reset_wire(id);
         }
@@ -1568,7 +1561,7 @@ impl ActiveCircuitBoard {
 
         for (groupid, group) in groups.drain(..).enumerate() {
             if groupid != biggest_wire {
-                let new_wire = self.board.write().unwrap().split_wire(id, &group, false);
+                let new_wire = self.board.write().split_wire(id, &group, false);
                 if let Some(wire) = new_wire {
                     self.set_node_wires(group.iter(), wire);
                     wires.push(wire);
@@ -1579,7 +1572,7 @@ impl ActiveCircuitBoard {
         }
 
         if update_states {
-            let states = self.board.read().unwrap().states.clone();
+            let states = self.board.read().states.clone();
             for wire in wires {
                 states.update_wire(wire, true);
             }
@@ -1775,20 +1768,19 @@ impl ActiveCircuitBoard {
             return None;
         }
 
-        let sim_lock = { self.board.read().unwrap().sim_lock.clone() };
+        let sim_lock = { self.board.read().sim_lock.clone() };
         let sim_lock = { lock_sim.then(|| sim_lock.write()) };
 
         let cid = {
             self.board
                 .write()
-                .unwrap()
                 .create_circuit(place_pos, preview, props_override)
         };
 
         self.set_circuit_nodes(size, place_pos, Some(cid));
         handler(self, cid);
         self.connect_circuit_to_wires(cid);
-        let board = self.board.read().unwrap();
+        let board = self.board.read();
         let circ = board.circuits.get(cid).unwrap();
         board.states.init_circuit(circ);
         board.states.update_circuit_signals(cid, None);
@@ -1797,7 +1789,7 @@ impl ActiveCircuitBoard {
     }
 
     fn connect_circuit_to_wires(&mut self, circuit: usize) {
-        let board = self.board.read().unwrap();
+        let board = self.board.read();
         let circuit = board.circuits.get(circuit);
         let circuit = unwrap_option_or_return!(circuit);
         let info = circuit.info.clone();
@@ -1806,10 +1798,10 @@ impl ActiveCircuitBoard {
         let states = board.states.clone();
         drop(board);
 
-        for pin in info.read().unwrap().pins.iter() {
+        for pin in info.read().pins.iter() {
             let pos = pos + pin.pos.convert(|v| v as i32);
             if let Some(wire) = self.create_wire_intersection(pos) {
-                let mut board = self.board.write().unwrap();
+                let mut board = self.board.write();
                 let wire = if let Some(wire) = board.wires.get_mut(wire) {
                     if let Some(p) = wire.points.get_mut(&pos) {
                         p.pin = Some(pin.pin.clone());
@@ -1822,13 +1814,11 @@ impl ActiveCircuitBoard {
                 if let Some(wire) = wire {
                     pin.pin
                         .write()
-                        .unwrap()
                         .set_wire(&states, Some(wire), true, false);
                 }
             } else {
                 pin.pin
                     .write()
-                    .unwrap()
                     .set_wire(&states, None, true, false);
             }
         }
@@ -1881,9 +1871,9 @@ impl ActiveCircuitBoard {
         let pos = circ.origin_dist;
         let circ = circ.circuit.get()?;
 
-        let board = self.board.read().unwrap();
+        let board = self.board.read();
         let circ_info = board.circuits.get(circ)?.info.clone();
-        let circ_info = circ_info.read().unwrap();
+        let circ_info = circ_info.read();
 
         circ_info
             .pins
@@ -1941,20 +1931,20 @@ impl ActiveCircuitBoard {
     }
 
     fn remove_circuit(&mut self, id: usize, affected_wires: &mut HashSet<usize>) {
-        let board = self.board.read().unwrap();
+        let board = self.board.read();
         let circuit = unwrap_option_or_return!(board.circuits.get(id));
 
         let pos = circuit.pos;
         let info = circuit.info.clone();
-        let size = info.read().unwrap().size;
+        let size = info.read().size;
 
         drop(board);
         self.set_circuit_nodes(size, pos, None);
 
-        let mut board = self.board.write().unwrap();
+        let mut board = self.board.write();
 
-        for pin in info.read().unwrap().pins.iter() {
-            let wire_id = pin.pin.read().unwrap().connected_wire();
+        for pin in info.read().pins.iter() {
+            let wire_id = pin.pin.read().connected_wire();
             let wire_id = unwrap_option_or_continue!(wire_id);
             let wire = unwrap_option_or_continue!(board.wires.get_mut(wire_id));
             let pos = pos + pin.pos.convert(|v| v as i32);
@@ -1970,10 +1960,10 @@ impl ActiveCircuitBoard {
 
     // Todo: result
     fn try_updating_circuit_property(&mut self, circuit_id: usize, property: &str) -> bool {
-        let sim_lock = { self.board.read().unwrap().sim_lock.clone() };
+        let sim_lock = { self.board.read().sim_lock.clone() };
         let sim_lock = sim_lock.write();
 
-        let board = self.board.read().unwrap();
+        let board = self.board.read();
         let circuit = board.circuits.get(circuit_id);
         let circuit = unwrap_option_or_return!(circuit, false);
 
@@ -1982,12 +1972,11 @@ impl ActiveCircuitBoard {
         circuit
             .imp
             .read()
-            .unwrap()
             .prop_changed(property, &mut resize, &mut recreate_pins);
 
         if resize {
-            let new_size = circuit.imp.read().unwrap().size(&circuit.props);
-            let size_changed = new_size != circuit.info.read().unwrap().size;
+            let new_size = circuit.imp.read().size(&circuit.props);
+            let size_changed = new_size != circuit.info.read().size;
             drop(board);
 
             if size_changed && !self.try_change_circuit_size(circuit_id, new_size) {
@@ -1998,13 +1987,12 @@ impl ActiveCircuitBoard {
         }
 
         if recreate_pins {
-            let mut board = self.board.write().unwrap();
+            let mut board = self.board.write();
             let circuit = board.circuits.get(circuit_id).expect("unexpected");
 
             let pins: Vec<_> = circuit
                 .info
                 .read()
-                .unwrap()
                 .pins
                 .iter()
                 .map(|p| (p.pos.convert(|v| v as i32) + circuit.pos, p.pin.clone()))
@@ -2013,7 +2001,7 @@ impl ActiveCircuitBoard {
             let states = board.states.clone();
             // disconnect all older pins
             for (pos, pin) in pins {
-                let pin_wire = pin.read().unwrap().connected_wire();
+                let pin_wire = pin.read().connected_wire();
                 if let Some(wire) = pin_wire {
                     if let Some(wire) = board.wires.get_mut(wire) {
                         if let Some(point) = wire.points.get_mut(&pos) {
@@ -2021,28 +2009,27 @@ impl ActiveCircuitBoard {
                             states.update_wire(wire.id, true);
                         }
                     }
-                    pin.write().unwrap().set_wire(&states, None, false, false);
+                    pin.write().set_wire(&states, None, false, false);
                 }
             }
 
             let circuit = board.circuits.get(circuit_id).expect("unexpected");
 
-            let new_pins = circuit.imp.write().unwrap().create_pins(&circuit.props);
+            let new_pins = circuit.imp.write().create_pins(&circuit.props);
             for pin in new_pins.iter().enumerate() {
-                pin.1.pin.write().unwrap().id = CircuitPinId::new(pin.0, circuit_id);
+                pin.1.pin.write().id = CircuitPinId::new(pin.0, circuit_id);
             }
-            circuit.info.write().unwrap().pins = new_pins;
+            circuit.info.write().pins = new_pins;
             drop(board);
 
             self.connect_circuit_to_wires(circuit_id);
         }
 
-        let board = self.board.read().unwrap();
+        let board = self.board.read();
         let circuit = board.circuits.get(circuit_id).expect("unexpected");
         circuit
             .imp
             .write()
-            .unwrap()
             .apply_props(&circuit.props, Some(property));
 
         board.states.update_circuit_signals(circuit_id, None);
@@ -2058,7 +2045,7 @@ impl ActiveCircuitBoard {
         old_value: &dyn CircuitPropertyImpl,
     ) {
         if !self.try_updating_circuit_property(circuit, property) {
-            let board = self.board.write().unwrap();
+            let board = self.board.write();
             if let Some(circuit) = board.circuits.get(circuit) {
                 circuit
                     .props
@@ -2069,11 +2056,11 @@ impl ActiveCircuitBoard {
 
     // todo: result
     fn try_change_circuit_size(&mut self, circuit_id: usize, new_size: Vec2u) -> bool {
-        let board = self.board.read().unwrap();
+        let board = self.board.read();
         let circuit = board.circuits.get(circuit_id);
         let circuit = unwrap_option_or_return!(circuit, false);
         let circuit_pos = circuit.pos;
-        let old_size = circuit.info.read().unwrap().size;
+        let old_size = circuit.info.read().size;
         let info = circuit.info.clone();
         drop(board);
 
@@ -2083,7 +2070,7 @@ impl ActiveCircuitBoard {
         self.set_circuit_nodes(old_size, circuit_pos, None);
         self.set_circuit_nodes(new_size, circuit_pos, Some(circuit_id));
 
-        info.write().unwrap().size = new_size;
+        info.write().size = new_size;
         true
     }
 }

@@ -26,7 +26,7 @@ impl CircuitPropertyStore {
         T: CircuitPropertyImpl,
         F: FnOnce(&T) -> R,
     {
-        let lock = self.0.read().unwrap();
+        let lock = self.0.read();
         let p = lock.get(id)?.imp.as_ref();
         p.downcast_ref::<T>().map(f)
     }
@@ -35,7 +35,7 @@ impl CircuitPropertyStore {
     where
         F: FnOnce(&CircuitProperty) -> R,
     {
-        let lock = self.0.read().unwrap();
+        let lock = self.0.read();
         let p = lock.get(id)?;
         Some(f(p))
     }
@@ -46,7 +46,7 @@ impl CircuitPropertyStore {
         T: CircuitPropertyImpl,
         F: FnOnce(&mut T) -> R,
     {
-        let mut lock = self.0.write().unwrap();
+        let mut lock = self.0.write();
         let p = lock.get_mut(id);
         let p = &mut unwrap_option_or_return!(p, None).imp;
         p.downcast_mut::<T>().map(f)
@@ -57,7 +57,7 @@ impl CircuitPropertyStore {
     where
         F: FnOnce(&mut CircuitProperty) -> R,
     {
-        let mut lock = self.0.write().unwrap();
+        let mut lock = self.0.write();
         lock.get_mut(id).map(f)
     }
 
@@ -65,7 +65,6 @@ impl CircuitPropertyStore {
         crate::io::CircuitPropertyStoreData(HashMap::from_iter(
             self.0
                 .read()
-                .unwrap()
                 .values()
                 .map(|p| (p.id.clone(), p.imp.save())),
         ))
@@ -75,7 +74,7 @@ impl CircuitPropertyStore {
         &self,
         data: &crate::io::CircuitPropertyStoreData
     ) {
-        let mut lock = self.0.write().unwrap();
+        let mut lock = self.0.write();
         for (id, data) in data.0.iter() {
             let prop = lock.get_mut(id);
             let prop = unwrap_option_or_continue!(prop);
@@ -84,7 +83,7 @@ impl CircuitPropertyStore {
     }
 
     pub fn has_property(&self, id: &str, ty: Option<TypeId>) -> bool {
-        let lock = self.0.read().unwrap();
+        let lock = self.0.read();
         match ty {
             Some(ty) => lock.get(id).is_some_and(|v| v.imp().type_id() == ty),
             None => lock.contains_key(id),
@@ -92,7 +91,7 @@ impl CircuitPropertyStore {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.0.read().unwrap().is_empty()
+        self.0.read().is_empty()
     }
 
     pub fn inner(&self) -> &RwLock<HashMap<DynStaticStr, CircuitProperty>> {
@@ -103,7 +102,7 @@ impl CircuitPropertyStore {
 impl Clone for CircuitPropertyStore {
     fn clone(&self) -> Self {
         Self(RwLock::new(HashMap::from_iter(
-            self.0.read().unwrap().values().map(|p| {
+            self.0.read().values().map(|p| {
                 let clone = p.clone();
                 (clone.id(), clone)
             }),

@@ -57,7 +57,7 @@ impl Inventory<'_> {
             mem.data
                 .get_temp::<InventoryMemory>(self_id)
                 .and_then(|mem| {
-                    let last_group_items = mem.last_group_items.read().unwrap();
+                    let last_group_items = mem.last_group_items.read();
                     for (i, item) in group.iter().enumerate() {
                         if last_group_items.contains(item.id()) {
                             return Some(i);
@@ -317,7 +317,7 @@ impl Widget for Inventory<'_> {
                 if let Some(group) = selected_group {
                     ui.memory_mut(|mem| {
                         let m = mem.data.get_temp_mut_or_default::<InventoryMemory>(id);
-                        let mut last_group_items = m.last_group_items.write().unwrap();
+                        let mut last_group_items = m.last_group_items.write();
                         for item in group {
                             last_group_items.remove(item.id());
                         }
@@ -400,7 +400,7 @@ impl PropertyEditor {
         self.ids_cache_remove.clear();
 
         for (i, store) in props.into_iter().enumerate() {
-            let map = store.store.inner().read().unwrap();
+            let map = store.store.inner().read();
             if i == 0 {
                 self.ids_cache.extend(map.values().map(PropertyId::id_of));
             } else {
@@ -424,7 +424,7 @@ impl PropertyEditor {
         let response = Grid::new(("prop_editor", stores.len())).show(ui, |ui| {
             let mut guards: Vec<_> = stores
                 .iter()
-                .map(|s| (s.id.clone(), s.store.inner().write().unwrap()))
+                .map(|s| (s.id.clone(), s.store.inner().write()))
                 .collect();
             let mut changes = Vec::new();
             for id in self.ids_cache.iter() {

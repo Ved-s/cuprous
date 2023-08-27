@@ -83,10 +83,10 @@ impl Selection {
                     }
                 }
                 SelectedWorldObject::Circuit { id } => {
-                    if let Some(circ) = this.board.read().unwrap().circuits.get(*id) {
+                    if let Some(circ) = this.board.read().circuits.get(*id) {
                         let rect_pos = ctx.screen.world_to_screen_tile(circ.pos);
                         let rect_size =
-                            circ.info.read().unwrap().size.convert(|v| v as f32) * ctx.screen.scale;
+                            circ.info.read().size.convert(|v| v as f32) * ctx.screen.scale;
                         let rect = Rect::from_min_size(rect_pos.into(), rect_size.into());
                         let rect = rect.expand(2.0);
                         ctx.paint.rect(

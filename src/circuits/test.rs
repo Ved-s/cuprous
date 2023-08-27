@@ -56,7 +56,7 @@ impl CircuitImpl for Circuit {
             .paint
             .rect_filled(rect, Rounding::none(), Color32::from_gray(100));
 
-        let wire = self.clock_pin.pin.read().unwrap().wire.map(|v| v as i32);
+        let wire = self.clock_pin.pin.read().wire.map(|v| v as i32);
 
         paint_ctx.paint.text(
             rect.center_bottom(),

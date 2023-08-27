@@ -50,7 +50,7 @@ mod board;
 #[macro_use]
 mod macros;
 
-#[cfg(debug_assertions)]
+#[cfg(debug_deadlocks)]
 mod debug;
 
 mod app;
@@ -60,12 +60,13 @@ mod path;
 mod time;
 mod ui;
 
-#[cfg(debug_assertions)]
+#[cfg(debug_deadlocks)]
 type RwLock<T> = debug::DebugRwLock<T>;
 
-#[cfg(not(debug_assertions))]
-type RwLock<T> = std::sync::RwLock<T>;
-type Mutex<T> = std::sync::Mutex<T>;
+#[cfg(not(debug_deadlocks))]
+type RwLock<T> = parking_lot::RwLock<T>;
+type Mutex<T> = parking_lot::Mutex<T>;
+type Condvar = parking_lot::Condvar;
 
 struct BasicLoadingContext<'a, K: Borrow<str> + Eq + Hash> {
     previews: &'a HashMap<K, Arc<CircuitPreview>>,
@@ -992,7 +993,7 @@ impl PastePreview {
             return;
         }
 
-        let sim_lock = { board.board.read().unwrap().sim_lock.clone() };
+        let sim_lock = { board.board.read().sim_lock.clone() };
         let sim_lock = sim_lock.write();
 
         let mut wire_ids: HashSet<usize> = HashSet::new();
@@ -1015,39 +1016,38 @@ impl PastePreview {
                 preview,
                 None,
                 &|board, id| {
-                    let board = board.board.read().unwrap();
+                    let board = board.board.read();
                     if let Some(circuit) = board.circuits.get(id) {
                         if !matches!(
                             circuit_data.internal,
                             serde_intermediate::Intermediate::Unit
                         ) {
-                            for state in board.states.states().read().unwrap().iter() {
+                            for state in board.states.states().read().iter() {
                                 let state = state.get_circuit(id);
-                                let mut state = state.write().unwrap();
+                                let mut state = state.write();
 
                                 state.internal = circuit
                                     .imp
                                     .write()
-                                    .unwrap()
                                     .load_internal(&circuit_data.internal);
                             }
                         }
 
                         if !matches!(circuit_data.imp, serde_intermediate::Intermediate::Unit) {
-                            circuit.imp.write().unwrap().load(&circuit_data.imp)
+                            circuit.imp.write().load(&circuit_data.imp)
                         }
                     }
                 },
             );
             if let (Some(id), Some(dur)) = (id, circuit_data.update) {
-                let board = board.board.read().unwrap();
-                for state in board.states.states().read().unwrap().iter() {
+                let board = board.board.read();
+                for state in board.states.states().read().iter() {
                     state.set_circuit_update_interval(id, Some(dur))
                 }
             }
         }
 
-        let states = board.board.read().unwrap().states.clone();
+        let states = board.board.read().states.clone();
         for wire in wire_ids {
             states.update_wire(wire, true);
         }

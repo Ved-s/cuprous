@@ -70,7 +70,6 @@ impl CircuitPin {
                 .read_circuit(self.id.circuit_id)
                 .map(|cs| {
                     cs.read()
-                        .unwrap()
                         .pin_dirs
                         .get(self.id.id)
                         .cloned()
@@ -85,7 +84,6 @@ impl CircuitPin {
             .read_circuit(self.id.circuit_id)
             .map(|cs| {
                 cs.read()
-                    .unwrap()
                     .pins
                     .get(self.id.id)
                     .copied()
@@ -96,7 +94,7 @@ impl CircuitPin {
 
     pub fn set_input(&self, state: &State, value: WireState, update_state: bool) {
         let circuit = state.get_circuit(self.id.circuit_id);
-        let mut circuit = circuit.write().unwrap();
+        let mut circuit = circuit.write();
 
         let current = circuit.pins.get_clone(self.id.id).unwrap_or_default();
         if current == value {
@@ -176,22 +174,20 @@ impl CircuitPinInfo {
             .read_circuit_state()
             .map(|cs| {
                 cs.read()
-                    .unwrap()
                     .pins
-                    .get_clone(self.pin.read().unwrap().id.id)
+                    .get_clone(self.pin.read().id.id)
                     .unwrap_or_default()
             })
             .unwrap_or_default()
     }
 
     pub fn set_output(&self, state_ctx: &CircuitStateContext, value: WireState) {
-        let pin = self.pin.read().unwrap();
+        let pin = self.pin.read();
 
         let current = state_ctx
             .read_circuit_state()
             .map(|arc| {
                 arc.read()
-                    .unwrap()
                     .pins
                     .get_clone(pin.id.id)
                     .unwrap_or_default()
@@ -204,7 +200,6 @@ impl CircuitPinInfo {
         state_ctx
             .get_circuit_state()
             .write()
-            .unwrap()
             .pins
             .set(value, pin.id.id);
         if let Some(wire) = pin.wire {
@@ -214,12 +209,12 @@ impl CircuitPinInfo {
 
     pub fn set_direction(&self, state_ctx: &CircuitStateContext, dir: PinDirection) {
         let (pin_id, wire) = {
-            let pin = self.pin.read().unwrap();
+            let pin = self.pin.read();
             (pin.id, pin.wire)
         };
         {
             let state = state_ctx.get_circuit_state();
-            let mut state = state.write().unwrap();
+            let mut state = state.write();
 
             if state.pin_dirs.get(pin_id.id).is_some_and(|d| *d == dir) {
                 return;
@@ -231,7 +226,7 @@ impl CircuitPinInfo {
         match dir {
             PinDirection::Inside => match wire {
                 Some(wire) => state_ctx.global_state.update_wire(wire, true),
-                None => self.pin.read().unwrap().set_input(
+                None => self.pin.read().set_input(
                     state_ctx.global_state,
                     Default::default(),
                     true,
@@ -242,7 +237,7 @@ impl CircuitPinInfo {
                 .update_circuit_signals(pin_id.circuit_id, Some(pin_id.id)),
             PinDirection::Custom => match wire {
                 Some(wire) => state_ctx.global_state.update_wire(wire, true),
-                None => self.pin.read().unwrap().set_input(
+                None => self.pin.read().set_input(
                     state_ctx.global_state,
                     Default::default(),
                     true,
@@ -294,7 +289,7 @@ impl Circuit {
         imp.apply_props(&props, None);
         let mut pins = imp.create_pins(&props);
         for pin in pins.iter_mut().enumerate() {
-            pin.1.pin.write().unwrap().id = CircuitPinId::new(pin.0, id);
+            pin.1.pin.write().id = CircuitPinId::new(pin.0, id);
         }
         let info = Arc::new(RwLock::new(CircuitInfo {
             size: imp.size(&props),
@@ -312,7 +307,7 @@ impl Circuit {
     }
 
     pub fn save(&self) -> crate::io::CircuitData {
-        let info = self.info.read().unwrap();
+        let info = self.info.read();
         crate::io::CircuitData {
             ty: self.ty.clone(),
             pos: self.pos,
@@ -320,11 +315,11 @@ impl Circuit {
                 .pins
                 .iter()
                 .filter_map(|info| {
-                    let pin = info.pin.read().unwrap();
+                    let pin = info.pin.read();
                     pin.connected_wire().map(|w| (pin.name(), w))
                 })
                 .collect(),
-            imp: self.imp.read().unwrap().save(),
+            imp: self.imp.read().save(),
             props: self.props.save(),
         }
     }
@@ -333,7 +328,7 @@ impl Circuit {
         let internal = state
             .read_circuit(self.id)
             .map(|c| {
-                let circuit = c.read().unwrap();
+                let circuit = c.read();
                 circuit
                     .internal
                     .as_ref()
@@ -345,12 +340,11 @@ impl Circuit {
         crate::io::CircuitCopyData {
             ty: self.ty.clone(),
             pos,
-            imp: self.imp.read().unwrap().save(),
+            imp: self.imp.read().save(),
             internal,
             update: state
                 .updates
                 .lock()
-                .unwrap()
                 .iter()
                 .find_map(|(id, time)| {
                     (*id == self.id).then(|| time.checked_duration_since(Instant::now()))
@@ -390,7 +384,6 @@ impl<'a> CircuitStateContext<'a> {
             self.global_state
                 .read_circuit(self.circuit.id)?
                 .read()
-                .unwrap()
                 .get_internal()?,
         ))
     }
@@ -403,7 +396,6 @@ impl<'a> CircuitStateContext<'a> {
             self.global_state
                 .get_circuit(self.circuit.id)
                 .write()
-                .unwrap()
                 .get_internal_mut(),
         )
     }
