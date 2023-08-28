@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     board::CircuitBoard,
     circuits::*,
-    containers::{FixedVec, RandomQueue},
+    containers::{FixedVec, StateEventsQueue},
     unwrap_option_or_break, unwrap_option_or_return,
     wires::*,
     Mutex, RwLock,
@@ -224,7 +224,7 @@ pub struct State {
     pub wires: Arc<RwLock<FixedVec<Arc<RwLock<WireState>>>>>,
     pub circuits: Arc<RwLock<FixedVec<Arc<RwLock<CircuitState>>>>>,
 
-    queue: Arc<Mutex<RandomQueue<UpdateTask>>>,
+    queue: Arc<Mutex<StateEventsQueue<UpdateTask>>>,
 
     #[cfg(not(feature = "single_thread"))]
     thread: Arc<RwLock<Option<StateThreadHandle>>>,
@@ -361,7 +361,7 @@ impl State {
         Self {
             wires: Arc::new(RwLock::new(FixedVec::from_option_vec(wires))),
             circuits: Arc::new(RwLock::new(FixedVec::from_option_vec(circuits))),
-            queue: Arc::new(Mutex::new(RandomQueue::from_vec(data.queue.clone()))),
+            queue: Arc::new(Mutex::new(StateEventsQueue::from_vec(data.queue.clone()))),
             #[cfg(not(feature = "single_thread"))]
             thread: Arc::new(RwLock::new(None)),
             board,
@@ -692,6 +692,7 @@ impl StateThread {
                 }
             }
 
+            thread::sleep(Duration::from_millis(1000));
             let wait = self.state.update_once(5000);
 
             match wait {

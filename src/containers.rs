@@ -1,21 +1,24 @@
 use std::{
-    collections::hash_map::RandomState,
+    collections::{hash_map::RandomState, VecDeque},
     hash::{BuildHasher, Hasher},
-    ops::{Range, Index}, mem::MaybeUninit,
+    mem::MaybeUninit,
+    ops::{Index, Range},
 };
 
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    r#const::*,
     unwrap_option_or_continue,
     vector::{Vec2isize, Vec2usize, Vector},
     Intersect,
-    r#const::*
 };
 
 #[derive(Debug, Clone)]
 pub struct FixedVec<T> {
     vec: Vec<Option<T>>,
+
+    /// None if vector is full
     first_free: Option<usize>,
 }
 
@@ -64,11 +67,12 @@ impl<T> FixedVec<T> {
     }
 
     pub fn from_option_vec(vec: Vec<Option<T>>) -> Self {
-        let first_free = vec.iter().enumerate().find(|(_, v)| v.is_none()).map(|(i, _)| i);
-        Self {
-            vec,
-            first_free,
-        }
+        let first_free = vec
+            .iter()
+            .enumerate()
+            .find(|(_, v)| v.is_none())
+            .map(|(i, _)| i);
+        Self { vec, first_free }
     }
 
     pub fn get_nth_existing_index(&self, pos: usize) -> Option<usize> {
@@ -88,7 +92,11 @@ impl<T> FixedVec<T> {
         None
     }
 
-    pub fn get_nth_existing_index_filtered(&self, pos: usize, f: impl Fn(&T) -> bool) -> Option<usize> {
+    pub fn get_nth_existing_index_filtered(
+        &self,
+        pos: usize,
+        f: impl Fn(&T) -> bool,
+    ) -> Option<usize> {
         if pos >= self.vec.len() {
             return None;
         }
@@ -234,8 +242,18 @@ impl<T> FixedVec<T> {
         self.first_free = None;
     }
 
-    fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.vec.iter().filter(|o| o.is_some()).count()
+    }
+
+    pub fn insert(&mut self, value: T) -> usize {
+        let pos = self.first_free_pos();
+        self.set(value, pos);
+        pos
+    }
+
+    pub fn next_insert_allocates(&self) -> bool {
+        self.first_free.is_none()
     }
 }
 
@@ -244,7 +262,6 @@ impl<T> From<Vec<T>> for FixedVec<T> {
         Self::new(value)
     }
 }
-
 
 pub struct FixedVecIterator<'a, T> {
     vec: &'a Vec<Option<T>>,
@@ -688,127 +705,182 @@ impl<'a, const CHUNK_SIZE: usize, T: Default> Iterator for ChunksAreaIterator<'a
     }
 }
 
-pub struct RandomQueue<T, S: BuildHasher = RandomState> {
-    vec: FixedVec<T>,
+pub struct StateEventsQueue<T, S: BuildHasher = RandomState> {
     hasher: <S as BuildHasher>::Hasher,
+
+    free_batches: Vec<FixedVec<T>>,
+    enqueue_batch: Option<FixedVec<T>>,
+    dequeue_batch: Option<FixedVec<T>>,
+    batch_queue: VecDeque<FixedVec<T>>,
 }
 
-impl<T: Serialize, H: BuildHasher> Serialize for RandomQueue<T, H> {
+impl<T: Serialize, H: BuildHasher> Serialize for StateEventsQueue<T, H> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
-        S: serde::Serializer {
-        self.vec.inner().serialize(serializer)
+        S: serde::Serializer,
+    {
+        serializer.collect_seq(self.iter())
     }
 }
 
-impl<T, S: Default + BuildHasher> Default for RandomQueue<T, S> {
+impl<T, S: Default + BuildHasher> Default for StateEventsQueue<T, S> {
     fn default() -> Self {
         Self::with_hasher(&Default::default())
     }
 }
 
-impl<T> RandomQueue<T> {
-    pub fn new() -> RandomQueue<T, RandomState> {
+impl<T> StateEventsQueue<T> {
+    pub fn new() -> StateEventsQueue<T, RandomState> {
         Default::default()
     }
 
-    pub fn from_vec(vec: Vec<T>) -> RandomQueue<T, RandomState> {
-        Self {
-            vec: vec.into(),
-            ..Default::default()
+    pub fn from_vec(mut vec: Vec<T>) -> StateEventsQueue<T, RandomState> {
+        let mut queue = Self::default();
+
+        while vec.len() >= Self::BATCH_SIZE {
+            let mut batch = Vec::with_capacity(16);
+            let start = vec.len() - Self::BATCH_SIZE;
+            batch.extend(vec.drain(start..).map(Some));
+            queue
+                .batch_queue
+                .push_back(FixedVec::from_option_vec(batch));
         }
+
+        if !vec.is_empty() {
+            let mut batch = Vec::with_capacity(16);
+            batch.extend(vec.drain(..).map(Some));
+            queue
+                .batch_queue
+                .push_back(FixedVec::from_option_vec(batch));
+        }
+
+        queue
     }
 }
 
-impl<T, S: BuildHasher> RandomQueue<T, S> {
+impl<T, S: BuildHasher> StateEventsQueue<T, S> {
+    const BATCH_SIZE: usize = 640;
+
     pub fn with_hasher(hash_builder: &S) -> Self {
         Self {
-            vec: vec![].into(),
             hasher: hash_builder.build_hasher(),
+            free_batches: Default::default(),
+            enqueue_batch: Default::default(),
+            dequeue_batch: Default::default(),
+            batch_queue: Default::default(),
         }
     }
 
     pub fn enqueue(&mut self, value: T) {
-        let pos = self.vec.first_free_pos();
-        self.vec.set(value, pos);
+        let batch = self.enqueue_batch.get_or_insert_with(|| {
+            self.free_batches
+                .pop()
+                .unwrap_or_else(|| Vec::with_capacity(Self::BATCH_SIZE).into())
+        });
+        let pos = batch.insert(value);
         self.hasher.write_usize(pos);
+        if batch.next_insert_allocates() {
+            let batch = self.enqueue_batch.take().unwrap();
+            self.batch_queue.push_back(batch);
+            self.hasher.write_usize(self.batch_queue.len());
+        }
     }
 
     pub fn dequeue(&mut self) -> Option<T> {
-        if self.vec.is_empty() {
+        if self.enqueue_batch.is_none()
+            && self.dequeue_batch.is_none()
+            && self.batch_queue.is_empty()
+        {
             return None;
         }
 
-        let len = self.vec.iter().count();
-        assert_ne!(len, 0, "FixedVec::is_empty() is false with zero length");
-
-        let pos = (self.hasher.finish() % len as u64) as usize;
-        let real_pos = match self.vec.get_nth_existing_index(pos) {
-            Some(v) => v,
-            None => unreachable!(
-                "Queue length ({}) does not match internal vector ({})!",
-                len,
-                self.vec.iter().count()
-            ),
-        };
-        let item = match self.vec.remove(real_pos) {
-            Some(v) => v,
-            None => unreachable!(),
-        };
-        self.hasher.write_usize(pos);
-        Some(item)
-    }
-
-    pub fn dequeue_filtered(&mut self, f: impl Fn(&T) -> bool) -> Option<T> {
-        if self.vec.is_empty() {
-            return None;
+        if self.dequeue_batch.is_none() {
+            if let Some(batch) = self.batch_queue.pop_front() {
+                self.dequeue_batch = Some(batch);
+            }
         }
 
-        let len = self.vec.iter().filter(|v| f(*v)).count();
-        if len == 0 {
-            return None;
+        if self.dequeue_batch.is_none() {
+            self.dequeue_batch = self.enqueue_batch.take();
         }
 
-        let pos = (self.hasher.finish() % len as u64) as usize;
-        let real_pos = match self.vec.get_nth_existing_index_filtered(pos, f) {
-            Some(v) => v,
-            None => unreachable!(
-                "Queue length ({}) does not match internal vector ({})!",
-                len,
-                self.vec.iter().count()
-            ),
-        };
-        let item = match self.vec.remove(real_pos) {
-            Some(v) => v,
-            None => unreachable!(),
-        };
-        self.hasher.write_usize(pos);
-        Some(item)
+        if let Some(batch) = &mut self.dequeue_batch {
+            let pos = (self.hasher.finish() % batch.len() as u64) as usize;
+            let realpos = batch.get_nth_existing_index(pos);
+            let result = realpos.and_then(|pos| batch.remove(pos));
+
+            if let Some(pos) = realpos {
+                self.hasher.write_usize(pos);
+            }
+
+            if batch.is_empty() {
+                let batch = self.dequeue_batch.take().unwrap();
+                self.free_batches.push(batch);
+                self.hasher.write_usize(self.batch_queue.len());
+            }
+            return result;
+        }
+
+        unreachable!()
+
+        // let len = self.vec.iter().count();
+        // assert_ne!(len, 0, "FixedVec::is_empty() is false with zero length");
+
+        // let pos = (self.hasher.finish() % len as u64) as usize;
+        // let real_pos = match self.vec.get_nth_existing_index(pos) {
+        //     Some(v) => v,
+        //     None => unreachable!(
+        //         "Queue length ({}) does not match internal vector ({})!",
+        //         len,
+        //         self.vec.iter().count()
+        //     ),
+        // };
+        // let item = match self.vec.remove(real_pos) {
+        //     Some(v) => v,
+        //     None => unreachable!(),
+        // };
+        // self.hasher.write_usize(pos);
+        // Some(item)
     }
 
     pub fn clear(&mut self) {
-        self.vec.clear();
+        if let Some(mut batch) = self.enqueue_batch.take() {
+            batch.clear();
+            self.free_batches.push(batch);
+        }
+        if let Some(mut batch) = self.dequeue_batch.take() {
+            batch.clear();
+            self.free_batches.push(batch);
+        }
+        for mut batch in self.batch_queue.drain(..) {
+            batch.clear();
+            self.free_batches.push(batch);
+        }
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &T> {
-        self.vec.iter()
+        let deq_iter = self.dequeue_batch.iter().flat_map(|b| b.iter());
+        let enq_iter = self.enqueue_batch.iter().flat_map(|b| b.iter());
+        let queue_iter = self.batch_queue.iter().flat_map(|b| b.iter());
+
+        deq_iter.chain(queue_iter).chain(enq_iter)
     }
 
     pub fn len(&self) -> usize {
-        self.vec.len()
+        self.dequeue_batch.as_ref().map_or(0, |b| b.len())
+            + self.enqueue_batch.as_ref().map_or(0, |b| b.len())
+            + self.batch_queue.iter().map(|b| b.len()).sum::<usize>()
     }
 }
 
 pub struct ConstRingBuffer<const SIZE: usize, T> {
     array: [MaybeUninit<T>; SIZE],
 
-    /// Points to position after last valid item 
+    /// Points to position after last valid item
     pos: usize,
-    len: usize
-
-    //    /---len---\
-    // ---###########------
-    //               ^- pos 
+    len: usize, //    /---len---\
+                // ---###########------
+                //               ^- pos
 }
 
 #[allow(clippy::uninit_assumed_init)]
@@ -833,9 +905,9 @@ impl<T, const SIZE: usize> ConstRingBuffer<SIZE, T> {
     pub fn as_slice(&self) -> Option<&[T]> {
         if self.pos >= self.len {
             let start = self.pos - self.len;
-            Some(unsafe { std::mem::transmute(&self.array[start..start+self.len]) })
+            Some(unsafe { std::mem::transmute(&self.array[start..start + self.len]) })
         } else if self.pos == 0 {
-            Some(unsafe { std::mem::transmute(&self.array[SIZE-self.len..]) })
+            Some(unsafe { std::mem::transmute(&self.array[SIZE - self.len..]) })
         } else {
             None
         }
@@ -844,9 +916,9 @@ impl<T, const SIZE: usize> ConstRingBuffer<SIZE, T> {
     pub fn as_mut_slice(&mut self) -> Option<&mut [T]> {
         if self.pos >= self.len {
             let start = self.pos - self.len;
-            Some(unsafe { std::mem::transmute(&mut self.array[start..start+self.len]) })
+            Some(unsafe { std::mem::transmute(&mut self.array[start..start + self.len]) })
         } else if self.pos == 0 {
-            Some(unsafe { std::mem::transmute(&mut self.array[SIZE-self.len..]) })
+            Some(unsafe { std::mem::transmute(&mut self.array[SIZE - self.len..]) })
         } else {
             None
         }
@@ -854,7 +926,10 @@ impl<T, const SIZE: usize> ConstRingBuffer<SIZE, T> {
 }
 
 #[allow(unused)]
-impl<T, const SIZE: usize> ConstRingBuffer<SIZE, T> where Bool<{SIZE > 0}>: True {
+impl<T, const SIZE: usize> ConstRingBuffer<SIZE, T>
+where
+    Bool<{ SIZE > 0 }>: True,
+{
     pub fn push_back(&mut self, value: T) {
         if self.len >= SIZE {
             unsafe { self.array[self.pos].assume_init_drop() }
@@ -895,7 +970,12 @@ impl<T, const SIZE: usize> ConstRingBuffer<SIZE, T> where Bool<{SIZE > 0}>: True
 
     pub fn iter(&self) -> ConstRingBufferRefIterator<'_, T> {
         let start = (self.pos + SIZE - self.len) % SIZE;
-        ConstRingBufferRefIterator { buf: unsafe { std::mem::transmute(self.array.as_ref()) }, start, len: self.len, pos: 0 }
+        ConstRingBufferRefIterator {
+            buf: unsafe { std::mem::transmute(self.array.as_ref()) },
+            start,
+            len: self.len,
+            pos: 0,
+        }
     }
 }
 
