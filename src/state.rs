@@ -7,14 +7,14 @@ use std::{
 #[cfg(not(feature = "single_thread"))]
 use std::thread::{self, JoinHandle};
 
-use crate::{time::Instant, Condvar};
+use crate::{time::Instant, Condvar, containers::Queue};
 use eframe::epaint::Color32;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     board::CircuitBoard,
     circuits::*,
-    containers::{FixedVec, RandomQueue},
+    containers::FixedVec,
     unwrap_option_or_break, unwrap_option_or_return,
     wires::*,
     Mutex, RwLock,
@@ -217,6 +217,12 @@ impl StateCollection {
             state.poke_thread(false, false);
         }
     }
+
+    pub fn set_ordered(&self, ordered: bool) {
+        for state in self.states.read().iter() {
+            state.set_ordered(ordered);
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -224,7 +230,7 @@ pub struct State {
     pub wires: Arc<RwLock<FixedVec<Arc<RwLock<WireState>>>>>,
     pub circuits: Arc<RwLock<FixedVec<Arc<RwLock<CircuitState>>>>>,
 
-    queue: Arc<Mutex<RandomQueue<UpdateTask>>>,
+    queue: Arc<Mutex<Queue<UpdateTask>>>,
 
     #[cfg(not(feature = "single_thread"))]
     thread: Arc<RwLock<Option<StateThreadHandle>>>,
@@ -237,10 +243,11 @@ pub struct State {
 
 impl State {
     pub fn new(board: Arc<RwLock<CircuitBoard>>) -> Self {
+        let ordered = board.read().is_ordered_queue();
         Self {
             wires: Default::default(),
             circuits: Default::default(),
-            queue: Default::default(),
+            queue: Arc::new(Mutex::new(Queue::new(vec![], ordered))),
             #[cfg(not(feature = "single_thread"))]
             thread: Default::default(),
             board,
@@ -358,10 +365,11 @@ impl State {
             .map(|(id, dur)| (*id, dur.map(|d| now + d).unwrap_or(now)))
             .collect();
 
+        let ordered = board.read().is_ordered_queue();
         Self {
             wires: Arc::new(RwLock::new(FixedVec::from_option_vec(wires))),
             circuits: Arc::new(RwLock::new(FixedVec::from_option_vec(circuits))),
-            queue: Arc::new(Mutex::new(RandomQueue::from_vec(data.queue.clone()))),
+            queue: Arc::new(Mutex::new(Queue::new(data.queue.clone(), ordered))),
             #[cfg(not(feature = "single_thread"))]
             thread: Arc::new(RwLock::new(None)),
             board,
@@ -392,6 +400,10 @@ impl State {
     pub fn reset_circuit(&self, circuit: usize) {
         self.circuits.write().remove(circuit);
         self.set_circuit_update_interval(circuit, None);
+    }
+
+    pub fn set_ordered(&self, ordered: bool) {
+        self.queue.lock().set_ordered(ordered);
     }
 
     fn schedule_update(&self, task: UpdateTask) {
@@ -456,10 +468,10 @@ impl State {
 
         while !nearest_update.is_some_and(|nu| nu <= Instant::now()) && queue_counter < queue_limit
         {
+            let board = self.board.read();
             let deq = { self.queue.lock().dequeue() };
             let task = unwrap_option_or_break!(deq);
 
-            let board = self.board.read();
             match task {
                 UpdateTask::WireState {
                     id,
@@ -692,7 +704,7 @@ impl StateThread {
                 }
             }
 
-            let wait = self.state.update_once(5000);
+            let wait = self.state.update_once(200);
 
             match wait {
                 Some(nu) => {

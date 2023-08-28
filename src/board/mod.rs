@@ -39,6 +39,7 @@ pub struct CircuitBoard {
 
     // RwLock for blocking simulation while modifying board
     pub sim_lock: Arc<RwLock<()>>,
+    ordered_queue: bool
 }
 
 impl CircuitBoard {
@@ -48,6 +49,7 @@ impl CircuitBoard {
             circuits: vec![].into(),
             states: StateCollection::new(),
             sim_lock: Default::default(),
+            ordered_queue: false
         }
     }
 
@@ -160,7 +162,8 @@ impl CircuitBoard {
     }
 
     pub fn save(&self) -> crate::io::CircuitBoardData {
-        crate::io::CircuitBoardData {
+        let sim_lock = self.sim_lock.write();
+        let data = crate::io::CircuitBoardData {
             wires: self
                 .wires
                 .inner()
@@ -181,7 +184,10 @@ impl CircuitBoard {
                 .iter()
                 .map(|s| s.as_ref().map(|s| s.save()))
                 .collect(),
-        }
+            ordered: self.ordered_queue
+        };
+        drop(sim_lock);
+        data
     }
 
     pub fn load(
@@ -230,6 +236,7 @@ impl CircuitBoard {
             circuits,
             states: StateCollection::new(),
             sim_lock: Default::default(),
+            ordered_queue: data.ordered
         };
         let board = Arc::new(RwLock::new(board));
 
@@ -243,6 +250,17 @@ impl CircuitBoard {
         board.write().states = states;
 
         board
+    }
+
+    pub fn is_ordered_queue(&self) -> bool {
+        self.ordered_queue
+    }
+
+    pub fn set_ordered_queue(&mut self, ordered: bool, lock_sim: bool) {
+        let sim_lock = lock_sim.then(|| self.sim_lock.write());
+        self.states.set_ordered(ordered);
+        self.ordered_queue = ordered;
+        drop(sim_lock);
     }
 
     // Run board simulation after loading. Not required on newly created or empty boards

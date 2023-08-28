@@ -176,7 +176,17 @@ impl eframe::App for App {
 }
 
 static INVENTORY_CIRCUIT_ORDER: &[&str] = &[
-    "button", "or", "nor", "and", "nand", "xor", "xnor", "not", "pullup", "freq_meter", "test",
+    "button",
+    "or",
+    "nor",
+    "and",
+    "nand",
+    "xor",
+    "xnor",
+    "not",
+    "pullup",
+    "freq_meter",
+    "test",
 ];
 
 impl App {
@@ -502,10 +512,33 @@ impl App {
                 }
                 drop(board);
                 for (circuit, old) in vec {
-                    self.board.circuit_property_changed(circuit, "dir", old.as_ref());
+                    self.board
+                        .circuit_property_changed(circuit, "dir", old.as_ref());
                 }
             }
         }
+
+        // TODO: deadlock if queue is not empty
+        // if ctx.egui_ctx.input(|input| input.key_pressed(Key::Q))
+        //     && (ctx.egui_ctx.input(|input| input.modifiers.shift)
+        //         || self
+        //             .board
+        //             .board
+        //             .read()
+        //             .states
+        //             .states()
+        //             .read()
+        //             .iter()
+        //             .all(|s| s.queue_len() == 0))
+        // {
+        //     let sim_lock = self.board.board.read().sim_lock.clone();
+        //     let sim_lock = sim_lock.write();
+
+        //     let mut board = self.board.board.write();
+        //     let ordered = board.is_ordered_queue();
+        //     board.set_ordered_queue(!ordered, false);
+        //     drop(sim_lock);
+        // }
 
         self.board.update(&ctx, selected_item, self.debug);
 

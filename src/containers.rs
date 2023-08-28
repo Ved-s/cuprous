@@ -1,16 +1,17 @@
 use std::{
-    collections::hash_map::RandomState,
+    collections::{hash_map::RandomState, VecDeque, vec_deque},
     hash::{BuildHasher, Hasher},
-    ops::{Range, Index}, mem::MaybeUninit,
+    mem::MaybeUninit,
+    ops::{Bound, Index, Range, RangeBounds},
 };
 
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    r#const::*,
     unwrap_option_or_continue,
     vector::{Vec2isize, Vec2usize, Vector},
     Intersect,
-    r#const::*
 };
 
 #[derive(Debug, Clone)]
@@ -64,11 +65,12 @@ impl<T> FixedVec<T> {
     }
 
     pub fn from_option_vec(vec: Vec<Option<T>>) -> Self {
-        let first_free = vec.iter().enumerate().find(|(_, v)| v.is_none()).map(|(i, _)| i);
-        Self {
-            vec,
-            first_free,
-        }
+        let first_free = vec
+            .iter()
+            .enumerate()
+            .find(|(_, v)| v.is_none())
+            .map(|(i, _)| i);
+        Self { vec, first_free }
     }
 
     pub fn get_nth_existing_index(&self, pos: usize) -> Option<usize> {
@@ -88,7 +90,11 @@ impl<T> FixedVec<T> {
         None
     }
 
-    pub fn get_nth_existing_index_filtered(&self, pos: usize, f: impl Fn(&T) -> bool) -> Option<usize> {
+    pub fn get_nth_existing_index_filtered(
+        &self,
+        pos: usize,
+        f: impl Fn(&T) -> bool,
+    ) -> Option<usize> {
         if pos >= self.vec.len() {
             return None;
         }
@@ -148,9 +154,7 @@ impl<T> FixedVec<T> {
 
         if pos == self.vec.len() - 1 {
             self.vec.remove(pos);
-            while !self.vec.is_empty() && self.vec[self.vec.len() - 1].is_none() {
-                self.vec.remove(self.vec.len() - 1);
-            }
+            self.strip_inner();
             if let Some(v) = self.first_free {
                 if v >= self.vec.len() {
                     self.first_free = None;
@@ -161,6 +165,12 @@ impl<T> FixedVec<T> {
         self.test_free_correct();
 
         value
+    }
+
+    fn strip_inner(&mut self) {
+        while !self.vec.is_empty() && self.vec[self.vec.len() - 1].is_none() {
+            self.vec.remove(self.vec.len() - 1);
+        }
     }
 
     pub fn exists(&self, pos: usize) -> bool {
@@ -237,6 +247,33 @@ impl<T> FixedVec<T> {
     fn len(&self) -> usize {
         self.vec.iter().filter(|o| o.is_some()).count()
     }
+
+    pub fn drain(&mut self, range: impl RangeBounds<usize>) -> FixedVecDrain<'_, T> {
+        let start = match range.start_bound() {
+            Bound::Included(i) => *i,
+            Bound::Excluded(e) => *e + 1,
+            Bound::Unbounded => 0,
+        };
+        let end = match range.end_bound() {
+            Bound::Included(i) => *i + 1,
+            Bound::Excluded(e) => *e,
+            Bound::Unbounded => self.vec.len(),
+        };
+        if end > self.vec.len() {
+            panic!("invalid: end {end} > length {}", self.vec.len());
+        }
+        if end < start {
+            panic!("invalid: end {end} < start {start}");
+        }
+        let len = end - start;
+
+        FixedVecDrain {
+            vec: self,
+            start,
+            len,
+            pos: 0,
+        }
+    }
 }
 
 impl<T> From<Vec<T>> for FixedVec<T> {
@@ -245,6 +282,52 @@ impl<T> From<Vec<T>> for FixedVec<T> {
     }
 }
 
+pub struct FixedVecDrain<'a, T> {
+    vec: &'a mut FixedVec<T>,
+    start: usize,
+    len: usize,
+    pos: usize,
+}
+
+impl<T> Drop for FixedVecDrain<'_, T> {
+    fn drop(&mut self) {
+        if self.pos >= self.len {
+            return;
+        }
+
+        for i in self.start+self.pos..self.start+self.len {
+            self.vec.vec[i] = None;
+        }
+        self.vec.strip_inner();
+        self.vec.first_free = match self.vec.first_free {
+            None => None,
+            Some(ff) => {
+                let ff = ff.min(self.start);
+                if ff >= self.vec.vec.len() {
+                    None
+                }
+                else {
+                    Some(ff)
+                }
+            },
+        }
+    }
+}
+
+impl<T> Iterator for FixedVecDrain<'_, T> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.pos < self.len {
+            match self.vec.remove(self.pos) {
+                Some(v) => return Some(v),
+                None => continue,
+            }
+        }
+
+        None
+    }
+}
 
 pub struct FixedVecIterator<'a, T> {
     vec: &'a Vec<Option<T>>,
@@ -696,7 +779,8 @@ pub struct RandomQueue<T, S: BuildHasher = RandomState> {
 impl<T: Serialize, H: BuildHasher> Serialize for RandomQueue<T, H> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
-        S: serde::Serializer {
+        S: serde::Serializer,
+    {
         self.vec.inner().serialize(serializer)
     }
 }
@@ -717,6 +801,17 @@ impl<T> RandomQueue<T> {
             vec: vec.into(),
             ..Default::default()
         }
+    }
+
+    pub fn from_option_vec(vec: Vec<Option<T>>) -> RandomQueue<T, RandomState> {
+        Self {
+            vec: FixedVec::from_option_vec(vec),
+            ..Default::default()
+        }
+    }
+
+    pub(crate) fn drain(&mut self) -> FixedVecDrain<'_, T> {
+        self.vec.drain(..)
     }
 }
 
@@ -759,38 +854,11 @@ impl<T, S: BuildHasher> RandomQueue<T, S> {
         Some(item)
     }
 
-    pub fn dequeue_filtered(&mut self, f: impl Fn(&T) -> bool) -> Option<T> {
-        if self.vec.is_empty() {
-            return None;
-        }
-
-        let len = self.vec.iter().filter(|v| f(*v)).count();
-        if len == 0 {
-            return None;
-        }
-
-        let pos = (self.hasher.finish() % len as u64) as usize;
-        let real_pos = match self.vec.get_nth_existing_index_filtered(pos, f) {
-            Some(v) => v,
-            None => unreachable!(
-                "Queue length ({}) does not match internal vector ({})!",
-                len,
-                self.vec.iter().count()
-            ),
-        };
-        let item = match self.vec.remove(real_pos) {
-            Some(v) => v,
-            None => unreachable!(),
-        };
-        self.hasher.write_usize(pos);
-        Some(item)
-    }
-
     pub fn clear(&mut self) {
         self.vec.clear();
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &T> {
+    pub fn iter(&self) -> FixedVecIterator<'_, T> {
         self.vec.iter()
     }
 
@@ -802,13 +870,11 @@ impl<T, S: BuildHasher> RandomQueue<T, S> {
 pub struct ConstRingBuffer<const SIZE: usize, T> {
     array: [MaybeUninit<T>; SIZE],
 
-    /// Points to position after last valid item 
+    /// Points to position after last valid item
     pos: usize,
-    len: usize
-
-    //    /---len---\
-    // ---###########------
-    //               ^- pos 
+    len: usize, //    /---len---\
+                // ---###########------
+                //               ^- pos
 }
 
 #[allow(clippy::uninit_assumed_init)]
@@ -833,9 +899,9 @@ impl<T, const SIZE: usize> ConstRingBuffer<SIZE, T> {
     pub fn as_slice(&self) -> Option<&[T]> {
         if self.pos >= self.len {
             let start = self.pos - self.len;
-            Some(unsafe { std::mem::transmute(&self.array[start..start+self.len]) })
+            Some(unsafe { std::mem::transmute(&self.array[start..start + self.len]) })
         } else if self.pos == 0 {
-            Some(unsafe { std::mem::transmute(&self.array[SIZE-self.len..]) })
+            Some(unsafe { std::mem::transmute(&self.array[SIZE - self.len..]) })
         } else {
             None
         }
@@ -844,9 +910,9 @@ impl<T, const SIZE: usize> ConstRingBuffer<SIZE, T> {
     pub fn as_mut_slice(&mut self) -> Option<&mut [T]> {
         if self.pos >= self.len {
             let start = self.pos - self.len;
-            Some(unsafe { std::mem::transmute(&mut self.array[start..start+self.len]) })
+            Some(unsafe { std::mem::transmute(&mut self.array[start..start + self.len]) })
         } else if self.pos == 0 {
-            Some(unsafe { std::mem::transmute(&mut self.array[SIZE-self.len..]) })
+            Some(unsafe { std::mem::transmute(&mut self.array[SIZE - self.len..]) })
         } else {
             None
         }
@@ -854,7 +920,10 @@ impl<T, const SIZE: usize> ConstRingBuffer<SIZE, T> {
 }
 
 #[allow(unused)]
-impl<T, const SIZE: usize> ConstRingBuffer<SIZE, T> where Bool<{SIZE > 0}>: True {
+impl<T, const SIZE: usize> ConstRingBuffer<SIZE, T>
+where
+    Bool<{ SIZE > 0 }>: True,
+{
     pub fn push_back(&mut self, value: T) {
         if self.len >= SIZE {
             unsafe { self.array[self.pos].assume_init_drop() }
@@ -895,7 +964,12 @@ impl<T, const SIZE: usize> ConstRingBuffer<SIZE, T> where Bool<{SIZE > 0}>: True
 
     pub fn iter(&self) -> ConstRingBufferRefIterator<'_, T> {
         let start = (self.pos + SIZE - self.len) % SIZE;
-        ConstRingBufferRefIterator { buf: unsafe { std::mem::transmute(self.array.as_ref()) }, start, len: self.len, pos: 0 }
+        ConstRingBufferRefIterator {
+            buf: unsafe { std::mem::transmute(self.array.as_ref()) },
+            start,
+            len: self.len,
+            pos: 0,
+        }
     }
 }
 
@@ -995,5 +1069,84 @@ mod test {
         assert_eq!(buf[1], 3);
         assert_eq!(buf[2], 4);
         assert_eq!(buf[3], 5);
+    }
+}
+
+
+pub enum Queue<T> {
+    Random(RandomQueue<T>),
+    Ordered(VecDeque<T>)
+}
+
+impl<T> Queue<T> {
+    pub fn new(vec: Vec<T>, ordered: bool) -> Self {
+        match ordered {
+            true => Self::Ordered(VecDeque::from(vec)),
+            false => Self::Random(RandomQueue::from_vec(vec)),
+        }
+    }
+
+    pub fn clear(&mut self) {
+        match self {
+            Queue::Random(r) => r.clear(),
+            Queue::Ordered(o) => o.clear(),
+        }
+    }
+
+    pub fn enqueue(&mut self, value: T) {
+        match self {
+            Queue::Random(r) => r.enqueue(value),
+            Queue::Ordered(o) => o.push_back(value),
+        }
+    }
+
+    pub fn dequeue(&mut self) -> Option<T> {
+        match self {
+            Queue::Random(r) => r.dequeue(),
+            Queue::Ordered(o) => o.pop_front(),
+        }
+    }
+
+    pub fn set_ordered(&mut self, ordered: bool) {
+        if ordered {
+            if let Queue::Random(r) = self {
+                let vec: Vec<T> = r.drain().collect();
+                *self = Queue::Ordered(VecDeque::from(vec))
+            }
+        }
+        else if let Queue::Ordered(o) = self {
+            let v = o.drain(..).map(Some).collect();
+            *self = Queue::Random(RandomQueue::from_option_vec(v))
+        }
+    }
+
+    pub fn iter(&self) -> QueueIter<'_, T> {
+        match self {
+            Queue::Random(r) => QueueIter::FixedVec(r.iter()),
+            Queue::Ordered(o) => QueueIter::VecDeque(o.iter()),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        match self {
+            Queue::Random(v) => v.len(),
+            Queue::Ordered(v) => v.len(),
+        }
+    }
+}
+
+pub enum QueueIter<'a, T> {
+    FixedVec(FixedVecIterator<'a, T>),
+    VecDeque(vec_deque::Iter<'a, T>)
+}
+
+impl<'a, T> Iterator for QueueIter<'a, T> {
+    type Item = &'a T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            QueueIter::FixedVec(i) => i.next(),
+            QueueIter::VecDeque(i) => i.next(),
+        }
     }
 }

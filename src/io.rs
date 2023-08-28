@@ -77,6 +77,9 @@ pub struct CircuitBoardData {
     pub wires: Vec<Option<WireData>>,
     pub circuits: Vec<Option<CircuitData>>,
     pub states: Vec<Option<StateData>>,
+
+    #[serde(default)]
+    pub ordered: bool
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
