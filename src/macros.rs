@@ -16,6 +16,12 @@ macro_rules! unwrap_option_or_break {
             None => break
         }
     };
+    ($e:expr, $suf:tt) => {
+        match $e {
+            Some(v) => v,
+            None => break $suf
+        }
+    };
 }
 
 #[macro_export]

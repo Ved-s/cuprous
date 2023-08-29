@@ -7,7 +7,7 @@ use std::{
 #[cfg(not(feature = "single_thread"))]
 use std::thread::{self, JoinHandle};
 
-use crate::{time::Instant, Condvar};
+use crate::time::Instant;
 use eframe::epaint::Color32;
 use serde::{Deserialize, Serialize};
 
@@ -613,7 +613,7 @@ impl State {
         }
 
         let clone = self.clone();
-        let sync = Arc::new((Condvar::new(), Mutex::new(false)));
+        let sync = Arc::new((parking_lot::Condvar::new(), parking_lot::Mutex::new(false)));
         let sync_clone = sync.clone();
         let handle = thread::spawn(move || {
             StateThread::new(clone, sync_clone).run();
@@ -669,18 +669,18 @@ impl Drop for State {
 #[cfg(not(feature = "single_thread"))]
 struct StateThreadHandle {
     handle: JoinHandle<()>,
-    sync: Arc<(Condvar, Mutex<bool>)>,
+    sync: Arc<(parking_lot::Condvar, parking_lot::Mutex<bool>)>,
 }
 
 #[cfg(not(feature = "single_thread"))]
 struct StateThread {
     state: State,
-    sync: Arc<(Condvar, Mutex<bool>)>,
+    sync: Arc<(parking_lot::Condvar, parking_lot::Mutex<bool>)>,
 }
 
 #[cfg(not(feature = "single_thread"))]
 impl StateThread {
-    pub fn new(state: State, sync: Arc<(Condvar, Mutex<bool>)>) -> Self {
+    pub fn new(state: State, sync: Arc<(parking_lot::Condvar, parking_lot::Mutex<bool>)>) -> Self {
         Self { state, sync }
     }
 
