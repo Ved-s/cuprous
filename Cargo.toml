@@ -28,3 +28,4 @@ lto = true
 [features]
 single_thread = []
 wasm = ["single_thread"]
+deadlock_detection = []

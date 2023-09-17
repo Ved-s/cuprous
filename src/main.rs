@@ -50,7 +50,7 @@ mod board;
 #[macro_use]
 mod macros;
 
-#[cfg(debug_deadlocks)]
+#[cfg(all(feature = "deadlock_detection", not(feature = "single_thread")))]
 mod debug;
 
 mod app;
@@ -60,13 +60,15 @@ mod path;
 mod time;
 mod ui;
 
-#[cfg(debug_deadlocks)]
+#[cfg(all(feature = "deadlock_detection", not(feature = "single_thread")))]
 type RwLock<T> = debug::DebugRwLock<T>;
+#[cfg(all(feature = "deadlock_detection", not(feature = "single_thread")))]
+type Mutex<T> = debug::DebugMutex<T>;
 
-#[cfg(not(debug_deadlocks))]
+#[cfg(any(not(feature = "deadlock_detection"), feature = "single_thread"))]
 type RwLock<T> = parking_lot::RwLock<T>;
+#[cfg(any(not(feature = "deadlock_detection"), feature = "single_thread"))]
 type Mutex<T> = parking_lot::Mutex<T>;
-type Condvar = parking_lot::Condvar;
 
 struct BasicLoadingContext<'a, K: Borrow<str> + Eq + Hash> {
     previews: &'a HashMap<K, Arc<CircuitPreview>>,

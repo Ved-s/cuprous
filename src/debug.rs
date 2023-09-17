@@ -1,57 +1,481 @@
 use std::{
-    cell::RefCell,
     collections::HashMap,
+    fmt::Debug,
     ops::{Deref, DerefMut},
     panic::Location,
     sync::{
         atomic::{AtomicU64, Ordering},
-        LockResult, PoisonError
+        mpsc::{sync_channel, Receiver, SyncSender},
+        Arc,
     },
+    thread::ThreadId,
 };
 
-use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use eframe::epaint::ahash::HashSet;
+use parking_lot::*;
 use serde::{Deserialize, Serialize};
 
-use crate::containers::FixedVec;
+static OBJECT_ID: AtomicU64 = AtomicU64::new(0);
 
-static DRWLOCK_ID: AtomicU64 = AtomicU64::new(0);
-
-enum LockType {
-    None,
-    Read(FixedVec<Location<'static>>),
-    Write(Location<'static>),
+fn new_object_id() -> u64 {
+    OBJECT_ID.fetch_add(1, Ordering::Relaxed)
 }
 
-thread_local! {
-    static LOCK_MAP: RefCell<Option<HashMap<u64, LockType>>> = RefCell::new(None);
+#[derive(Default)]
+struct ObjectLocks {
+    locations: HashMap<Location<'static>, ThreadId>,
+    shared: bool,
 }
 
-fn access_map<R>(accessor: impl FnOnce(&mut HashMap<u64, LockType>) -> R) -> R {
-    LOCK_MAP.with(|opt| {
-        let mut opt = opt.borrow_mut();
-        accessor(opt.get_or_insert(HashMap::new()))
-    })
+static THREAD_SENDER: RwLock<Option<Arc<SyncSender<ObjectLockAck>>>> = RwLock::new(None);
+
+#[derive(Debug, Clone, Copy)]
+enum ObjectAction {
+    Request { shared: bool },
+    Acquire { shared: bool },
+    Unlock,
 }
 
-pub struct DebugRwLock<T: ?Sized> {
+struct ObjectLockAck {
     id: u64,
+    location: Location<'static>,
+    action: ObjectAction,
+    thread: ThreadId,
+}
 
+fn ack_object(ack: ObjectLockAck) {
+    let sender_opt = THREAD_SENDER.read();
+
+    let sender = match sender_opt.deref() {
+        Some(s) => s.clone(),
+        None => {
+            drop(sender_opt);
+            create_thread(false)
+        }
+    };
+
+    let err = sender.send(ack).err();
+    let ack = unwrap_option_or_return!(err).0;
+
+    let sender = create_thread(true);
+    let err = sender.send(ack).is_err(); // If it errors, whatever, something is wrong with the thread
+
+    if err {
+        println!("[deadlock_detection] epic thread fail")
+    }
+}
+
+fn create_thread(force_recreation: bool) -> Arc<SyncSender<ObjectLockAck>> {
+    fn create_thread_inner() -> Arc<SyncSender<ObjectLockAck>> {
+        let (send, recv) = sync_channel(16);
+        std::thread::Builder::new()
+            .name("deadlock detection".into())
+            .spawn(move || {
+                println!("[deadlock_detection] thread begin");
+                watcher_thread(recv);
+                println!("[deadlock_detection] thread end");
+            })
+            .expect("failed to spawn deadlock detection thread");
+        Arc::new(send)
+    }
+
+    let mut sender_opt = THREAD_SENDER.write();
+    let arc = match force_recreation {
+        true => sender_opt.insert(create_thread_inner()),
+        false => sender_opt.get_or_insert_with(create_thread_inner),
+    };
+
+    arc.clone()
+}
+
+fn watcher_thread(recv: Receiver<ObjectLockAck>) {
+    let mut object_map = HashMap::<u64, ObjectLocks>::new();
+
+    let mut thread_locks = HashMap::<ThreadId, HashSet<u64>>::new();
+    let mut thread_waits = HashMap::<ThreadId, u64>::new();
+
+    'main: loop {
+        let ack = match recv.recv() {
+            Ok(a) => a,
+            Err(_) => {
+                println!("[deadlock_detection] receiver broke");
+                return;
+            }
+        };
+
+        // println!(
+        //     "{:?} object {} at {:?}, {}",
+        //     ack.action, ack.id, ack.thread, ack.location
+        // );
+
+        let object_locks = object_map.entry(ack.id).or_default();
+
+        match ack.action {
+            ObjectAction::Request { shared } => 'mat: {
+                let locks = thread_locks.entry(ack.thread).or_default();
+
+                if locks.contains(&ack.id)
+                    && (!object_locks.shared || !shared || shared != object_locks.shared)
+                {
+                    let thread = ack.thread;
+                    let ack_id = ack.id;
+                    let ack_loc = ack.location;
+
+                    let other_lock = object_locks.locations.iter().find_map(|(loc, thread)| (*thread == ack.thread).then_some(loc));
+
+                    match other_lock {
+                        Some(loc) => println!(
+"[deadlock_detection] possible deadlock:
+ {thread:?} tries to lock object {ack_id} at {ack_loc}, and at {loc}"),
+                        None => println!(
+"[deadlock_detection] possible deadlock:
+ {thread:?} tries to lock object {ack_id} at {ack_loc}, and at unknown location"),
+                    }
+                    continue 'main;
+                }
+
+                thread_waits.insert(ack.thread, ack.id);
+
+                let this_thread_locks = thread_locks.get(&ack.thread);
+                let this_thread_locks = unwrap_option_or_break!(this_thread_locks, 'mat);
+                if this_thread_locks.is_empty() {
+                    break 'mat;
+                }
+
+                // if any thread that locked this object
+                for (lock_location, lock_thread) in object_locks.locations.iter() {
+
+                    // Is waiting for another object
+                    if let Some(id) = thread_waits.get(lock_thread) {
+
+                        // And that object is locked by this thread
+                        if this_thread_locks.contains(id) {
+
+                            let thread = ack.thread;
+                            let ack_id = ack.id;
+                            let ack_loc = ack.location;
+
+                            println!(
+"[deadlock_detection] possible deadlock:
+ {thread:?} tries to lock object {ack_id} at {ack_loc},
+ while it is being locked by a {lock_thread:?} at {lock_location},
+ waiting for object {id}");
+                        }
+                    }
+                }
+            }
+            ObjectAction::Acquire { shared } => {
+                if !shared || object_locks.shared != shared {
+                    object_locks.locations.clear();
+                    object_locks.shared = shared;
+                }
+                object_locks.locations.insert(ack.location, ack.thread);
+                thread_locks.entry(ack.thread).or_default().insert(ack.id);
+                thread_waits.remove(&ack.thread);
+            }
+            ObjectAction::Unlock => {
+                object_locks.locations.remove(&ack.location);
+                thread_waits.remove(&ack.thread);
+                if let Some(locks) = thread_locks.get_mut(&ack.thread) {
+                    locks.remove(&ack.id);
+                }
+            }
+        }
+    }
+}
+
+struct GuardInfo {
+    object_id: u64,
+    location: Location<'static>,
+    thread: ThreadId,
+}
+
+pub struct DebugRwLock<T> {
+    id: u64,
     inner: RwLock<T>,
 }
 
-impl<'de, T: ?Sized + Deserialize<'de>> Deserialize<'de> for DebugRwLock<T> {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        Ok(Self {
-            id: new_drwlock_id(),
-            inner: RwLock::<T>::deserialize(deserializer)?,
+pub struct DebugRwLockReadGuard<'a, T> {
+    inner: RwLockReadGuard<'a, T>,
+    info: GuardInfo,
+}
+
+pub struct DebugRwLockWriteGuard<'a, T> {
+    inner: RwLockWriteGuard<'a, T>,
+    info: GuardInfo,
+}
+
+pub struct DebugMutex<T> {
+    id: u64,
+    inner: Mutex<T>
+}
+
+pub struct DebugMutexGuard<'a, T> {
+    inner: MutexGuard<'a, T>,
+    info: GuardInfo,
+}
+
+impl<T: Default> Default for DebugRwLock<T> {
+    fn default() -> Self {
+        Self {
+            id: new_object_id(),
+            inner: Default::default(),
+        }
+    }
+}
+
+impl<T: Default> Default for DebugMutex<T> {
+    fn default() -> Self {
+        Self {
+            id: new_object_id(),
+            inner: Default::default(),
+        }
+    }
+}
+
+impl<T: Sized> DebugRwLock<T> {
+    pub fn new(value: T) -> Self {
+        Self {
+            id: new_object_id(),
+            inner: RwLock::new(value),
+        }
+    }
+}
+
+impl<T: Sized> DebugMutex<T> {
+    pub fn new(value: T) -> Self {
+        Self {
+            id: new_object_id(),
+            inner: Mutex::new(value),
+        }
+    }
+}
+
+impl<T> DebugRwLock<T> {
+    #[track_caller]
+    pub fn read(&self) -> DebugRwLockReadGuard<'_, T> {
+        let location = *Location::caller();
+        let thread = std::thread::current().id();
+
+        let guard = match self.inner.try_read() {
+            Some(guard) => guard,
+            None => {
+                ack_object(ObjectLockAck {
+                    id: self.id,
+                    location,
+                    action: ObjectAction::Request { shared: true },
+                    thread,
+                });
+                self.inner.read()
+            }
+        };
+        ack_object(ObjectLockAck {
+            id: self.id,
+            location,
+            action: ObjectAction::Acquire { shared: true },
+            thread,
+        });
+
+        let info = GuardInfo {
+            object_id: self.id,
+            location,
+            thread,
+        };
+        DebugRwLockReadGuard { inner: guard, info }
+    }
+
+    #[track_caller]
+    pub fn try_read(&self) -> Option<DebugRwLockReadGuard<'_, T>> {
+        self.inner.try_read().map(|guard| {
+            let location = *Location::caller();
+            let thread = std::thread::current().id();
+
+            ack_object(ObjectLockAck {
+                id: self.id,
+                location,
+                thread,
+                action: ObjectAction::Acquire { shared: true },
+            });
+
+            let info = GuardInfo {
+                object_id: self.id,
+                location,
+                thread,
+            };
+            DebugRwLockReadGuard { inner: guard, info }
+        })
+    }
+
+    #[track_caller]
+    pub fn write(&self) -> DebugRwLockWriteGuard<'_, T> {
+        let location = *Location::caller();
+        let thread = std::thread::current().id();
+
+        let guard = match self.inner.try_write() {
+            Some(guard) => guard,
+            None => {
+                ack_object(ObjectLockAck {
+                    id: self.id,
+                    location,
+                    action: ObjectAction::Request { shared: false },
+                    thread,
+                });
+                self.inner.write()
+            }
+        };
+        ack_object(ObjectLockAck {
+            id: self.id,
+            location,
+            action: ObjectAction::Acquire { shared: false },
+            thread,
+        });
+
+        let info = GuardInfo {
+            object_id: self.id,
+            location,
+            thread,
+        };
+        DebugRwLockWriteGuard { inner: guard, info }
+    }
+
+    #[track_caller]
+    pub fn try_write(&self) -> Option<DebugRwLockWriteGuard<'_, T>> {
+        self.inner.try_write().map(|guard| {
+            let location = *Location::caller();
+            let thread = std::thread::current().id();
+
+            ack_object(ObjectLockAck {
+                id: self.id,
+                location,
+                thread,
+                action: ObjectAction::Acquire { shared: false },
+            });
+
+            let info = GuardInfo {
+                object_id: self.id,
+                location,
+                thread,
+            };
+            DebugRwLockWriteGuard { inner: guard, info }
         })
     }
 }
 
-impl<T: ?Sized + Serialize> Serialize for DebugRwLock<T> {
+impl<T> DebugMutex<T> {
+    pub fn lock(&self) -> DebugMutexGuard<'_, T> {
+        let location = *Location::caller();
+        let thread = std::thread::current().id();
+
+        let guard = match self.inner.try_lock() {
+            Some(guard) => guard,
+            None => {
+                ack_object(ObjectLockAck {
+                    id: self.id,
+                    location,
+                    action: ObjectAction::Request { shared: false },
+                    thread,
+                });
+                self.inner.lock()
+            }
+        };
+        ack_object(ObjectLockAck {
+            id: self.id,
+            location,
+            action: ObjectAction::Acquire { shared: false },
+            thread,
+        });
+
+        let info = GuardInfo {
+            object_id: self.id,
+            location,
+            thread,
+        };
+        DebugMutexGuard { inner: guard, info }
+    }
+}
+
+impl<T> Deref for DebugRwLockReadGuard<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.inner.deref()
+    }
+}
+
+impl<T> Deref for DebugRwLockWriteGuard<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.inner.deref()
+    }
+}
+
+impl<T> DerefMut for DebugRwLockWriteGuard<'_, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.inner.deref_mut()
+    }
+}
+
+impl<T> Deref for DebugMutexGuard<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.inner.deref()
+    }
+}
+
+impl<T> DerefMut for DebugMutexGuard<'_, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.inner.deref_mut()
+    }
+}
+
+impl<T> Drop for DebugRwLockReadGuard<'_, T> {
+    fn drop(&mut self) {
+        ack_object(ObjectLockAck {
+            id: self.info.object_id,
+            location: self.info.location,
+            action: ObjectAction::Unlock,
+            thread: self.info.thread,
+        })
+    }
+}
+
+impl<T> Drop for DebugRwLockWriteGuard<'_, T> {
+    fn drop(&mut self) {
+        ack_object(ObjectLockAck {
+            id: self.info.object_id,
+            location: self.info.location,
+            action: ObjectAction::Unlock,
+            thread: self.info.thread,
+        })
+    }
+}
+
+impl<T> Drop for DebugMutexGuard<'_, T> {
+    fn drop(&mut self) {
+        ack_object(ObjectLockAck {
+            id: self.info.object_id,
+            location: self.info.location,
+            action: ObjectAction::Unlock,
+            thread: self.info.thread,
+        })
+    }
+}
+
+impl<T: Debug> Debug for DebugRwLock<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.inner.fmt(f)
+    }
+}
+
+impl<T: Debug> Debug for DebugMutex<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.inner.fmt(f)
+    }
+}
+
+impl<T: Serialize> Serialize for DebugRwLock<T> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
@@ -60,212 +484,35 @@ impl<T: ?Sized + Serialize> Serialize for DebugRwLock<T> {
     }
 }
 
-fn new_drwlock_id() -> u64 {
-    DRWLOCK_ID.fetch_add(1, Ordering::Relaxed)
-}
-
-impl<T> DebugRwLock<T> {
-    pub fn new(value: T) -> Self {
-        let id = new_drwlock_id();
-        Self {
-            id,
-            inner: RwLock::new(value),
-        }
+impl<T: Serialize> Serialize for DebugMutex<T> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.inner.serialize(serializer)
     }
 }
 
-impl<T: ?Sized> DebugRwLock<T> {
-    #[track_caller]
-    pub fn read(&self) -> DebugRwLockReadGuard<'_, T> {
-        let location = Location::caller();
-        let (id, deadlock_at) = access_map(|map| {
-            if let Some(r) = map.get_mut(&self.id) {
-                match r {
-                    LockType::None => {
-                        let mut vec: FixedVec<_> = vec![].into();
-                        let id = vec.first_free_pos();
-                        vec.set(*location, id);
-                        *r = LockType::Read(vec);
-                        (id, None)
-                    }
-                    LockType::Read(ref mut vec) => {
-                        let id = vec.first_free_pos();
-                        vec.set(*location, id);
-                        (id, None)
-                    }
-                    LockType::Write(loc) => (0, Some(*loc)),
-                }
-            } else {
-                let mut vec: FixedVec<_> = vec![].into();
-                let id = vec.first_free_pos();
-                vec.set(*location, id);
-                let t = LockType::Read(vec);
-                map.insert(self.id, t);
-                (id, None)
-            }
-        });
-
-        if let Some(loc) = deadlock_at {
-            panic!("deadlock! Lock already held for write! (tried to lock read)\nwrite at: {loc}\nthis read at: {location}\n")
-        }
-
-        DebugRwLockReadGuard {
-            lock_id: self.id,
-            id,
-            inner: self.inner.read(),
-        }
-    }
-
-    #[track_caller]
-    pub fn write(&self) -> DebugRwLockWriteGuard<'_, T> {
-        let location = Location::caller();
-        let (deadlock_at, write_held) = access_map(|map| {
-            if let Some(r) = map.get_mut(&self.id) {
-                match r {
-                    LockType::None => {
-                        *r = LockType::Write(*location);
-                        (None, false)
-                    }
-                    LockType::Read(ref vec) => {
-                        (Some(vec.iter().cloned().collect::<Vec<_>>()), false)
-                    }
-                    LockType::Write(loc) => (Some(vec![*loc]), true),
-                }
-            } else {
-                let t = LockType::Write(*location);
-                map.insert(self.id, t);
-                (None, false)
-            }
-        });
-
-        if let Some(locations) = deadlock_at {
-            let reads = locations
-                .iter()
-                .map(|l| l.to_string())
-                .collect::<Vec<String>>()
-                .join("\n  ");
-            if write_held {
-                panic!("deadlock! Lock already held for write! (tried to lock write)\nreads at:  {reads}\nthis write at: {location}\n")
-            } else {
-                panic!("deadlock! Lock already held for read! (tried to lock write)\nreads at:  {reads}\nthis write at: {location}\n")
-            }
-        }
-
-        DebugRwLockWriteGuard {
-            lock_id: self.id,
-            inner: self.inner.write(),
-        }
-    }
-
-}
-
-impl<T: ?Sized> Drop for DebugRwLock<T> {
-    fn drop(&mut self) {
-        access_map(|map| {
-            map.remove(&self.id);
-        });
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for DebugRwLock<T> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        RwLock::<T>::deserialize(deserializer).map(|inner| Self {
+            id: new_object_id(),
+            inner,
+        })
     }
 }
 
-pub struct DebugRwLockReadGuard<'a, T: ?Sized> {
-    lock_id: u64,
-    id: usize,
-    inner: RwLockReadGuard<'a, T>,
-}
-
-pub struct DebugRwLockWriteGuard<'a, T: ?Sized> {
-    lock_id: u64,
-    inner: RwLockWriteGuard<'a, T>,
-}
-
-impl<T: ?Sized> Drop for DebugRwLockReadGuard<'_, T> {
-    fn drop(&mut self) {
-        access_map(|map| match map.get_mut(&self.lock_id) {
-            Some(r) => match r {
-                LockType::None => panic!("invalid state: dropping non-tracked debug lock"),
-                LockType::Read(ref mut vec) => {
-                    vec.remove(self.id);
-                    if vec.is_empty() {
-                        *r = LockType::None;
-                    }
-                }
-                LockType::Write(_) => {
-                    panic!("invalid state: dropping invalid debug lock (dropping Read, had Write)")
-                }
-            },
-            None => panic!("invalid state: dropping non-tracked debug lock"),
-        });
-    }
-}
-
-impl<T: ?Sized> Drop for DebugRwLockWriteGuard<'_, T> {
-    fn drop(&mut self) {
-        access_map(|map| match map.get_mut(&self.lock_id) {
-            Some(r) => match r {
-                LockType::None => panic!("invalid state: dropping non-tracked debug lock"),
-                LockType::Read(_) => {
-                    panic!("invalid state: dropping invalid debug lock (dropping Write, had Read)")
-                }
-                LockType::Write(_) => *r = LockType::None,
-            },
-            None => panic!("invalid state: dropping non-tracked debug lock"),
-        });
-    }
-}
-
-impl<T: std::fmt::Debug> std::fmt::Debug for DebugRwLock<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DebugRwLock")
-            .field("id", &self.id)
-            .field("inner", &self.inner)
-            .finish()
-    }
-}
-
-impl<T: Default> Default for DebugRwLock<T> {
-    fn default() -> Self {
-        Self::new(Default::default())
-    }
-}
-
-impl<T> Deref for DebugRwLockReadGuard<'_, T> {
-    type Target = T;
-
-    fn deref(&self) -> &T {
-        self.inner.deref()
-    }
-}
-
-impl<T> Deref for DebugRwLockWriteGuard<'_, T> {
-    type Target = T;
-
-    fn deref(&self) -> &T {
-        self.inner.deref()
-    }
-}
-
-impl<T> DerefMut for DebugRwLockWriteGuard<'_, T> {
-    fn deref_mut(&mut self) -> &mut T {
-        self.inner.deref_mut()
-    }
-}
-
-pub fn map_result<T, U, F>(result: LockResult<T>, f: F) -> LockResult<U>
-where
-    F: FnOnce(T) -> U,
-{
-    match result {
-        Ok(t) => Ok(f(t)),
-        Err(err) => Err(PoisonError::new(f(err.into_inner()))),
-    }
-}
-
-#[cfg(test)]
-mod test {
-    fn sync_send<T: Sync + Send>() {}
-
-    #[test]
-    fn sync_send_rwlock() {
-        sync_send::<super::DebugRwLock<()>>();
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for DebugMutex<T> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Mutex::<T>::deserialize(deserializer).map(|inner| Self {
+            id: new_object_id(),
+            inner,
+        })
     }
 }

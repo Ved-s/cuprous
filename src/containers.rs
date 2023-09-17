@@ -44,10 +44,7 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for FixedVec<T> {
 
 impl<T: Default> Default for FixedVec<T> {
     fn default() -> Self {
-        Self {
-            vec: vec![],
-            first_free: None,
-        }
+        Self::new()
     }
 }
 
@@ -57,7 +54,15 @@ pub struct VecSetResult<'a, T> {
 }
 
 impl<T> FixedVec<T> {
-    pub fn new(mut vec: Vec<T>) -> Self {
+
+    pub fn new() -> Self {
+        Self {
+            vec: vec![],
+            first_free: None,
+        }
+    }
+
+    pub fn from_vec(mut vec: Vec<T>) -> Self {
         Self {
             vec: vec.drain(..).map(|v| Some(v)).collect(),
             first_free: None,
@@ -278,7 +283,7 @@ impl<T> FixedVec<T> {
 
 impl<T> From<Vec<T>> for FixedVec<T> {
     fn from(value: Vec<T>) -> Self {
-        Self::new(value)
+        Self::from_vec(value)
     }
 }
 
@@ -1023,7 +1028,7 @@ mod test {
 
     #[test]
     fn fixed_vec_remove_shrink() {
-        let mut fv = FixedVec::new(vec![]);
+        let mut fv = FixedVec::from_vec(vec![]);
 
         fv.set(35, 0);
         fv.set(15, 1);
@@ -1036,7 +1041,7 @@ mod test {
 
     #[test]
     fn fixed_vec_correct_free() {
-        let mut fv = FixedVec::new(vec![]);
+        let mut fv = FixedVec::from_vec(vec![]);
 
         fv.set(35, 0);
         fv.set(15, 1);
