@@ -5,17 +5,15 @@ use std::{
     panic::Location,
     sync::{
         atomic::{AtomicU64, Ordering},
-        mpsc::{sync_channel, Receiver, Sender, SyncSender},
+        mpsc::{sync_channel, Receiver, SyncSender},
         Arc,
     },
-    thread::{Thread, ThreadId},
+    thread::ThreadId,
 };
 
 use eframe::epaint::ahash::HashSet;
 use parking_lot::*;
 use serde::{Deserialize, Serialize};
-
-use crate::containers::FixedVec;
 
 static OBJECT_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -175,12 +173,6 @@ fn watcher_thread(recv: Receiver<ObjectLockAck>) {
                 thread_locks.entry(ack.thread).or_default().insert(ack.id);
                 thread_waits.remove(&ack.thread);
             }
-            // ObjectAction::SingleAcquire => {
-            //     object_locks.locations.clear();
-            //     object_locks.shared = false;
-            //     object_locks.locations.insert(ack.location, ack.thread);
-            //     thread_locks.entry(ack.thread).or_default().insert(ack.id, true);
-            // }
             ObjectAction::Unlock => {
                 object_locks.locations.remove(&ack.location);
                 thread_waits.remove(&ack.thread);
@@ -213,7 +205,26 @@ pub struct DebugRwLockWriteGuard<'a, T> {
     info: GuardInfo,
 }
 
+pub struct DebugMutex<T> {
+    id: u64,
+    inner: Mutex<T>
+}
+
+pub struct DebugMutexGuard<'a, T> {
+    inner: MutexGuard<'a, T>,
+    info: GuardInfo,
+}
+
 impl<T: Default> Default for DebugRwLock<T> {
+    fn default() -> Self {
+        Self {
+            id: new_object_id(),
+            inner: Default::default(),
+        }
+    }
+}
+
+impl<T: Default> Default for DebugMutex<T> {
     fn default() -> Self {
         Self {
             id: new_object_id(),
@@ -227,6 +238,15 @@ impl<T: Sized> DebugRwLock<T> {
         Self {
             id: new_object_id(),
             inner: RwLock::new(value),
+        }
+    }
+}
+
+impl<T: Sized> DebugMutex<T> {
+    pub fn new(value: T) -> Self {
+        Self {
+            id: new_object_id(),
+            inner: Mutex::new(value),
         }
     }
 }
@@ -341,6 +361,39 @@ impl<T> DebugRwLock<T> {
     }
 }
 
+impl<T> DebugMutex<T> {
+    pub fn lock(&self) -> DebugMutexGuard<'_, T> {
+        let location = *Location::caller();
+        let thread = std::thread::current().id();
+
+        let guard = match self.inner.try_lock() {
+            Some(guard) => guard,
+            None => {
+                ack_object(ObjectLockAck {
+                    id: self.id,
+                    location,
+                    action: ObjectAction::Request { shared: false },
+                    thread,
+                });
+                self.inner.lock()
+            }
+        };
+        ack_object(ObjectLockAck {
+            id: self.id,
+            location,
+            action: ObjectAction::Acquire { shared: false },
+            thread,
+        });
+
+        let info = GuardInfo {
+            object_id: self.id,
+            location,
+            thread,
+        };
+        DebugMutexGuard { inner: guard, info }
+    }
+}
+
 impl<T> Deref for DebugRwLockReadGuard<'_, T> {
     type Target = T;
 
@@ -358,6 +411,20 @@ impl<T> Deref for DebugRwLockWriteGuard<'_, T> {
 }
 
 impl<T> DerefMut for DebugRwLockWriteGuard<'_, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.inner.deref_mut()
+    }
+}
+
+impl<T> Deref for DebugMutexGuard<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.inner.deref()
+    }
+}
+
+impl<T> DerefMut for DebugMutexGuard<'_, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.inner.deref_mut()
     }
@@ -385,7 +452,24 @@ impl<T> Drop for DebugRwLockWriteGuard<'_, T> {
     }
 }
 
+impl<T> Drop for DebugMutexGuard<'_, T> {
+    fn drop(&mut self) {
+        ack_object(ObjectLockAck {
+            id: self.info.object_id,
+            location: self.info.location,
+            action: ObjectAction::Unlock,
+            thread: self.info.thread,
+        })
+    }
+}
+
 impl<T: Debug> Debug for DebugRwLock<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.inner.fmt(f)
+    }
+}
+
+impl<T: Debug> Debug for DebugMutex<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.inner.fmt(f)
     }
@@ -400,12 +484,33 @@ impl<T: Serialize> Serialize for DebugRwLock<T> {
     }
 }
 
+impl<T: Serialize> Serialize for DebugMutex<T> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.inner.serialize(serializer)
+    }
+}
+
 impl<'de, T: Deserialize<'de>> Deserialize<'de> for DebugRwLock<T> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
-        RwLock::<T>::deserialize(deserializer).map(|inner| DebugRwLock {
+        RwLock::<T>::deserialize(deserializer).map(|inner| Self {
+            id: new_object_id(),
+            inner,
+        })
+    }
+}
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for DebugMutex<T> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Mutex::<T>::deserialize(deserializer).map(|inner| Self {
             id: new_object_id(),
             inner,
         })

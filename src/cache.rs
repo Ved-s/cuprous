@@ -1,6 +1,6 @@
 use std::{sync::Arc, collections::HashSet};
 
-use crate::Mutex;
+use parking_lot::Mutex;
 
 pub static GLOBAL_STR_CACHE: StrCache = StrCache::new();
 

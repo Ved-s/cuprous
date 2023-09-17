@@ -11,7 +11,7 @@ use std::{
     hash::Hash,
     num::NonZeroU32,
     ops::{Deref, Range},
-    sync::Arc, time::Duration, thread::park,
+    sync::Arc,
 };
 
 use board::{selection::Selection, ActiveCircuitBoard};
@@ -62,12 +62,12 @@ mod ui;
 
 #[cfg(all(feature = "deadlock_detection", not(feature = "single_thread")))]
 type RwLock<T> = debug::DebugRwLock<T>;
-// #[cfg(all(feature = "deadlock_detection", not(feature = "single_thread")))]
-// type Mutex<T> = debug::DebugMutex<T>;
+#[cfg(all(feature = "deadlock_detection", not(feature = "single_thread")))]
+type Mutex<T> = debug::DebugMutex<T>;
 
 #[cfg(any(not(feature = "deadlock_detection"), feature = "single_thread"))]
 type RwLock<T> = parking_lot::RwLock<T>;
-// #[cfg(any(not(feature = "deadlock_detection"), feature = "single_thread"))]
+#[cfg(any(not(feature = "deadlock_detection"), feature = "single_thread"))]
 type Mutex<T> = parking_lot::Mutex<T>;
 
 struct BasicLoadingContext<'a, K: Borrow<str> + Eq + Hash> {
