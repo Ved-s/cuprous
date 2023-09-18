@@ -324,7 +324,9 @@ impl<T> Iterator for FixedVecDrain<'_, T> {
 
     fn next(&mut self) -> Option<Self::Item> {
         while self.pos < self.len {
-            match self.vec.remove(self.pos) {
+            let item = self.vec.remove(self.pos);
+            self.pos += 1;
+            match item {
                 Some(v) => return Some(v),
                 None => continue,
             }

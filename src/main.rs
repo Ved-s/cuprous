@@ -81,6 +81,10 @@ impl<K: Borrow<str> + Eq + Hash> io::LoadingContext for BasicLoadingContext<'_, 
 }
 
 fn main() {
+
+    #[cfg(all(feature = "deadlock_detection", not(feature = "single_thread")))]
+    debug::set_this_thread_debug_name("egui main thread");
+
     #[cfg(not(feature = "wasm"))]
     eframe::run_native(
         "rls",

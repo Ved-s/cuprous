@@ -519,26 +519,26 @@ impl App {
         }
 
         // TODO: deadlock if queue is not empty
-        // if ctx.egui_ctx.input(|input| input.key_pressed(Key::Q))
-        //     && (ctx.egui_ctx.input(|input| input.modifiers.shift)
-        //         || self
-        //             .board
-        //             .board
-        //             .read()
-        //             .states
-        //             .states()
-        //             .read()
-        //             .iter()
-        //             .all(|s| s.queue_len() == 0))
-        // {
-        //     let sim_lock = self.board.board.read().sim_lock.clone();
-        //     let sim_lock = sim_lock.write();
+        if ctx.egui_ctx.input(|input| input.key_pressed(Key::Q))
+            // && (ctx.egui_ctx.input(|input| input.modifiers.shift)
+            //     || self
+            //         .board
+            //         .board
+            //         .read()
+            //         .states
+            //         .states()
+            //         .read()
+            //         .iter()
+            //         .all(|s| s.queue_len() == 0))
+        {
+            let sim_lock = self.board.board.read().sim_lock.clone();
+            let sim_lock = sim_lock.write();
 
-        //     let mut board = self.board.board.write();
-        //     let ordered = board.is_ordered_queue();
-        //     board.set_ordered_queue(!ordered, false);
-        //     drop(sim_lock);
-        // }
+            let mut board = self.board.board.write();
+            let ordered = board.is_ordered_queue();
+            board.set_ordered_queue(!ordered, false);
+            drop(sim_lock);
+        }
 
         self.board.update(&ctx, selected_item, self.debug);
 
@@ -558,6 +558,7 @@ Selected: {:?}
 [F8] Board reload
 [F4] State reset
 [R] Rotate
+[Q] Ordered queue: {}
 
 Wire parts drawn: {}
 Pressed keys: {:?}
@@ -571,6 +572,7 @@ Queue len: {}
                 update_time.as_secs_f64() * 1000.0,
                 self.selected_id,
                 self.debug,
+                self.board.board.read().is_ordered_queue(),
                 self.board
                     .wires_drawn
                     .load(std::sync::atomic::Ordering::Relaxed),
