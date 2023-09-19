@@ -11,7 +11,10 @@ use crate::{
     board::{ActiveCircuitBoard, CircuitBoard, SelectedItem},
     circuits::{self, props::CircuitPropertyImpl, CircuitPreview, CircuitPreviewImpl},
     time::Instant,
-    ui::{Inventory, InventoryItem, InventoryItemGroup, PropertyEditor, PropertyStoreItem},
+    ui::{
+        CollapsibleSidePanel, Inventory, InventoryItem, InventoryItemGroup, PropertyEditor,
+        PropertyStoreItem,
+    },
     vector::{Vec2f, Vector},
     BasicLoadingContext, Direction4, DynStaticStr, PaintContext, PanAndZoom, PastePreview, RwLock,
     TileDrawBounds,
@@ -127,7 +130,7 @@ impl eframe::App for App {
 
                 if let SelectedItem::Circuit(p) = self.selected_item() {
                     let props = [((), &p.props).into()];
-                    App::properties_ui(&mut self.props_ui, ui, props);
+                    App::properties_ui(&mut self.props_ui, ui, Some(props));
                 } else {
                     let selection = self.board.selection.borrow();
                     if !selection.selection.is_empty() {
@@ -143,19 +146,27 @@ impl eframe::App for App {
                             .filter_map(|id| board.circuits.get(id).map(|c| (id, &c.props).into()))
                             .collect();
 
-                        let response = App::properties_ui(&mut self.props_ui, ui, stores);
+                        let response = App::properties_ui(&mut self.props_ui, ui, Some(stores));
                         drop(selection);
                         drop(board);
 
-                        for property in response.inner {
-                            for circuit in property.affected_values {
-                                self.board.circuit_property_changed(
-                                    circuit,
-                                    &property.id,
-                                    property.old_value.as_ref(),
-                                );
+                        if let Some(changes) = response {
+                            for property in changes {
+                                for circuit in property.affected_values {
+                                    self.board.circuit_property_changed(
+                                        circuit,
+                                        &property.id,
+                                        property.old_value.as_ref(),
+                                    );
+                                }
                             }
                         }
+                    } else {
+                        App::properties_ui(
+                            &mut self.props_ui,
+                            ui,
+                            None::<[PropertyStoreItem<'_, ()>; 1]>,
+                        );
                     }
                 }
             });
@@ -518,8 +529,7 @@ impl App {
             }
         }
 
-        if ctx.egui_ctx.input(|input| input.key_pressed(Key::Q))
-        {
+        if ctx.egui_ctx.input(|input| input.key_pressed(Key::Q)) {
             let sim_lock = self.board.board.read().sim_lock.clone();
             let sim_lock = sim_lock.write();
 
@@ -592,26 +602,29 @@ Queue len: {}
     fn properties_ui<'a, T: Clone>(
         editor: &'a mut PropertyEditor,
         ui: &mut Ui,
-        props: impl IntoIterator<Item = PropertyStoreItem<'a, T>>,
-    ) -> egui::InnerResponse<Vec<crate::ui::ChangedProperty<T>>> {
-        let frame = Frame::side_top_panel(ui.style())
-            .outer_margin(Margin::symmetric(0.0, 10.0))
-            .rounding(Rounding {
-                nw: 10.0,
-                ne: 0.0,
-                sw: 10.0,
-                se: 0.0,
-            })
-            .stroke(ui.style().visuals.window_stroke);
-
-        SidePanel::right("props")
-            .show_separator_line(false)
-            .resizable(false)
-            .frame(frame)
-            .show(ui.ctx(), |ui| {
-                ui.vertical_centered(|ui| ui.label("Circuit properties"));
-                let response = editor.ui(ui, props);
-                response.changes
-            })
+        props: Option<impl IntoIterator<Item = PropertyStoreItem<'a, T>>>,
+    ) -> Option<Vec<crate::ui::ChangedProperty<T>>> {
+        let style = ui.style().clone();
+        CollapsibleSidePanel::new("prop-ui", "Properties editor")
+            .active(props.is_some())
+            .header_offset(20.0)
+            .panel_transformer(Some(Box::new(move |panel: SidePanel| {
+                panel
+                    .frame(
+                        Frame::side_top_panel(&style)
+                            .rounding(Rounding {
+                                nw: 5.0,
+                                ne: 0.0,
+                                sw: 5.0,
+                                se: 0.0,
+                            })
+                            .outer_margin(Margin::symmetric(0.0, 8.0))
+                            .stroke(style.visuals.window_stroke),
+                    )
+                    .show_separator_line(false)
+            })))
+            .show(ui, |ui| props.map(|props| editor.ui(ui, props).changes))
+            .panel?
+            .inner
     }
 }

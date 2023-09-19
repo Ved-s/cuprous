@@ -1,10 +1,13 @@
-use std::{any::TypeId, collections::HashSet, ops::Deref, sync::Arc};
+use std::{any::TypeId, collections::HashSet, f32::consts::TAU, ops::Deref, sync::Arc};
 
 use eframe::{
-    egui::{Grid, Id, Key, Margin, PointerButton, Response, Sense, Ui, Widget},
-    epaint::{Color32, Rounding, Stroke},
+    egui::{
+        panel::PanelState, FontSelection, Grid, Id, InnerResponse, Key, Margin, PointerButton,
+        Response, Sense, SidePanel, TextStyle, Ui, Widget, WidgetText,
+    },
+    epaint::{Color32, PathShape, Rounding, Stroke, TextShape},
 };
-use emath::{vec2, Rect, Vec2};
+use emath::{pos2, vec2, Rect, Rot2, Vec2};
 
 use crate::{
     circuits::props::{CircuitProperty, CircuitPropertyImpl, CircuitPropertyStore},
@@ -445,20 +448,22 @@ impl PropertyEditor {
 
                 ui.label(id.name.deref());
 
-                
-                    if let Some(old) = props[0].1.imp_mut().ui(ui, !equal) {
-                        let mut vec = vec![];
-                        let (id, prop) = props.remove(0);
-                        vec.push(id);
-                        for other_prop in props {
-                            if !other_prop.1.imp().equals(prop.imp()) {
-                                prop.imp().copy_into(other_prop.1.imp_mut());
-                                vec.push(other_prop.0);
-                            }
+                if let Some(old) = props[0].1.imp_mut().ui(ui, !equal) {
+                    let mut vec = vec![];
+                    let (id, prop) = props.remove(0);
+                    vec.push(id);
+                    for other_prop in props {
+                        if !other_prop.1.imp().equals(prop.imp()) {
+                            prop.imp().copy_into(other_prop.1.imp_mut());
+                            vec.push(other_prop.0);
                         }
-                        changes.push(ChangedProperty { id: prop.id(), affected_values: vec, old_value: old });
                     }
-                
+                    changes.push(ChangedProperty {
+                        id: prop.id(),
+                        affected_values: vec,
+                        old_value: old,
+                    });
+                }
 
                 ui.end_row();
             }
@@ -481,5 +486,183 @@ fn apply_margin_to_rect(rect: Rect, margin: Margin) -> Rect {
     Rect {
         min: rect.min + margin.left_top(),
         max: rect.max - margin.right_bottom(),
+    }
+}
+
+pub struct CollapsibleSidePanel {
+    id: Id,
+    text: WidgetText,
+    active: bool,
+    panel_transformer: Option<Box<dyn Fn(SidePanel) -> SidePanel>>,
+    header_offset: f32,
+}
+
+pub struct CollapsibleSidePanelResponse<R> {
+    pub header: Response,
+    pub panel: Option<InnerResponse<R>>,
+}
+
+#[allow(unused)]
+impl CollapsibleSidePanel {
+    pub fn new(id: impl Into<Id>, text: impl Into<WidgetText>) -> Self {
+        Self {
+            id: id.into(),
+            text: text.into(),
+            active: true,
+            panel_transformer: None,
+            header_offset: 10.0,
+        }
+    }
+
+    pub fn active(self, active: bool) -> Self {
+        Self { active, ..self }
+    }
+
+    pub fn panel_transformer(
+        self,
+        panel_transformer: Option<Box<dyn Fn(SidePanel) -> SidePanel>>,
+    ) -> Self {
+        Self {
+            panel_transformer,
+            ..self
+        }
+    }
+
+    pub fn header_offset(self, header_offset: f32) -> Self {
+        Self {
+            header_offset,
+            ..self
+        }
+    }
+
+    pub fn show<R>(
+        self,
+        ui: &mut Ui,
+        add_content: impl FnOnce(&mut Ui) -> R,
+    ) -> CollapsibleSidePanelResponse<R> {
+        let CollapsibleSidePanel {
+            id,
+            text,
+            active,
+            panel_transformer,
+            header_offset,
+        } = self;
+
+        ui.push_id(id, |ui| {
+            let open_id = ui.id().with("_collapsed");
+            let open = ui.ctx().data(|mem| mem.get_temp(open_id).unwrap_or(true));
+
+            let panel_id = ui.id().with("_panel");
+            let animation = ui
+                .ctx()
+                .animate_bool(ui.id().with("_open-anim"), open && self.active);
+
+            let expanded_width = PanelState::load(ui.ctx(), panel_id)
+                .map(|state| state.rect.width())
+                .unwrap_or_default();
+
+            let offset = if animation > 0.0 {
+                expanded_width * animation
+            } else {
+                0.0
+            };
+
+            let painter = ui.painter();
+            let header_text = text
+                .fallback_text_style(TextStyle::Monospace)
+                .into_galley(
+                    ui,
+                    Some(false),
+                    f32::INFINITY,
+                    FontSelection::Style(TextStyle::Monospace),
+                )
+                .galley;
+
+            let size = vec2(
+                header_text.rect.height() + 10.0,
+                header_text.rect.width() + header_text.rect.height() + 20.0,
+            );
+            let pos = pos2(ui.max_rect().width() - size.x - offset, header_offset);
+
+            let text_color =
+                ui.style()
+                    .visuals
+                    .text_color()
+                    .gamma_multiply(if active { 1.0 } else { 0.6 });
+            let arrow_rect = Rect::from_center_size(
+                pos + vec2(size.x / 2.0, size.x / 2.0),
+                vec2(size.x / 3.0, size.x / 3.0),
+            );
+
+            let mut points = vec![
+                arrow_rect.right_top(),
+                arrow_rect.left_center(),
+                arrow_rect.right_bottom(),
+            ];
+            let rotation = Rot2::from_angle(animation * TAU * 0.5);
+            for p in &mut points {
+                *p = arrow_rect.center() + rotation * (*p - arrow_rect.center());
+            }
+
+            let rect = Rect::from_min_size(pos, size);
+
+            painter.rect(
+                rect,
+                Rounding {
+                    nw: 5.0,
+                    sw: 5.0,
+                    ..Default::default()
+                },
+                ui.style().visuals.panel_fill,
+                ui.style().visuals.window_stroke,
+            );
+
+            painter.add(PathShape {
+                points,
+                closed: true,
+                fill: text_color,
+                stroke: Stroke::NONE,
+            });
+
+            painter.add(TextShape {
+                pos: pos + vec2(size.x - 5.0, size.x),
+                galley: header_text,
+                underline: Stroke::NONE,
+                override_text_color: Some(text_color),
+                angle: TAU / 4.0,
+            });
+
+            let response = ui.interact(rect, ui.id().with("_header"), Sense::click_and_drag());
+            if response.clicked() {
+                ui.ctx().data_mut(|data| {
+                    let open = data.get_temp_mut_or(open_id, true);
+                    *open = !*open;
+                })
+            }
+
+            let panel = if animation > 0.0 {
+                let rect = ui.clip_rect();
+                let panel_offset = (1.0 - animation) * expanded_width;
+
+                let rect = Rect::from_min_size(rect.min + vec2(panel_offset, 0.0), rect.size());
+
+                let mut panel_ui = ui.child_ui(rect, *ui.layout());
+
+                let p = SidePanel::right(panel_id).resizable(false);
+                let p = match panel_transformer {
+                    Some(pt) => pt(p),
+                    None => p,
+                };
+                Some(p.show_inside(&mut panel_ui, add_content))
+            } else {
+                None
+            };
+
+            CollapsibleSidePanelResponse {
+                header: response,
+                panel,
+            }
+        })
+        .inner
     }
 }
