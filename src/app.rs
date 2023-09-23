@@ -528,6 +528,7 @@ Selected: {:?}
 [F8] Board reload
 [F4] State reset
 [R] Rotate
+[F] Flip
 [Q] Ordered queue: {}
 
 Wire parts drawn: {}

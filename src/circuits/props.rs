@@ -7,8 +7,6 @@ use eframe::egui::{Ui, ComboBox};
 
 use crate::{unwrap_option_or_return, Direction4, DynStaticStr, RwLock, unwrap_option_or_continue};
 
-use super::gates::not;
-
 #[derive(Default)]
 pub struct CircuitPropertyStore(RwLock<HashMap<DynStaticStr, CircuitProperty>>);
 
