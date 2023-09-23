@@ -225,6 +225,7 @@ impl App {
             }),
             Box::new(circuits::gates::not::Preview {}),
             Box::new(circuits::pullup::Preview {}),
+            Box::new(circuits::transistor::Preview {}),
             Box::new(circuits::freq_meter::Preview {}),
         ];
         let preview_data = cc
@@ -492,41 +493,11 @@ impl App {
         let selected_item = self.selected_item();
 
         if ctx.egui_ctx.input(|input| input.key_pressed(Key::R)) {
-            if let SelectedItem::Circuit(pre) = &selected_item {
-                pre.props
-                    .write("dir", |p: &mut Direction4| *p = p.rotate_clockwise());
-            } else {
-                let selected_circuits: Vec<_> = self
-                    .board
-                    .selection
-                    .borrow()
-                    .selection
-                    .iter()
-                    .filter_map(|o| match o {
-                        crate::board::selection::SelectedWorldObject::Circuit { id } => Some(*id),
-                        _ => None,
-                    })
-                    .collect();
+            self.change_selected_props(&selected_item, "dir", |d: &mut Direction4| *d = d.rotate_clockwise());
+        }
 
-                let mut vec = vec![];
-                let board = self.board.board.read();
-                for circuit_id in selected_circuits {
-                    let circuit = board.circuits.get(circuit_id);
-                    let circuit = unwrap_option_or_continue!(circuit);
-                    let old = circuit.props.write("dir", |p: &mut Direction4| {
-                        let old = *p;
-                        *p = p.rotate_clockwise();
-                        Box::new(old) as Box<dyn CircuitPropertyImpl>
-                    });
-                    let old = unwrap_option_or_continue!(old);
-                    vec.push((circuit_id, old))
-                }
-                drop(board);
-                for (circuit, old) in vec {
-                    self.board
-                        .circuit_property_changed(circuit, "dir", old.as_ref());
-                }
-            }
+        if ctx.egui_ctx.input(|input| input.key_pressed(Key::F)) {
+            self.change_selected_props(&selected_item, "flip", |f: &mut bool| *f = !*f);
         }
 
         if ctx.egui_ctx.input(|input| input.key_pressed(Key::Q)) {
@@ -583,6 +554,44 @@ Queue len: {}
         );
     }
 
+    fn change_selected_props<T: CircuitPropertyImpl>(&mut self, selected_item: &SelectedItem, id: &str, f: impl Fn(&mut T)) {
+        if let SelectedItem::Circuit(pre) = selected_item {
+            pre.props
+                .write(id, f);
+        } else {
+            let selected_circuits: Vec<_> = self
+                .board
+                .selection
+                .borrow()
+                .selection
+                .iter()
+                .filter_map(|o| match o {
+                    crate::board::selection::SelectedWorldObject::Circuit { id } => Some(*id),
+                    _ => None,
+                })
+                .collect();
+
+            let mut vec = vec![];
+            let board = self.board.board.read();
+            for circuit_id in selected_circuits {
+                let circuit = board.circuits.get(circuit_id);
+                let circuit = unwrap_option_or_continue!(circuit);
+                let old = circuit.props.write(id, |p: &mut T| {
+                    let old = p.clone();
+                    f(p);
+                    old
+                });
+                let old = unwrap_option_or_continue!(old);
+                vec.push((circuit_id, old))
+            }
+            drop(board);
+            for (circuit, old) in vec {
+                self.board
+                    .circuit_property_changed(circuit, id, old.as_ref());
+            }
+        }
+    }
+
     fn selected_item(&self) -> SelectedItem {
         match self.selected_id.as_deref() {
             None => SelectedItem::None,
@@ -619,6 +628,7 @@ Queue len: {}
                                 se: 0.0,
                             })
                             .outer_margin(Margin::symmetric(0.0, 8.0))
+                            .inner_margin(Margin::symmetric(5.0, 5.0))
                             .stroke(style.visuals.window_stroke),
                     )
                     .show_separator_line(false)

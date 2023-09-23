@@ -77,7 +77,7 @@ impl CircuitImpl for Circuit {
                 s.state = !s.state;
                 s.state
             });
-            self.out_pin.set_output(state_ctx, new_state.into());
+            self.out_pin.set_state(state_ctx, new_state.into());
         }
     }
 
@@ -105,7 +105,7 @@ impl CircuitImpl for Circuit {
         let state = state_ctx
             .read_circuit_internal_state::<State, _>(|state| state.state)
             .unwrap_or_default();
-        self.out_pin.set_output(state_ctx, state.into());
+        self.out_pin.set_state(state_ctx, state.into());
     }
 
     fn load_internal(

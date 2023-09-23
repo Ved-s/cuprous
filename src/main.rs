@@ -743,6 +743,15 @@ impl Direction4 {
             Direction4::Down =>  TAU * 0.75,
         }
     }
+
+    pub fn angle_to_left(self) -> f32 {
+        match self {
+            Direction4::Left  => TAU * 0.0,
+            Direction4::Down  => TAU * 0.25,
+            Direction4::Right => TAU * 0.5,
+            Direction4::Up    => TAU * 0.75,
+        }
+    }
 }
 
 impl From<Direction2> for Direction4 {

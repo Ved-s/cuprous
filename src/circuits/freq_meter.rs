@@ -118,7 +118,7 @@ impl CircuitImpl for Circuit {
     }
 
     fn update_signals(&self, state_ctx: &CircuitStateContext, changed_pin: Option<usize>) {
-        if changed_pin == Some(0) && self.input.get_input(state_ctx) == WireState::True {
+        if changed_pin == Some(0) && self.input.get_state(state_ctx) == WireState::True {
             state_ctx
                 .write_circuit_internal_state(|s: &mut State| s.timings.push_back(Instant::now()))
         }

@@ -95,14 +95,14 @@ impl CircuitImpl for Circuit {
     }
 
     fn update_signals(&self, state_ctx: &CircuitStateContext, _: Option<usize>) {
-        let state = self.input.get_input(state_ctx);
+        let state = self.input.get_state(state_ctx);
         let state = match state {
             WireState::None => WireState::None,
             WireState::True => WireState::False,
             WireState::False => WireState::True,
             WireState::Error => WireState::Error,
         };
-        self.output.set_output(state_ctx, state);
+        self.output.set_state(state_ctx, state);
     }
 
     fn size(&self, props: &CircuitPropertyStore) -> Vec2u {

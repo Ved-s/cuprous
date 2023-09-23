@@ -3,20 +3,22 @@ use std::{sync::Arc, time::Duration};
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    board::ActiveCircuitBoard,
     state::{CircuitState, InternalCircuitState, State, StateCollection, WireState},
     time::Instant,
     vector::{Vec2i, Vec2u, Vector},
-    DynStaticStr, OptionalInt, PaintContext, RwLock, board::ActiveCircuitBoard,
+    DynStaticStr, OptionalInt, PaintContext, RwLock,
 };
 
 use self::props::CircuitPropertyStore;
 
 pub mod button;
+pub mod freq_meter;
 pub mod gates;
 pub mod props;
 pub mod pullup;
+pub mod transistor;
 pub mod test;
-pub mod freq_meter;
 
 pub struct CircuitInfo {
     pub size: Vec2u,
@@ -82,13 +84,7 @@ impl CircuitPin {
     pub fn get_state(&self, state: &State) -> WireState {
         state
             .read_circuit(self.id.circuit_id)
-            .map(|cs| {
-                cs.read()
-                    .pins
-                    .get(self.id.id)
-                    .copied()
-                    .unwrap_or_default()
-            })
+            .map(|cs| cs.read().pins.get(self.id.id).copied().unwrap_or_default())
             .unwrap_or_default()
     }
 
@@ -169,7 +165,7 @@ pub struct CircuitPinInfo {
 }
 
 impl CircuitPinInfo {
-    pub fn get_input(&self, state_ctx: &CircuitStateContext) -> WireState {
+    pub fn get_state(&self, state_ctx: &CircuitStateContext) -> WireState {
         state_ctx
             .read_circuit_state()
             .map(|cs| {
@@ -181,17 +177,19 @@ impl CircuitPinInfo {
             .unwrap_or_default()
     }
 
-    pub fn set_output(&self, state_ctx: &CircuitStateContext, value: WireState) {
+    pub fn get_wire_state(&self, state_ctx: &CircuitStateContext) -> Option<WireState> {
+        self.pin
+            .read()
+            .connected_wire()
+            .map(|wire| state_ctx.global_state.read_wire(wire))
+    }
+
+    pub fn set_state(&self, state_ctx: &CircuitStateContext, value: WireState) {
         let pin = self.pin.read();
 
         let current = state_ctx
             .read_circuit_state()
-            .map(|arc| {
-                arc.read()
-                    .pins
-                    .get_clone(pin.id.id)
-                    .unwrap_or_default()
-            })
+            .map(|arc| arc.read().pins.get_clone(pin.id.id).unwrap_or_default())
             .unwrap_or_default();
         if current == value {
             return;
@@ -226,22 +224,20 @@ impl CircuitPinInfo {
         match dir {
             PinDirection::Inside => match wire {
                 Some(wire) => state_ctx.global_state.update_wire(wire, true),
-                None => self.pin.read().set_input(
-                    state_ctx.global_state,
-                    Default::default(),
-                    true,
-                ),
+                None => self
+                    .pin
+                    .read()
+                    .set_input(state_ctx.global_state, Default::default(), true),
             },
             PinDirection::Outside => state_ctx
                 .global_state
                 .update_circuit_signals(pin_id.circuit_id, Some(pin_id.id)),
             PinDirection::Custom => match wire {
                 Some(wire) => state_ctx.global_state.update_wire(wire, true),
-                None => self.pin.read().set_input(
-                    state_ctx.global_state,
-                    Default::default(),
-                    true,
-                ),
+                None => self
+                    .pin
+                    .read()
+                    .set_input(state_ctx.global_state, Default::default(), true),
             },
         }
     }
@@ -540,10 +536,20 @@ pub struct CircuitNode {
     pub circuit: OptionalInt<usize>,
 }
 
-pub fn draw_pins_preview<T: Into<Vec2u>>(ctx: &PaintContext, size: impl Into<Vec2u>, pins: impl IntoIterator<Item = T>) {
+pub fn draw_pins_preview<T: Into<Vec2u>>(
+    ctx: &PaintContext,
+    size: impl Into<Vec2u>,
+    pins: impl IntoIterator<Item = T>,
+) {
     let size = size.into().convert(|v| v as f32);
     for pin in pins.into_iter() {
-        let pos = ctx.rect.lerp_inside((pin.into().convert(|v| v as f32 + 0.5) / size).into());
-        ctx.paint.circle_filled(pos, ActiveCircuitBoard::WIRE_THICKNESS * 0.5 * ctx.screen.scale, WireState::False.color());
+        let pos = ctx
+            .rect
+            .lerp_inside((pin.into().convert(|v| v as f32 + 0.5) / size).into());
+        ctx.paint.circle_filled(
+            pos,
+            ActiveCircuitBoard::WIRE_THICKNESS * 0.5 * ctx.screen.scale,
+            WireState::False.color(),
+        );
     }
 }

@@ -85,7 +85,7 @@ impl CircuitImpl for Circuit {
     }
 
     fn update_signals(&self, state_ctx: &CircuitStateContext, _: Option<usize>) {
-        let states = self.inputs.iter().map(|i| i.get_input(state_ctx));
+        let states = self.inputs.iter().map(|i| i.get_state(state_ctx));
         INPUT_BOOLS.with(|b| {
             let mut b = b.lock();
 
@@ -96,15 +96,15 @@ impl CircuitImpl for Circuit {
                     WireState::True => b.push(true),
                     WireState::False => b.push(false),
                     WireState::Error => {
-                        self.output.set_output(state_ctx, WireState::Error);
+                        self.output.set_state(state_ctx, WireState::Error);
                         return;
                     }
                 }
             }
             if b.is_empty() {
-                self.output.set_output(state_ctx, WireState::None);
+                self.output.set_state(state_ctx, WireState::None);
             } else {
-                self.output.set_output(
+                self.output.set_state(
                     state_ctx,
                     (self.template.process_inputs)(&b).into(),
                 );

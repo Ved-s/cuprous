@@ -59,6 +59,19 @@ impl WireState {
         };
         Color32::from_rgb(rgb[0], rgb[1], rgb[2])
     }
+
+    pub fn combine_boolean(self, state: WireState, combiner: impl FnOnce(bool, bool) -> bool) -> WireState {
+        match (self, state) {
+            (WireState::None, other) | (other, WireState::None) => other,
+            (WireState::Error, _) | (_, WireState::Error) => WireState::Error,
+
+            (WireState::True, WireState::False) => combiner(true, false).into(),
+            (WireState::False, WireState::True) => combiner(false, true).into(),
+
+            (WireState::True, WireState::True) => combiner(true, true).into(),
+            (WireState::False, WireState::False) => combiner(false, false).into(),
+        }
+    }
 }
 
 impl From<bool> for WireState {
@@ -567,7 +580,7 @@ impl State {
         let pin_info = unwrap_option_or_return!(info.pins.get(id));
 
         let ctx = CircuitStateContext::new(self, circuit);
-        let old_state = pin_info.get_input(&ctx);
+        let old_state = pin_info.get_state(&ctx);
 
         let pin = pin_info.pin.clone();
         let pin = pin.write();

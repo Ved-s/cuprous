@@ -7,6 +7,8 @@ use eframe::egui::{Ui, ComboBox};
 
 use crate::{unwrap_option_or_return, Direction4, DynStaticStr, RwLock, unwrap_option_or_continue};
 
+use super::gates::not;
+
 #[derive(Default)]
 pub struct CircuitPropertyStore(RwLock<HashMap<DynStaticStr, CircuitProperty>>);
 
@@ -245,6 +247,52 @@ impl CircuitPropertyImpl for Direction4 {
         if let Ok(d) = serde_intermediate::de::intermediate::deserialize(data) {
             *self = d;
         }
+    }
+
+    fn copy_into(&self, other: &mut dyn CircuitPropertyImpl) {
+        if let Some(r) = other.downcast_mut() {
+            *r = *self;
+        }
+    }
+}
+
+impl CircuitPropertyImpl for bool {
+    fn equals(&self, other: &dyn CircuitPropertyImpl) -> bool {
+        other.is_type_and(|o: &Self| o == self)
+    }
+
+    fn ui(&mut self, ui: &mut Ui, not_equal: bool) -> Option<Box<dyn CircuitPropertyImpl>> {
+
+        let text = if not_equal {
+            "<many>"
+        } else if *self {
+            "True"
+        } else {
+            "False"
+        };
+
+        let mut selected = !not_equal && *self;
+        let old = *self;
+        if ui.toggle_value(&mut selected, text).changed() {
+            *self = selected;
+            Some(Box::new(old))
+        } else {
+            None
+        }
+    }
+
+    fn clone(&self) -> Box<dyn CircuitPropertyImpl> {
+        Box::new(*self)
+    }
+
+    fn load(&mut self, data: &serde_intermediate::Intermediate) {
+        if let Ok(d) = serde_intermediate::de::intermediate::deserialize(data) {
+            *self = d;
+        }
+    }
+
+    fn save(&self) -> serde_intermediate::Intermediate {
+        serde_intermediate::to_intermediate(self).unwrap_or_default()
     }
 
     fn copy_into(&self, other: &mut dyn CircuitPropertyImpl) {

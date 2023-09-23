@@ -3,7 +3,7 @@ use std::{any::TypeId, collections::HashSet, f32::consts::TAU, ops::Deref, sync:
 use eframe::{
     egui::{
         panel::PanelState, FontSelection, Grid, Id, InnerResponse, Key, Margin, PointerButton,
-        Response, Sense, SidePanel, TextStyle, Ui, Widget, WidgetText,
+        Response, Sense, SidePanel, TextStyle, Ui, Widget, WidgetText, Label,
     },
     epaint::{Color32, PathShape, Rounding, Stroke, TextShape},
 };
@@ -430,6 +430,7 @@ impl PropertyEditor {
                 .map(|s| (s.id.clone(), s.store.inner().write()))
                 .collect();
             let mut changes = Vec::new();
+            let mut none = true;
             for id in self.ids_cache.iter() {
                 let mut props: Vec<_> = guards
                     .iter_mut()
@@ -464,9 +465,14 @@ impl PropertyEditor {
                         old_value: old,
                     });
                 }
-
+                none = false;
                 ui.end_row();
             }
+
+            if none {
+                ui.vertical_centered(|ui| Label::new("No editable properties").wrap(false).ui(ui));
+            }
+
             changes
         });
         PropertyEditorResponse {

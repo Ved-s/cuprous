@@ -7,7 +7,7 @@ impl Circuit {
         Self {}
     }
 
-    fn draw(ctx: &PaintContext, semi_transparent: bool) {
+    fn draw(state: Option<&CircuitStateContext>, ctx: &PaintContext, semi_transparent: bool) {
         todo!()
     }
 
@@ -22,7 +22,7 @@ impl Circuit {
 
 impl CircuitImpl for Circuit {
     fn draw(&self, state_ctx: &CircuitStateContext, paint_ctx: &PaintContext) {
-        Circuit::draw(paint_ctx, false);
+        Circuit::draw(Some(state_ctx), paint_ctx, false);
     }
 
     fn create_pins(&mut self, props: &CircuitPropertyStore) -> Box<[CircuitPinInfo]> {
@@ -30,7 +30,7 @@ impl CircuitImpl for Circuit {
         vec![].into_boxed_slice()
     }
 
-    fn update_signals(&mut self, state_ctx: &CircuitStateContext, changed_pin: Option<usize>) {
+    fn update_signals(&self, state_ctx: &CircuitStateContext, changed_pin: Option<usize>) {
         todo!()
     }
 
@@ -39,7 +39,6 @@ impl CircuitImpl for Circuit {
     }
 }
 
-#[derive(Debug)]
 pub struct Preview {}
 
 impl CircuitPreviewImpl for Preview {
@@ -48,7 +47,7 @@ impl CircuitPreviewImpl for Preview {
     }
 
     fn draw_preview(&self, props: &CircuitPropertyStore, ctx: &PaintContext, in_world: bool) {
-        Circuit::draw(ctx, in_world);
+        Circuit::draw(None, ctx, in_world);
         draw_pins_preview(ctx, Circuit::size(props), Circuit::pin_positions(props))
     }
 

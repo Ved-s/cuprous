@@ -93,7 +93,7 @@ impl CircuitImpl for Circuit {
     fn update_signals(&self, state_ctx: &CircuitStateContext, pin: Option<usize>) {
         match pin {
             Some(1) => {
-                let new_dir_in = matches!(self.dir_pin.get_input(state_ctx), WireState::True);
+                let new_dir_in = matches!(self.dir_pin.get_state(state_ctx), WireState::True);
                 let dir = state_ctx.write_circuit_internal_state::<State, _>(|cs| {
                     if cs.dir_in == new_dir_in {
                         None
@@ -114,14 +114,14 @@ impl CircuitImpl for Circuit {
                 let dir_in =
                     state_ctx.read_circuit_internal_state::<State, _>(|cs| cs.dir_in);
                 if !dir_in.is_some_and(|i| i) {
-                    self.io_pin.set_output(state_ctx, WireState::True);
+                    self.io_pin.set_state(state_ctx, WireState::True);
                 }
             }
             _ => {}
         }
 
         if pin.is_none() {
-            self.clock_pin.set_output(
+            self.clock_pin.set_state(
                 state_ctx,
                 state_ctx
                     .read_circuit_internal_state::<State, _>(|s| s.state)
@@ -137,7 +137,7 @@ impl CircuitImpl for Circuit {
             s.state
         });
 
-        self.clock_pin.set_output(state_ctx, new_state.into());
+        self.clock_pin.set_state(state_ctx, new_state.into());
     }
 
     fn update_interval(&self, state_ctx: &CircuitStateContext) -> Option<Duration> {
