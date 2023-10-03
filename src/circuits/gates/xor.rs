@@ -33,7 +33,7 @@ pub const TEMPLATE: GateTemplate = GateTemplate {
         let transformer = |p: Pos2| ctx.rect.lerp_inside(Vec2f::from(p.to_vec2() / size).rotated_xy(angle, 0.5).into());
         path.iter().cloned().create_path_shapes(
             fill_color,
-            Stroke::new(2.0, border_color),
+            Stroke::new(0.15 * ctx.screen.scale, border_color),
             straightness,
             transformer,
             |_, s| {
@@ -54,7 +54,7 @@ pub const TEMPLATE: GateTemplate = GateTemplate {
             points: arc_points,
             closed: false,
             fill: Color32::TRANSPARENT,
-            stroke: Stroke::new(3.0, border_color),
+            stroke: Stroke::new(0.1 * ctx.screen.scale, border_color),
         });
     },
 };

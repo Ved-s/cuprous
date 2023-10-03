@@ -21,12 +21,12 @@ pub enum InventoryItemGroup {
 }
 
 pub trait InventoryItem {
-    fn id(&self) -> &str;
+    fn id(&self) -> DynStaticStr;
     fn draw(&self, ctx: &PaintContext);
 }
 
 pub struct Inventory<'a> {
-    pub selected: &'a mut Option<String>,
+    pub selected: &'a mut Option<DynStaticStr>,
     pub groups: &'a Vec<InventoryItemGroup>,
     pub item_size: Vec2,
     pub item_margin: Margin,
@@ -35,7 +35,7 @@ pub struct Inventory<'a> {
 
 #[derive(Clone, Default)]
 struct InventoryMemory {
-    last_group_items: Arc<RwLock<HashSet<String>>>,
+    last_group_items: Arc<RwLock<HashSet<DynStaticStr>>>,
 }
 
 const NUMBER_KEYS: [Key; 10] = [
@@ -63,7 +63,7 @@ impl Inventory<'_> {
                 .and_then(|mem| {
                     let last_group_items = mem.last_group_items.read();
                     for (i, item) in group.iter().enumerate() {
-                        if last_group_items.contains(item.id()) {
+                        if last_group_items.contains(&item.id()) {
                             return Some(i);
                         }
                     }
@@ -112,7 +112,7 @@ impl Inventory<'_> {
 
             if let Some(group) = selected_group {
                 if let Some(item) = group.get(index) {
-                    *self.selected = Some(item.id().to_owned());
+                    *self.selected = Some(item.id());
                     return (current_index, Some(index));
                 }
             }
@@ -122,7 +122,7 @@ impl Inventory<'_> {
         } else if let Some(item) = self.groups.get(index) {
             match item {
                 InventoryItemGroup::SingleItem(item) => {
-                    *self.selected = Some(item.id().to_owned());
+                    *self.selected = Some(item.id());
                     return (Some(index), None);
                 }
                 InventoryItemGroup::Group(group) => {
@@ -131,7 +131,7 @@ impl Inventory<'_> {
                             .unwrap_or(0);
 
                     if let Some(item) = group.get(item_index) {
-                        *self.selected = Some(item.id().to_owned());
+                        *self.selected = Some(item.id());
                         return (Some(index), Some(item_index));
                     }
                 }
@@ -205,7 +205,7 @@ impl Widget for Inventory<'_> {
             Stroke::new(1.0, Color32::from_gray(100)),
         );
 
-        let paint_ctx = PaintContext::new_on_ui(ui, rect);
+        let paint_ctx = PaintContext::new_on_ui(ui, rect, 1.0);
 
         let click_pos = response
             .clicked_by(PointerButton::Primary)
@@ -238,10 +238,10 @@ impl Widget for Inventory<'_> {
 
                         if click_pos.is_some_and(|pos| rect.contains(pos)) {
                             let id = item.id();
-                            if self.selected.as_ref().is_some_and(|sel| sel == id) {
+                            if self.selected.as_ref().is_some_and(|sel| *sel == id) {
                                 *self.selected = None;
                             } else {
-                                *self.selected = Some(id.to_string());
+                                *self.selected = Some(id);
                             }
                             selected_changed = true;
                         }
@@ -276,10 +276,10 @@ impl Widget for Inventory<'_> {
                             }
                             if click_pos.is_some_and(|pos| rect.contains(pos)) {
                                 let id = item.id();
-                                if self.selected.as_ref().is_some_and(|sel| sel == id) {
+                                if self.selected.as_ref().is_some_and(|sel| *sel == id) {
                                     *self.selected = None;
                                 } else {
-                                    *self.selected = Some(id.to_string());
+                                    *self.selected = Some(id);
                                 }
                                 selected_changed = true;
                             }
@@ -302,10 +302,10 @@ impl Widget for Inventory<'_> {
                     }
                     if click_pos.is_some_and(|pos| rect.contains(pos)) {
                         let id = item.id();
-                        if self.selected.as_ref().is_some_and(|sel| sel == id) {
+                        if self.selected.as_ref().is_some_and(|sel| *sel == id) {
                             *self.selected = None;
                         } else {
-                            *self.selected = Some(id.to_string());
+                            *self.selected = Some(id);
                         }
                     }
                     let rect = apply_margin_to_rect(rect, self.item_margin);
@@ -323,7 +323,7 @@ impl Widget for Inventory<'_> {
                         let m = mem.data.get_temp_mut_or_default::<InventoryMemory>(id);
                         let mut last_group_items = m.last_group_items.write();
                         for item in group {
-                            last_group_items.remove(item.id());
+                            last_group_items.remove(item.id().deref());
                         }
                         last_group_items.insert(selected_id.clone());
                     });

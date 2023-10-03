@@ -143,12 +143,12 @@ pub struct PaintContext<'a> {
 }
 
 impl<'a> PaintContext<'a> {
-    pub fn new_on_ui(ui: &'a Ui, rect: Rect) -> Self {
+    pub fn new_on_ui(ui: &'a Ui, rect: Rect, scale: f32) -> Self {
         Self {
             screen: Screen {
                 offset: rect.left_top().into(),
                 pos: 0.0.into(),
-                scale: 1.0,
+                scale,
             },
             paint: ui.painter(),
             rect,
@@ -338,8 +338,8 @@ impl Screen {
 
 struct SelectionInventoryItem {}
 impl InventoryItem for SelectionInventoryItem {
-    fn id(&self) -> &str {
-        "selection"
+    fn id(&self) -> DynStaticStr {
+        "selection".into()
     }
 
     fn draw(&self, ctx: &PaintContext) {
@@ -371,8 +371,8 @@ impl InventoryItem for SelectionInventoryItem {
 
 struct WireInventoryItem {}
 impl InventoryItem for WireInventoryItem {
-    fn id(&self) -> &str {
-        "wire"
+    fn id(&self) -> DynStaticStr {
+        "wire".into()
     }
 
     fn draw(&self, ctx: &PaintContext) {
@@ -408,11 +408,11 @@ impl InventoryItem for WireInventoryItem {
 
 struct CircuitInventoryItem {
     preview: Arc<CircuitPreview>,
-    id: String,
+    id: DynStaticStr,
 }
 impl InventoryItem for CircuitInventoryItem {
-    fn id(&self) -> &str {
-        &self.id
+    fn id(&self) -> DynStaticStr {
+        self.id.clone()
     }
 
     fn draw(&self, ctx: &PaintContext) {

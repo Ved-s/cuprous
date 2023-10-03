@@ -44,7 +44,7 @@ impl Circuit {
             rect,
             Rounding::none(),
             fill_color,
-            Stroke::new(2.0, border_color),
+            Stroke::new(0.15 * ctx.screen.scale, border_color),
         );
 
         fn format_freq(f: f32) -> String {

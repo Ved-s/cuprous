@@ -50,13 +50,13 @@ impl Circuit {
             points,
             closed: true,
             fill: fill_color,
-            stroke: Stroke::new(2.0, border_color),
+            stroke: Stroke::new(0.15 * ctx.screen.scale, border_color),
         });
         ctx.paint.circle(
             transformer(pos2(1.32, 0.5)),
             0.2 * ctx.screen.scale,
             fill_color,
-            Stroke::new(2.0, border_color),
+            Stroke::new(0.15 * ctx.screen.scale, border_color),
         );
     }
 

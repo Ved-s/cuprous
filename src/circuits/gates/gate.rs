@@ -190,7 +190,7 @@ pub fn draw_from_path(
 
     path.iter().cloned().create_path_shapes(
         fill_color,
-        Stroke::new(2.0, border_color),
+        Stroke::new(0.15 * ctx.screen.scale, border_color),
         straightness,
         |p| {
             ctx.rect.lerp_inside(

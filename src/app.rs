@@ -1,11 +1,14 @@
 use std::{collections::HashMap, fmt::Write, ops::Deref, sync::Arc};
 
 use eframe::{
-    egui::{self, Context, Frame, Key, Margin, SidePanel, Ui, WidgetText, TextStyle, FontSelection, Sense},
+    egui::{
+        self, CollapsingHeader, Context, FontSelection, Frame, Key, Margin, Sense, SidePanel,
+        TextStyle, Ui, WidgetText,
+    },
     epaint::{Color32, Rounding, Stroke, TextShape},
     CreationContext,
 };
-use emath::{pos2, Pos2, Rect, Vec2, vec2};
+use emath::{pos2, vec2, Pos2, Rect, Vec2};
 
 use crate::{
     board::{ActiveCircuitBoard, CircuitBoard, SelectedItem},
@@ -33,8 +36,8 @@ pub struct App {
 
     paste: Option<Arc<PastePreview>>,
     inventory_items: Vec<InventoryItemGroup>,
-    selected_id: Option<String>,
-    circuit_previews: HashMap<String, Arc<CircuitPreview>>,
+    selected_id: Option<DynStaticStr>,
+    circuit_previews: HashMap<DynStaticStr, Arc<CircuitPreview>>,
 
     props_ui: crate::ui::PropertyEditor,
 }
@@ -95,7 +98,7 @@ impl eframe::App for App {
                     previews: &self.circuit_previews,
                 },
             )));
-            self.selected_id = Some("paste".to_owned());
+            self.selected_id = Some("paste".into());
         }
 
         if ctx.input(|input| input.key_pressed(Key::F9)) {
@@ -202,9 +205,12 @@ impl eframe::App for App {
                                 FontSelection::Style(TextStyle::Monospace),
                             )
                             .galley;
-                        
+
                         let size = galley.rect.size() + vec2(12.0, 6.0);
-                        let offset = vec2(20.0f32.min(inv_resp.rect.width() - 5.0 - size.x).max(0.0), -2.5);
+                        let offset = vec2(
+                            20.0f32.min(inv_resp.rect.width() - 5.0 - size.x).max(0.0),
+                            -2.5,
+                        );
 
                         let resp = ui.allocate_response(size + offset, Sense::hover());
                         let rect = Rect::from_min_size(resp.rect.min + offset, size);
@@ -220,7 +226,7 @@ impl eframe::App for App {
                             ui.style().visuals.panel_fill,
                             ui.style().visuals.window_stroke,
                         );
-                        
+
                         paint.add(TextShape {
                             pos: rect.min + vec2(6.0, 3.0),
                             galley,
@@ -268,13 +274,15 @@ impl eframe::App for App {
         let previews = crate::io::CircuitPreviewCollectionData(HashMap::from_iter(
             self.circuit_previews
                 .iter()
-                .filter_map(|(ty, p)| p.save().map(|d| (Arc::<str>::from(ty.clone()).into(), d))),
+                .filter_map(|(ty, p)| p.save().map(|d| (ty.clone(), d))),
         ));
         _storage.set_string("previews", ron::to_string(&previews).unwrap());
     }
 }
 
-static INVENTORY_CIRCUIT_ORDER: &[&str] = &[
+static INVENTORY_CIRCUIT_ORDER: &[&str] = &["or", "nor", "and", "nand", "xor", "xnor", "not"];
+
+static COMPONENT_BUILTIN_ORDER: &[&str] = &[
     "button",
     "or",
     "nor",
@@ -283,6 +291,7 @@ static INVENTORY_CIRCUIT_ORDER: &[&str] = &[
     "xor",
     "xnor",
     "not",
+    "transistor",
     "pullup",
     "freq_meter",
 ];
@@ -364,38 +373,17 @@ impl App {
             drop(states);
             first_id.unwrap_or_else(|| circuit_board.states.create_state(board.clone()).0)
         };
-        let inventory_group: Vec<_> = {
-            use std::cmp::Ordering;
+        let inventory_group: Vec<_> = INVENTORY_CIRCUIT_ORDER
+            .iter()
+            .filter_map(|id| previews.get(*id))
+            .map(|preview| {
+                Box::new(crate::CircuitInventoryItem {
+                    preview: preview.clone(),
+                    id: preview.imp.type_name(),
+                }) as Box<dyn InventoryItem>
+            })
+            .collect();
 
-            let mut vec: Vec<_> = previews.keys().collect();
-            vec.sort_by(|a, b| {
-                let a_ind = INVENTORY_CIRCUIT_ORDER
-                    .iter()
-                    .enumerate()
-                    .find_map(|s| (a == s.1).then_some(s.0));
-                let b_ind = INVENTORY_CIRCUIT_ORDER
-                    .iter()
-                    .enumerate()
-                    .find_map(|s| (b == s.1).then_some(s.0));
-
-                match (a_ind, b_ind) {
-                    (Some(a), Some(b)) => a.cmp(&b),
-                    (None, Some(_)) => Ordering::Less,
-                    (Some(_), None) => Ordering::Greater,
-                    (None, None) => Ordering::Equal,
-                }
-            });
-            vec.into_iter()
-                .filter_map(|id| {
-                    previews.get(id).map(|preview| {
-                        Box::new(crate::CircuitInventoryItem {
-                            preview: preview.clone(),
-                            id: preview.imp.type_name().deref().to_owned(),
-                        }) as Box<dyn InventoryItem>
-                    })
-                })
-                .collect()
-        };
         Self {
             pan_zoom: PanAndZoom::new(0.0.into(), 16.0),
 
@@ -412,10 +400,7 @@ impl App {
                 InventoryItemGroup::SingleItem(Box::new(crate::WireInventoryItem {})),
                 InventoryItemGroup::Group(inventory_group),
             ],
-            circuit_previews: previews
-                .into_iter()
-                .map(|(id, arc)| (id.deref().to_owned(), arc))
-                .collect(),
+            circuit_previews: previews,
             paste: None,
             props_ui: Default::default(),
         }
@@ -690,7 +675,7 @@ impl App {
 
     fn components_ui(&mut self, ui: &mut Ui) -> Rect {
         let style = ui.style().clone();
-        CollapsibleSidePanel::new("test-ui", "Test")
+        CollapsibleSidePanel::new("components-ui", "Components")
             .header_offset(20.0)
             .side(egui::panel::Side::Left)
             .panel_transformer(Some(Box::new(move |panel: SidePanel| {
@@ -709,6 +694,59 @@ impl App {
                     )
                     .show_separator_line(false)
             })))
-            .show(ui, |ui| ui.label("hello")).full_rect
+            .show(ui, |ui| {
+                let font = TextStyle::Monospace.resolve(ui.style());
+
+                CollapsingHeader::new("Built-in")
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        for name in COMPONENT_BUILTIN_ORDER {
+                            if let Some(preview) =
+                                self.circuit_previews.get(&DynStaticStr::Static(name))
+                            {
+                                ui.horizontal(|ui| {
+                                    let resp = ui.allocate_response(
+                                        vec2(font.size, font.size),
+                                        Sense::hover(),
+                                    );
+                                    let (rect, scale) = align_rect_scaled(
+                                        resp.rect.min,
+                                        vec2(font.size, font.size),
+                                        preview.size().convert(|v| v as f32).into(),
+                                    );
+
+                                    let paint_ctx = PaintContext::new_on_ui(ui, rect, scale);
+                                    preview.draw(&paint_ctx, false);
+
+                                    let selected = self
+                                        .selected_id
+                                        .as_ref()
+                                        .is_some_and(|s| *s == preview.imp.type_name());
+
+                                    if ui
+                                        .selectable_label(
+                                            selected,
+                                            preview.imp.display_name().deref(),
+                                        )
+                                        .clicked()
+                                    {
+                                        self.selected_id = match selected {
+                                            true => None,
+                                            false => Some(preview.imp.type_name()),
+                                        };
+                                    }
+                                });
+                            }
+                        }
+                    })
+            })
+            .full_rect
     }
+}
+
+fn align_rect_scaled(pos: Pos2, size: Vec2, rect_size: Vec2) -> (Rect, f32) {
+    let scale = (size.x / rect_size.x).min(size.y / rect_size.y);
+    let new_size = rect_size * scale;
+    let offset = vec2((size.x - new_size.x) * 0.5, (size.y - new_size.y) * 0.5);
+    (Rect::from_min_size(pos + offset, new_size), scale)
 }
