@@ -2,8 +2,9 @@ use std::{any::TypeId, collections::HashSet, f32::consts::TAU, ops::Deref, sync:
 
 use eframe::{
     egui::{
-        panel::PanelState, FontSelection, Grid, Id, InnerResponse, Key, Margin, PointerButton,
-        Response, Sense, SidePanel, TextStyle, Ui, Widget, WidgetText, Label,
+        panel::{self, PanelState},
+        FontSelection, Grid, Id, InnerResponse, Key, Label, Margin, PointerButton, Response, Sense,
+        SidePanel, TextStyle, Ui, Widget, WidgetText,
     },
     epaint::{Color32, PathShape, Rounding, Stroke, TextShape},
 };
@@ -501,10 +502,12 @@ pub struct CollapsibleSidePanel {
     active: bool,
     panel_transformer: Option<Box<dyn Fn(SidePanel) -> SidePanel>>,
     header_offset: f32,
+    side: panel::Side,
 }
 
 pub struct CollapsibleSidePanelResponse<R> {
     pub header: Response,
+    pub full_rect: Rect,
     pub panel: Option<InnerResponse<R>>,
 }
 
@@ -517,6 +520,7 @@ impl CollapsibleSidePanel {
             active: true,
             panel_transformer: None,
             header_offset: 10.0,
+            side: panel::Side::Left,
         }
     }
 
@@ -541,6 +545,10 @@ impl CollapsibleSidePanel {
         }
     }
 
+    pub fn side(self, side: panel::Side) -> Self {
+        Self { side, ..self }
+    }
+
     pub fn show<R>(
         self,
         ui: &mut Ui,
@@ -552,6 +560,7 @@ impl CollapsibleSidePanel {
             active,
             panel_transformer,
             header_offset,
+            side,
         } = self;
 
         ui.push_id(id, |ui| {
@@ -588,7 +597,10 @@ impl CollapsibleSidePanel {
                 header_text.rect.height() + 10.0,
                 header_text.rect.width() + header_text.rect.height() + 20.0,
             );
-            let pos = pos2(ui.max_rect().width() - size.x - offset, header_offset);
+            let pos = match side {
+                panel::Side::Left => pos2(offset, header_offset),
+                panel::Side::Right => pos2(ui.max_rect().width() - size.x - offset, header_offset),
+            };
 
             let text_color =
                 ui.style()
@@ -605,20 +617,32 @@ impl CollapsibleSidePanel {
                 arrow_rect.left_center(),
                 arrow_rect.right_bottom(),
             ];
-            let rotation = Rot2::from_angle(animation * TAU * 0.5);
+            let rotation = match side {
+                panel::Side::Left => Rot2::from_angle((1.0 - animation) * TAU * 0.5),
+                panel::Side::Right => Rot2::from_angle(animation * TAU * 0.5),
+            };
             for p in &mut points {
                 *p = arrow_rect.center() + rotation * (*p - arrow_rect.center());
             }
 
             let rect = Rect::from_min_size(pos, size);
 
-            painter.rect(
-                rect,
-                Rounding {
+            let rounding = match side {
+                panel::Side::Left => Rounding {
+                    ne: 5.0,
+                    se: 5.0,
+                    ..Default::default()
+                },
+                panel::Side::Right => Rounding {
                     nw: 5.0,
                     sw: 5.0,
                     ..Default::default()
                 },
+            };
+
+            painter.rect(
+                rect,
+                rounding,
                 ui.style().visuals.panel_fill,
                 ui.style().visuals.window_stroke,
             );
@@ -646,15 +670,23 @@ impl CollapsibleSidePanel {
                 })
             }
 
-            let panel = if animation > 0.0 {
-                let rect = ui.clip_rect();
-                let panel_offset = (1.0 - animation) * expanded_width;
+            let clip = ui.clip_rect();
+            let full_rect = match side {
+                panel::Side::Left => Rect::from_min_size(pos2(0.0, 0.0), vec2(rect.right(), clip.height())),
+                panel::Side::Right => Rect::from_min_size(pos2(rect.left(), 0.0), vec2(clip.width() - rect.left(), clip.height())),
+            };
 
-                let rect = Rect::from_min_size(rect.min + vec2(panel_offset, 0.0), rect.size());
+            let panel = if animation > 0.0 {
+                let panel_offset = match side {
+                    panel::Side::Left => (1.0 - animation) * -expanded_width,
+                    panel::Side::Right => (1.0 - animation) * expanded_width,
+                };
+
+                let rect = Rect::from_min_size(clip.min + vec2(panel_offset, 0.0), clip.size());
 
                 let mut panel_ui = ui.child_ui(rect, *ui.layout());
 
-                let p = SidePanel::right(panel_id).resizable(false);
+                let p = SidePanel::new(side, panel_id).resizable(false);
                 let p = match panel_transformer {
                     Some(pt) => pt(p),
                     None => p,
@@ -666,6 +698,7 @@ impl CollapsibleSidePanel {
 
             CollapsibleSidePanelResponse {
                 header: response,
+                full_rect,
                 panel,
             }
         })

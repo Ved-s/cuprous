@@ -1,11 +1,11 @@
-use std::{collections::HashMap, ops::Deref, sync::Arc};
+use std::{collections::HashMap, ops::Deref, sync::Arc, fmt::Write};
 
 use eframe::{
-    egui::{self, Context, Frame, Key, Margin, SidePanel, TextStyle, Ui},
+    egui::{self, Context, Frame, Key, Label, Margin, SidePanel, Ui, WidgetText},
     epaint::{Color32, Rounding, Stroke},
     CreationContext,
 };
-use emath::{pos2, vec2, Align2, Pos2, Rect, Vec2};
+use emath::{pos2, Pos2, Rect, Vec2};
 
 use crate::{
     board::{ActiveCircuitBoard, CircuitBoard, SelectedItem},
@@ -60,7 +60,12 @@ impl eframe::App for App {
         ctx.request_repaint();
 
         #[cfg(feature = "single_thread")]
-        self.board.board.read().states.update();
+        let sim_time = {
+            let start_time = Instant::now();
+            self.board.board.read().states.update();
+            Instant::now() - start_time
+        };
+
         cfg_if::cfg_if! {
             if #[cfg(all(not(web_sys_unstable_apis), feature = "wasm"))] {
                 let paste = ctx
@@ -80,6 +85,8 @@ impl eframe::App for App {
                 });
             }
         }
+
+        let start_time = Instant::now();
 
         if let Some(paste) = paste {
             self.paste = Some(Arc::new(PastePreview::new(
@@ -107,26 +114,28 @@ impl eframe::App for App {
             .show(ctx, |ui| {
                 self.main_update(ui, ctx);
 
-                let mut selected = self.selected_id.take();
-                if ui.input(|input| input.key_pressed(Key::Escape)) {
-                    selected = None;
-                }
-
-                ui.add(Inventory {
-                    selected: &mut selected,
-                    groups: &self.inventory_items,
-                    item_size: [28.0, 28.0].into(),
-                    item_margin: Margin::same(6.0),
-                    margin: Margin::same(10.0),
-                });
-
-                match (selected.as_deref(), &self.paste) {
-                    (Some("paste"), Some(_)) => (),
-                    (Some("paste"), None) => selected = None,
-                    (_, Some(_)) => self.paste = None,
-                    _ => (),
-                }
-                self.selected_id = selected;
+                let style = ui.style().clone();
+                let left_panel_rect = CollapsibleSidePanel::new("test-ui", "Test")
+                    .header_offset(20.0)
+                    .side(egui::panel::Side::Left)
+                    .panel_transformer(Some(Box::new(move |panel: SidePanel| {
+                        panel
+                            .frame(
+                                Frame::side_top_panel(&style)
+                                    .rounding(Rounding {
+                                        ne: 5.0,
+                                        nw: 0.0,
+                                        se: 5.0,
+                                        sw: 0.0,
+                                    })
+                                    .outer_margin(Margin::symmetric(0.0, 8.0))
+                                    .inner_margin(Margin::symmetric(5.0, 5.0))
+                                    .stroke(style.visuals.window_stroke),
+                            )
+                            .show_separator_line(false)
+                    })))
+                    .show(ui, |ui| ui.label("hello"))
+                    .full_rect;
 
                 if let SelectedItem::Circuit(p) = self.selected_item() {
                     let props = [((), &p.props).into()];
@@ -168,6 +177,59 @@ impl eframe::App for App {
                             None::<[PropertyStoreItem<'_, ()>; 1]>,
                         );
                     }
+                }
+                {
+                    let mut rect = ui.clip_rect();
+                    rect.min.x += left_panel_rect.width();
+                    rect = rect.shrink(10.0);
+                    let mut ui = ui.child_ui(rect, *ui.layout());
+
+                    let mut selected = self.selected_id.take();
+                    if ui.input(|input| input.key_pressed(Key::Escape)) {
+                        selected = None;
+                    }
+
+                    // TODO: Selected item name text
+
+                    ui.add(Inventory {
+                        selected: &mut selected,
+                        groups: &self.inventory_items,
+                        item_size: [28.0, 28.0].into(),
+                        item_margin: Margin::same(6.0),
+                        margin: Margin::default(),
+                    });
+
+                    match (selected.as_deref(), &self.paste) {
+                        (Some("paste"), Some(_)) => (),
+                        (Some("paste"), None) => selected = None,
+                        (_, Some(_)) => self.paste = None,
+                        _ => (),
+                    }
+                    self.selected_id = selected;
+
+                    let mut text = String::new();
+
+                    #[cfg(feature = "single_thread")]
+                    {
+                        let sim_time = sim_time.as_secs_f32() * 1000.0;
+                        text.write_fmt(format_args!("Simulation time: {sim_time:.02}ms\n")).unwrap();
+                    }
+
+                    let paint_time = (Instant::now() - start_time).as_secs_f32() * 1000.0;
+                    let debug = self.debug;
+                    let ordered_queue = self.board.board.read().is_ordered_queue();
+
+                    text.write_fmt(format_args!(
+                        "Paint time: {paint_time:.02}ms\n\
+                         [F9] Debug: {debug}\n\
+                         [F8] Board reload\n\
+                         [F4] State reset\n\
+                         [R] Rotate\n\
+                         [F] Flip\n\
+                         [Q] Ordered queue: {ordered_queue}\n\
+                        ")).unwrap();
+
+                    ui.monospace(text);
                 }
             });
     }
@@ -462,12 +524,10 @@ impl App {
     }
 
     fn main_update(&mut self, ui: &mut Ui, ctx: &Context) {
-        let start_time = Instant::now();
-
         let rect = ui.max_rect();
         self.pan_zoom.update(ui, rect, self.selected_id.is_none());
         let paint = ui.painter_at(rect);
-        let font_id = TextStyle::Monospace.resolve(ui.style());
+        // let font_id = TextStyle::Monospace.resolve(ui.style());
         let mut grid_ds_cell_size = self.pan_zoom.scale;
         while grid_ds_cell_size < 6.0 {
             grid_ds_cell_size *= 16.0;
@@ -493,7 +553,9 @@ impl App {
         let selected_item = self.selected_item();
 
         if ctx.egui_ctx.input(|input| input.key_pressed(Key::R)) {
-            self.change_selected_props(&selected_item, "dir", |d: &mut Direction4| *d = d.rotate_clockwise());
+            self.change_selected_props(&selected_item, "dir", |d: &mut Direction4| {
+                *d = d.rotate_clockwise()
+            });
         }
 
         if ctx.egui_ctx.input(|input| input.key_pressed(Key::F)) {
@@ -512,53 +574,55 @@ impl App {
 
         self.board.update(&ctx, selected_item, self.debug);
 
-        let update_time = Instant::now() - start_time;
+        //         paint.text(
+        //             rect.left_top() + vec2(10.0, 80.0),
+        //             Align2::LEFT_TOP,
+        //             format!(
+        //                 r#"Pos: {}
+        // Tile draw bounds: {} - {}
+        // Chunk draw bounds: {} - {}
+        // Time: {:.2} ms
+        // Selected: {:?}
 
-        paint.text(
-            rect.left_top() + vec2(10.0, 80.0),
-            Align2::LEFT_TOP,
-            format!(
-                r#"Pos: {}
-Tile draw bounds: {} - {}
-Chunk draw bounds: {} - {}
-Time: {:.2} ms
-Selected: {:?}
+        // [F9] Debug: {}
+        // [F8] Board reload
+        // [F4] State reset
+        // [R] Rotate
+        // [F] Flip
+        // [Q] Ordered queue: {}
 
-[F9] Debug: {}
-[F8] Board reload
-[F4] State reset
-[R] Rotate
-[F] Flip
-[Q] Ordered queue: {}
-
-Wire parts drawn: {}
-Pressed keys: {:?}
-Queue len: {}
-"#,
-                self.pan_zoom.pos,
-                bounds.tiles_tl,
-                bounds.tiles_br,
-                bounds.chunks_tl,
-                bounds.chunks_br,
-                update_time.as_secs_f64() * 1000.0,
-                self.selected_id,
-                self.debug,
-                self.board.board.read().is_ordered_queue(),
-                self.board
-                    .wires_drawn
-                    .load(std::sync::atomic::Ordering::Relaxed),
-                ui.input(|input| input.keys_down.iter().cloned().collect::<Vec<_>>()),
-                self.board.state.queue_len()
-            ),
-            font_id,
-            Color32::WHITE,
-        );
+        // Wire parts drawn: {}
+        // Pressed keys: {:?}
+        // Queue len: {}
+        // "#,
+        //                 self.pan_zoom.pos,
+        //                 bounds.tiles_tl,
+        //                 bounds.tiles_br,
+        //                 bounds.chunks_tl,
+        //                 bounds.chunks_br,
+        //                 update_time.as_secs_f64() * 1000.0,
+        //                 self.selected_id,
+        //                 self.debug,
+        //                 self.board.board.read().is_ordered_queue(),
+        //                 self.board
+        //                     .wires_drawn
+        //                     .load(std::sync::atomic::Ordering::Relaxed),
+        //                 ui.input(|input| input.keys_down.iter().cloned().collect::<Vec<_>>()),
+        //                 self.board.state.queue_len()
+        //             ),
+        //             font_id,
+        //             Color32::WHITE,
+        //         );
     }
 
-    fn change_selected_props<T: CircuitPropertyImpl>(&mut self, selected_item: &SelectedItem, id: &str, f: impl Fn(&mut T)) {
+    fn change_selected_props<T: CircuitPropertyImpl>(
+        &mut self,
+        selected_item: &SelectedItem,
+        id: &str,
+        f: impl Fn(&mut T),
+    ) {
         if let SelectedItem::Circuit(pre) = selected_item {
-            pre.props
-                .write(id, f);
+            pre.props.write(id, f);
         } else {
             let selected_circuits: Vec<_> = self
                 .board
@@ -618,6 +682,7 @@ Queue len: {}
         CollapsibleSidePanel::new("prop-ui", "Properties editor")
             .active(props.is_some())
             .header_offset(20.0)
+            .side(egui::panel::Side::Right)
             .panel_transformer(Some(Box::new(move |panel: SidePanel| {
                 panel
                     .frame(
