@@ -654,12 +654,17 @@ impl CollapsibleSidePanel {
                 stroke: Stroke::NONE,
             });
 
+            let (text_pos, text_angle) = match side {
+                panel::Side::Left => (vec2(size.x - 5.0, size.x), TAU * 0.25),
+                panel::Side::Right => (vec2(5.0, size.y - 10.0), TAU * 0.75),
+            };
+
             painter.add(TextShape {
-                pos: pos + vec2(size.x - 5.0, size.x),
+                pos: pos + text_pos,
                 galley: header_text,
                 underline: Stroke::NONE,
                 override_text_color: Some(text_color),
-                angle: TAU / 4.0,
+                angle: text_angle,
             });
 
             let response = ui.interact(rect, ui.id().with("_header"), Sense::click_and_drag());
