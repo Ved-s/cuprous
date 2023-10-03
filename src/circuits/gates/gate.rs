@@ -14,6 +14,7 @@ use crate::{
 #[derive(Clone)]
 pub struct GateTemplate {
     pub id: &'static str,
+    pub name: &'static str,
     pub process_inputs: fn(&[bool]) -> bool,
     pub drawer: fn(&PaintContext, f32, bool),
 }
@@ -167,6 +168,10 @@ impl CircuitPreviewImpl for Preview {
 
     fn default_props(&self) -> CircuitPropertyStore {
         CircuitPropertyStore::new([CircuitProperty::new("dir", "Direction", Direction4::Right)])
+    }
+
+    fn display_name(&self) -> DynStaticStr {
+        self.template.name.into()
     }
 }
 

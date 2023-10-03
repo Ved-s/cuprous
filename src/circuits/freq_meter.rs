@@ -166,4 +166,8 @@ impl CircuitPreviewImpl for Preview {
     fn default_props(&self) -> CircuitPropertyStore {
         CircuitPropertyStore::new([CircuitProperty::new("dir", "Direction", Direction4::Left)])
     }
+
+    fn display_name(&self) -> DynStaticStr {
+        "Frequency meter".into()
+    }
 }

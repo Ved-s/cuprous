@@ -6,6 +6,7 @@ use super::gate::{GateTemplate, draw_from_path};
 
 pub const TEMPLATE: GateTemplate = GateTemplate {
     id: "or",
+    name: "OR gate",
     process_inputs: |i| i.iter().any(|b| *b),
     drawer: |ctx, angle, semi_transparent| {
         let path = [

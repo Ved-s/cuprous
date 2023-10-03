@@ -7,6 +7,7 @@ use super::gate::{draw_from_path, GateTemplate};
 
 pub const TEMPLATE: GateTemplate = GateTemplate {
     id: "nor",
+    name: "NOR gate",
     process_inputs: |i| !i.iter().any(|b| *b),
     drawer: |ctx, angle, semi_transparent| {
         let opacity = if semi_transparent { 0.6 } else { 1.0 };

@@ -158,4 +158,8 @@ impl CircuitPreviewImpl for Preview {
             CircuitProperty::new("dir", "Direction", Direction4::Right)
         ])
     }
+
+    fn display_name(&self) -> DynStaticStr {
+        "NOT gate".into()
+    }
 }

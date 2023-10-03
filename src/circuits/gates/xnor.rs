@@ -10,6 +10,7 @@ use super::gate::GateTemplate;
 
 pub const TEMPLATE: GateTemplate = GateTemplate {
     id: "xnor",
+    name: "XNOR gate",
     process_inputs: |i| i.iter().filter(|b| **b).count() != 1, // TODO: make =1/is_odd a property 
     drawer: |ctx, angle, semi_transparent| {
         let opacity = if semi_transparent { 0.6 } else { 1.0 };

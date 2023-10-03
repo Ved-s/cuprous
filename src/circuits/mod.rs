@@ -520,6 +520,7 @@ impl CircuitPreview {
 
 pub trait CircuitPreviewImpl {
     fn type_name(&self) -> DynStaticStr;
+    fn display_name(&self) -> DynStaticStr;
     fn draw_preview(&self, props: &CircuitPropertyStore, ctx: &PaintContext, in_world: bool);
     fn size(&self, props: &CircuitPropertyStore) -> Vec2u;
     fn create_impl(&self) -> Box<dyn CircuitImpl>;

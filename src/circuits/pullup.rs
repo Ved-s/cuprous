@@ -82,4 +82,8 @@ impl CircuitPreviewImpl for Preview {
     fn default_props(&self) -> CircuitPropertyStore {
         Default::default()
     }
+
+    fn display_name(&self) -> DynStaticStr {
+        "Pullup".into()
+    }
 }

@@ -262,6 +262,10 @@ impl CircuitPreviewImpl for Preview {
             CircuitProperty::new("ty", "Type", Type::NPN),
         ])
     }
+
+    fn display_name(&self) -> DynStaticStr {
+        "Transistor".into()
+    }
 }
 
 impl CircuitPropertyImpl for Type {

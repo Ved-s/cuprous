@@ -1,11 +1,11 @@
-use std::{collections::HashMap, ops::Deref, sync::Arc, fmt::Write};
+use std::{collections::HashMap, fmt::Write, ops::Deref, sync::Arc};
 
 use eframe::{
-    egui::{self, Context, Frame, Key, Label, Margin, SidePanel, Ui, WidgetText},
-    epaint::{Color32, Rounding, Stroke},
+    egui::{self, Context, Frame, Key, Label, Margin, SidePanel, Ui, WidgetText, TextStyle, FontSelection, Sense},
+    epaint::{Color32, Rounding, Stroke, TextShape},
     CreationContext,
 };
-use emath::{pos2, Pos2, Rect, Vec2};
+use emath::{pos2, Pos2, Rect, Vec2, vec2};
 
 use crate::{
     board::{ActiveCircuitBoard, CircuitBoard, SelectedItem},
@@ -189,9 +189,7 @@ impl eframe::App for App {
                         selected = None;
                     }
 
-                    // TODO: Selected item name text
-
-                    ui.add(Inventory {
+                    let inv_resp = ui.add(Inventory {
                         selected: &mut selected,
                         groups: &self.inventory_items,
                         item_size: [28.0, 28.0].into(),
@@ -207,12 +205,59 @@ impl eframe::App for App {
                     }
                     self.selected_id = selected;
 
+                    let selected_name = match self.selected_item() {
+                        SelectedItem::None => None,
+                        SelectedItem::Selection => Some("Selection".into()),
+                        SelectedItem::Wire => Some("Wire".into()),
+                        SelectedItem::Paste(_) => Some("Pasted objects".into()),
+                        SelectedItem::Circuit(c) => Some(c.imp.display_name()),
+                    };
+
+                    if let Some(selected_name) = selected_name {
+                        let galley = WidgetText::from(selected_name.deref())
+                            .fallback_text_style(TextStyle::Monospace)
+                            .into_galley(
+                                &ui,
+                                Some(true),
+                                inv_resp.rect.width(),
+                                FontSelection::Style(TextStyle::Monospace),
+                            )
+                            .galley;
+                        
+                        let size = galley.rect.size() + vec2(12.0, 6.0);
+                        let offset = vec2(20.0f32.min(inv_resp.rect.width() - 5.0 - size.x).max(0.0), -2.5);
+
+                        let resp = ui.allocate_response(size + offset, Sense::hover());
+                        let rect = Rect::from_min_size(resp.rect.min + offset, size);
+                        let paint = ui.painter();
+                        paint.rect(
+                            rect,
+                            Rounding {
+                                nw: 0.0,
+                                ne: 0.0,
+                                sw: 3.0,
+                                se: 3.0,
+                            },
+                            ui.style().visuals.panel_fill,
+                            ui.style().visuals.window_stroke,
+                        );
+                        
+                        paint.add(TextShape {
+                            pos: rect.min + vec2(6.0, 3.0),
+                            galley,
+                            underline: Stroke::NONE,
+                            override_text_color: Some(ui.style().visuals.text_color()),
+                            angle: 0.0,
+                        });
+                    }
+
                     let mut text = String::new();
 
                     #[cfg(feature = "single_thread")]
                     {
                         let sim_time = sim_time.as_secs_f32() * 1000.0;
-                        text.write_fmt(format_args!("Simulation time: {sim_time:.02}ms\n")).unwrap();
+                        text.write_fmt(format_args!("Simulation time: {sim_time:.02}ms\n"))
+                            .unwrap();
                     }
 
                     let paint_time = (Instant::now() - start_time).as_secs_f32() * 1000.0;
@@ -224,10 +269,12 @@ impl eframe::App for App {
                          [F9] Debug: {debug}\n\
                          [F8] Board reload\n\
                          [F4] State reset\n\
-                         [R] Rotate\n\
-                         [F] Flip\n\
-                         [Q] Ordered queue: {ordered_queue}\n\
-                        ")).unwrap();
+                         [R]  Rotate\n\
+                         [F]  Flip\n\
+                         [Q]  Ordered queue: {ordered_queue}\n\
+                        "
+                    ))
+                    .unwrap();
 
                     ui.monospace(text);
                 }
