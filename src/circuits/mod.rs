@@ -18,7 +18,6 @@ pub mod gates;
 pub mod props;
 pub mod pullup;
 pub mod transistor;
-pub mod test;
 
 pub struct CircuitInfo {
     pub size: Vec2u,

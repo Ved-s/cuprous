@@ -1,7 +1,7 @@
 use std::{collections::HashMap, fmt::Write, ops::Deref, sync::Arc};
 
 use eframe::{
-    egui::{self, Context, Frame, Key, Label, Margin, SidePanel, Ui, WidgetText, TextStyle, FontSelection, Sense},
+    egui::{self, Context, Frame, Key, Margin, SidePanel, Ui, WidgetText, TextStyle, FontSelection, Sense},
     epaint::{Color32, Rounding, Stroke, TextShape},
     CreationContext,
 };
@@ -114,28 +114,7 @@ impl eframe::App for App {
             .show(ctx, |ui| {
                 self.main_update(ui, ctx);
 
-                let style = ui.style().clone();
-                let left_panel_rect = CollapsibleSidePanel::new("test-ui", "Test")
-                    .header_offset(20.0)
-                    .side(egui::panel::Side::Left)
-                    .panel_transformer(Some(Box::new(move |panel: SidePanel| {
-                        panel
-                            .frame(
-                                Frame::side_top_panel(&style)
-                                    .rounding(Rounding {
-                                        ne: 5.0,
-                                        nw: 0.0,
-                                        se: 5.0,
-                                        sw: 0.0,
-                                    })
-                                    .outer_margin(Margin::symmetric(0.0, 8.0))
-                                    .inner_margin(Margin::symmetric(5.0, 5.0))
-                                    .stroke(style.visuals.window_stroke),
-                            )
-                            .show_separator_line(false)
-                    })))
-                    .show(ui, |ui| ui.label("hello"))
-                    .full_rect;
+                let left_panel_rect = self.components_ui(ui);
 
                 if let SelectedItem::Circuit(p) = self.selected_item() {
                     let props = [((), &p.props).into()];
@@ -306,14 +285,12 @@ static INVENTORY_CIRCUIT_ORDER: &[&str] = &[
     "not",
     "pullup",
     "freq_meter",
-    "test",
 ];
 
 impl App {
     pub fn create(cc: &CreationContext) -> Self {
         let previews = [
-            Box::new(circuits::test::Preview {}) as Box<dyn CircuitPreviewImpl>,
-            Box::new(circuits::button::Preview {}),
+            Box::new(circuits::button::Preview {}) as Box<dyn CircuitPreviewImpl>,
             Box::new(circuits::gates::gate::Preview {
                 template: circuits::gates::or::TEMPLATE,
             }),
@@ -620,46 +597,6 @@ impl App {
         }
 
         self.board.update(&ctx, selected_item, self.debug);
-
-        //         paint.text(
-        //             rect.left_top() + vec2(10.0, 80.0),
-        //             Align2::LEFT_TOP,
-        //             format!(
-        //                 r#"Pos: {}
-        // Tile draw bounds: {} - {}
-        // Chunk draw bounds: {} - {}
-        // Time: {:.2} ms
-        // Selected: {:?}
-
-        // [F9] Debug: {}
-        // [F8] Board reload
-        // [F4] State reset
-        // [R] Rotate
-        // [F] Flip
-        // [Q] Ordered queue: {}
-
-        // Wire parts drawn: {}
-        // Pressed keys: {:?}
-        // Queue len: {}
-        // "#,
-        //                 self.pan_zoom.pos,
-        //                 bounds.tiles_tl,
-        //                 bounds.tiles_br,
-        //                 bounds.chunks_tl,
-        //                 bounds.chunks_br,
-        //                 update_time.as_secs_f64() * 1000.0,
-        //                 self.selected_id,
-        //                 self.debug,
-        //                 self.board.board.read().is_ordered_queue(),
-        //                 self.board
-        //                     .wires_drawn
-        //                     .load(std::sync::atomic::Ordering::Relaxed),
-        //                 ui.input(|input| input.keys_down.iter().cloned().collect::<Vec<_>>()),
-        //                 self.board.state.queue_len()
-        //             ),
-        //             font_id,
-        //             Color32::WHITE,
-        //         );
     }
 
     fn change_selected_props<T: CircuitPropertyImpl>(
@@ -749,5 +686,29 @@ impl App {
             .show(ui, |ui| props.map(|props| editor.ui(ui, props).changes))
             .panel?
             .inner
+    }
+
+    fn components_ui(&mut self, ui: &mut Ui) -> Rect {
+        let style = ui.style().clone();
+        CollapsibleSidePanel::new("test-ui", "Test")
+            .header_offset(20.0)
+            .side(egui::panel::Side::Left)
+            .panel_transformer(Some(Box::new(move |panel: SidePanel| {
+                panel
+                    .frame(
+                        Frame::side_top_panel(&style)
+                            .rounding(Rounding {
+                                ne: 5.0,
+                                nw: 0.0,
+                                se: 5.0,
+                                sw: 0.0,
+                            })
+                            .outer_margin(Margin::symmetric(0.0, 8.0))
+                            .inner_margin(Margin::symmetric(5.0, 5.0))
+                            .stroke(style.visuals.window_stroke),
+                    )
+                    .show_separator_line(false)
+            })))
+            .show(ui, |ui| ui.label("hello")).full_rect
     }
 }
