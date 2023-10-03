@@ -2,8 +2,8 @@ use std::{collections::HashMap, fmt::Write, ops::Deref, sync::Arc};
 
 use eframe::{
     egui::{
-        self, CollapsingHeader, Context, FontSelection, Frame, Key, Margin, Sense, SidePanel,
-        TextStyle, Ui, WidgetText,
+        self, CollapsingHeader, Context, FontSelection, Frame, Key, Margin, Sense,
+        SidePanel, TextEdit, TextStyle, Ui, WidgetText,
     },
     epaint::{Color32, Rounding, Stroke, TextShape},
     CreationContext,
@@ -23,6 +23,15 @@ use crate::{
     TileDrawBounds,
 };
 
+#[derive(Debug, PartialEq, Eq, Clone, Hash)]
+pub enum SelectedItemId {
+    None,
+    Wires,
+    Selection,
+    Paste,
+    Circuit(DynStaticStr),
+}
+
 pub struct App {
     #[cfg(not(feature = "wasm"))]
     last_win_pos: Option<Pos2>,
@@ -36,10 +45,12 @@ pub struct App {
 
     paste: Option<Arc<PastePreview>>,
     inventory_items: Vec<InventoryItemGroup>,
-    selected_id: Option<DynStaticStr>,
+    selected_id: SelectedItemId,
     circuit_previews: HashMap<DynStaticStr, Arc<CircuitPreview>>,
 
     props_ui: crate::ui::PropertyEditor,
+
+    pub boards: HashMap<u128, Arc<RwLock<CircuitBoard>>>,
 }
 
 // TODO: fix coi sometimes not working by re-registering it and reloading
@@ -65,7 +76,10 @@ impl eframe::App for App {
         #[cfg(feature = "single_thread")]
         let sim_time = {
             let start_time = Instant::now();
-            self.board.board.read().states.update();
+            for board in self.boards.values() {
+                let states = board.read().states.clone();
+                states.update();
+            }
             Instant::now() - start_time
         };
 
@@ -98,14 +112,15 @@ impl eframe::App for App {
                     previews: &self.circuit_previews,
                 },
             )));
-            self.selected_id = Some("paste".into());
+            self.selected_id = SelectedItemId::Paste;
         }
 
         if ctx.input(|input| input.key_pressed(Key::F9)) {
             self.debug = !self.debug;
         } else if ctx.input(|input| input.key_pressed(Key::F8)) {
             let board = self.board.board.clone();
-            self.board = ActiveCircuitBoard::new(board, 0).unwrap();
+            let state = self.board.state.clone();
+            self.board = ActiveCircuitBoard::new(board, state);
         } else if ctx.input(|input| input.key_pressed(Key::F4)) {
             let state = &self.board.state;
             state.reset();
@@ -166,26 +181,28 @@ impl eframe::App for App {
                     rect = rect.shrink(10.0);
                     let mut ui = ui.child_ui(rect, *ui.layout());
 
-                    let mut selected = self.selected_id.take();
+                    //let mut selected = self.selected_id.clone();
                     if ui.input(|input| input.key_pressed(Key::Escape)) {
-                        selected = None;
+                        self.selected_id = SelectedItemId::None;
                     }
 
                     let inv_resp = ui.add(Inventory {
-                        selected: &mut selected,
+                        selected: &mut self.selected_id,
                         groups: &self.inventory_items,
                         item_size: [28.0, 28.0].into(),
                         item_margin: Margin::same(6.0),
                         margin: Margin::default(),
                     });
 
-                    match (selected.as_deref(), &self.paste) {
-                        (Some("paste"), Some(_)) => (),
-                        (Some("paste"), None) => selected = None,
-                        (_, Some(_)) => self.paste = None,
+                    match (
+                        self.selected_id == SelectedItemId::Paste,
+                        self.paste.is_some(),
+                    ) {
+                        (true, true) => (),
+                        (true, false) => self.selected_id = SelectedItemId::None,
+                        (_, true) => self.paste = None,
                         _ => (),
                     }
-                    self.selected_id = selected;
 
                     let selected_name = match self.selected_item() {
                         SelectedItem::None => None,
@@ -267,9 +284,14 @@ impl eframe::App for App {
     }
 
     fn save(&mut self, _storage: &mut dyn eframe::Storage) {
-        let board = self.board.board.read();
-        let data = board.save();
-        _storage.set_string("board", ron::to_string(&data).unwrap());
+        let guards: Vec<_> = self.boards.values().map(|b| b.read()).collect();
+        let locks: Vec<_> = guards.iter().map(|g| g.sim_lock.write()).collect();
+        let data: Vec<_> = guards.iter().map(|g| g.save(false)).collect();
+
+        drop(locks);
+        drop(guards);
+
+        _storage.set_string("boards", ron::to_string(&data).unwrap());
 
         let previews = crate::io::CircuitPreviewCollectionData(HashMap::from_iter(
             self.circuit_previews
@@ -341,38 +363,56 @@ impl App {
         let ctx = BasicLoadingContext {
             previews: &previews,
         };
-        let shift = cc.egui_ctx.input(|input| input.modifiers.shift);
-        let board = (!shift)
-            .then_some(cc.storage)
-            .flatten()
-            .and_then(|s| s.get_string("board"))
-            .and_then(|s| ron::from_str::<crate::io::CircuitBoardData>(&s).ok())
-            .map(|d| CircuitBoard::load(&d, &ctx));
 
-        Self::new(board, previews)
+        let boards = match &cc.storage {
+            None => vec![],
+            Some(storage) => {
+                if let Some(boards) = storage.get_string("boards") {
+                    if let Ok(data) = ron::from_str::<Vec<crate::io::CircuitBoardData>>(&boards) {
+                        data.iter().map(|d| CircuitBoard::load(d, &ctx)).collect()
+                    } else {
+                        vec![]
+                    }
+                } else if let Some(main_board) = storage.get_string("board") {
+                    // TODO: do something with loading errors
+
+                    if let Ok(data) = ron::from_str::<crate::io::CircuitBoardData>(&main_board) {
+                        let board = CircuitBoard::load(&data, &ctx);
+                        let mut board_guard = board.write();
+                        if board_guard.name.is_empty() {
+                            board_guard.name = "main".into();
+                        }
+                        drop(board_guard);
+                        vec![board]
+                    } else {
+                        vec![]
+                    }
+                } else {
+                    vec![]
+                }
+            }
+        };
+
+        Self::new(boards, previews)
     }
 
     pub fn new(
-        board: Option<Arc<RwLock<CircuitBoard>>>,
+        mut boards: Vec<Arc<RwLock<CircuitBoard>>>,
         previews: HashMap<DynStaticStr, Arc<CircuitPreview>>,
     ) -> Self {
-        let board = board.unwrap_or_else(|| Arc::new(RwLock::new(CircuitBoard::new())));
+        if boards.is_empty() {
+            let mut board = CircuitBoard::new();
+            board.name = "main".into();
+            boards.push(Arc::new(RwLock::new(board)));
+        }
 
         #[cfg(not(feature = "single_thread"))]
-        board.read().activate();
+        {
+            for board in &boards {
+                board.read().activate();
+            }
+        }
 
-        let state_id = {
-            let circuit_board = board.read();
-            let states = circuit_board.states.states().read();
-            let first_id = states
-                .inner()
-                .iter()
-                .enumerate()
-                .find(|(_, v)| v.is_some())
-                .map(|(i, _)| i);
-            drop(states);
-            first_id.unwrap_or_else(|| circuit_board.states.create_state(board.clone()).0)
-        };
         let inventory_group: Vec<_> = INVENTORY_CIRCUIT_ORDER
             .iter()
             .filter_map(|id| previews.get(*id))
@@ -391,10 +431,12 @@ impl App {
             last_win_pos: None,
             #[cfg(not(feature = "wasm"))]
             last_win_size: Default::default(),
-            board: ActiveCircuitBoard::new(board, state_id).unwrap(),
+            board: ActiveCircuitBoard::new_main(
+                boards.first().expect("Board list cannot be empty").clone(),
+            ),
             debug: false,
 
-            selected_id: None,
+            selected_id: SelectedItemId::None,
             inventory_items: vec![
                 InventoryItemGroup::SingleItem(Box::new(crate::SelectionInventoryItem {})),
                 InventoryItemGroup::SingleItem(Box::new(crate::WireInventoryItem {})),
@@ -403,6 +445,10 @@ impl App {
             circuit_previews: previews,
             paste: None,
             props_ui: Default::default(),
+            boards: HashMap::from_iter(boards.into_iter().map(|b| {
+                let uid = b.read().uid;
+                (uid, b)
+            })),
         }
     }
 
@@ -534,7 +580,8 @@ impl App {
 
     fn main_update(&mut self, ui: &mut Ui, ctx: &Context) {
         let rect = ui.max_rect();
-        self.pan_zoom.update(ui, rect, self.selected_id.is_none());
+        self.pan_zoom
+            .update(ui, rect, self.selected_id == SelectedItemId::None);
         let paint = ui.painter_at(rect);
         // let font_id = TextStyle::Monospace.resolve(ui.style());
         let mut grid_ds_cell_size = self.pan_zoom.scale;
@@ -627,15 +674,15 @@ impl App {
     }
 
     fn selected_item(&self) -> SelectedItem {
-        match self.selected_id.as_deref() {
-            None => SelectedItem::None,
-            Some("paste") => match &self.paste {
+        match &self.selected_id {
+            SelectedItemId::None => SelectedItem::None,
+            SelectedItemId::Paste => match &self.paste {
                 Some(p) => SelectedItem::Paste(p.clone()),
                 None => SelectedItem::None,
             },
-            Some("selection") => SelectedItem::Selection,
-            Some("wire") => SelectedItem::Wire,
-            Some(circ) => match self.circuit_previews.get(circ) {
+            SelectedItemId::Selection => SelectedItem::Selection,
+            SelectedItemId::Wires => SelectedItem::Wire,
+            SelectedItemId::Circuit(circ) => match self.circuit_previews.get(circ) {
                 Some(p) => SelectedItem::Circuit(p.clone()),
                 None => SelectedItem::None,
             },
@@ -718,10 +765,12 @@ impl App {
                                     let paint_ctx = PaintContext::new_on_ui(ui, rect, scale);
                                     preview.draw(&paint_ctx, false);
 
-                                    let selected = self
-                                        .selected_id
-                                        .as_ref()
-                                        .is_some_and(|s| *s == preview.imp.type_name());
+                                    let selected = match &self.selected_id {
+                                        SelectedItemId::Circuit(id) => {
+                                            *id == preview.imp.type_name()
+                                        }
+                                        _ => false,
+                                    };
 
                                     if ui
                                         .selectable_label(
@@ -731,14 +780,117 @@ impl App {
                                         .clicked()
                                     {
                                         self.selected_id = match selected {
-                                            true => None,
-                                            false => Some(preview.imp.type_name()),
+                                            true => SelectedItemId::None,
+                                            false => {
+                                                SelectedItemId::Circuit(preview.imp.type_name())
+                                            }
                                         };
                                     }
                                 });
                             }
                         }
-                    })
+                    });
+
+                CollapsingHeader::new("Circuit boards")
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        let renamer_memory_id = ui.id().with("__renamer_memory");
+                        let renamer_id = ui.id().with("__renamer_input");
+                        let rename = ui
+                            .memory(|mem| mem.data.get_temp::<Option<u128>>(renamer_memory_id))
+                            .flatten();
+
+                        let mut queued_deletion = None;
+                        let mut drawn_renamer = false;
+                        let no_delete = self.boards.len() <= 1;
+                        for board in self.boards.values() {
+                            let board_guard = board.read();
+
+                            if Some(board_guard.uid) == rename && !drawn_renamer {
+                                drop(board_guard);
+                                let mut board_guard = board.write();
+
+                                let res = TextEdit::singleline(&mut board_guard.name)
+                                    .id(renamer_id)
+                                    .show(ui);
+                                drawn_renamer = true;
+
+                                if res.response.lost_focus() {
+                                    ui.memory_mut(|mem| {
+                                        mem.data.insert_temp(renamer_memory_id, None::<u128>);
+                                    });
+                                }
+                            } else {
+                                // TODO: two-state selectable label, when board is active and when board is selected as placeable circuit
+                                let selected = board_guard.uid == self.board.board.read().uid;
+                                let resp = ui.selectable_label(selected, &board_guard.name);
+                                if resp.clicked_by(egui::PointerButton::Primary) && !selected {
+                                    self.board = ActiveCircuitBoard::new_main(board.clone());
+                                }
+
+                                resp.context_menu(|ui| {
+                                    if ui.button("Rename").clicked() {
+                                        // same hack as below
+                                        if !drawn_renamer {
+                                            TextEdit::singleline(&mut "").id(renamer_id).show(ui);
+                                        }
+
+                                        ui.memory_mut(|mem| {
+                                            mem.data.insert_temp(
+                                                renamer_memory_id,
+                                                Some(board_guard.uid),
+                                            );
+                                            mem.request_focus(renamer_id);
+                                        });
+                                        ui.close_menu();
+                                    }
+
+                                    if !no_delete {
+                                        if ui.input(|input| input.modifiers.shift) {
+                                            if ui.button("Delete").clicked() {
+                                                queued_deletion = Some(board_guard.uid);
+                                                ui.close_menu();
+                                            }
+                                        } else {
+                                            ui.menu_button("Delete", |ui| {
+                                                if ui.button("Confirm").clicked() {
+                                                    queued_deletion = Some(board_guard.uid);
+                                                    ui.close_menu();
+                                                }
+                                            });
+                                        }
+                                    }
+                                });
+                            }
+                        }
+
+                        if ui.button("Add board").clicked() {
+                            let mut board = CircuitBoard::new();
+                            let uid = board.uid;
+                            board.name = "New board".into();
+                            let board = Arc::new(RwLock::new(board));
+                            self.boards.insert(uid, board.clone());
+                            self.board = ActiveCircuitBoard::new_main(board);
+
+                            // HACK: widget must exist before `request_focus` can be called on its id, panics otherwise
+                            if !drawn_renamer {
+                                TextEdit::singleline(&mut "").id(renamer_id).show(ui);
+                            }
+
+                            ui.memory_mut(|mem| {
+                                mem.data.insert_temp(renamer_memory_id, Some(uid));
+                                mem.request_focus(renamer_id);
+                            });
+                        }
+
+                        if let Some(uid) = queued_deletion {
+                            self.boards.remove(&uid);
+                            if self.board.board.read().uid == uid {
+                                let board = self.boards.values().next().expect("Boards must exist!").clone();
+                                self.board = ActiveCircuitBoard::new_main(board);
+                            }
+                        }
+                    });
             })
             .full_rect
     }

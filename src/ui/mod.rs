@@ -12,7 +12,7 @@ use emath::{pos2, vec2, Rect, Rot2, Vec2};
 
 use crate::{
     circuits::props::{CircuitProperty, CircuitPropertyImpl, CircuitPropertyStore},
-    DynStaticStr, PaintContext, RwLock,
+    DynStaticStr, PaintContext, RwLock, app::SelectedItemId,
 };
 
 pub enum InventoryItemGroup {
@@ -21,12 +21,12 @@ pub enum InventoryItemGroup {
 }
 
 pub trait InventoryItem {
-    fn id(&self) -> DynStaticStr;
+    fn id(&self) -> SelectedItemId;
     fn draw(&self, ctx: &PaintContext);
 }
 
 pub struct Inventory<'a> {
-    pub selected: &'a mut Option<DynStaticStr>,
+    pub selected: &'a mut SelectedItemId,
     pub groups: &'a Vec<InventoryItemGroup>,
     pub item_size: Vec2,
     pub item_margin: Margin,
@@ -35,7 +35,7 @@ pub struct Inventory<'a> {
 
 #[derive(Clone, Default)]
 struct InventoryMemory {
-    last_group_items: Arc<RwLock<HashSet<DynStaticStr>>>,
+    last_group_items: Arc<RwLock<HashSet<SelectedItemId>>>,
 }
 
 const NUMBER_KEYS: [Key; 10] = [
@@ -89,7 +89,7 @@ impl Inventory<'_> {
         let index = match digit_key {
             None => return (current_index, current_sub_index),
             Some(0) => {
-                *self.selected = None;
+                *self.selected = SelectedItemId::None;
                 return (None, None);
             }
             Some(digit) => digit - 1,
@@ -99,7 +99,7 @@ impl Inventory<'_> {
 
         if shift {
             if current_sub_index == Some(index) {
-                *self.selected = None;
+                *self.selected = SelectedItemId::None;
                 return (None, None);
             }
 
@@ -112,17 +112,17 @@ impl Inventory<'_> {
 
             if let Some(group) = selected_group {
                 if let Some(item) = group.get(index) {
-                    *self.selected = Some(item.id());
+                    *self.selected = item.id();
                     return (current_index, Some(index));
                 }
             }
         } else if current_index == Some(index) {
-            *self.selected = None;
+            *self.selected = SelectedItemId::None;
             return (None, None);
         } else if let Some(item) = self.groups.get(index) {
             match item {
                 InventoryItemGroup::SingleItem(item) => {
-                    *self.selected = Some(item.id());
+                    *self.selected = item.id();
                     return (Some(index), None);
                 }
                 InventoryItemGroup::Group(group) => {
@@ -131,7 +131,7 @@ impl Inventory<'_> {
                             .unwrap_or(0);
 
                     if let Some(item) = group.get(item_index) {
-                        *self.selected = Some(item.id());
+                        *self.selected = item.id();
                         return (Some(index), Some(item_index));
                     }
                 }
@@ -143,15 +143,15 @@ impl Inventory<'_> {
 
 impl Widget for Inventory<'_> {
     fn ui(mut self, ui: &mut eframe::egui::Ui) -> eframe::egui::Response {
-        let (selected_item, selected_sub_item) = match self.selected {
-            None => (None, None),
-            Some(selected) => self
+        let (selected_item, selected_sub_item) = match self.selected.clone() {
+            SelectedItemId::None => (None, None),
+            selected => self
                 .groups
                 .iter()
                 .enumerate()
                 .find_map(|(i, item)| match item {
                     InventoryItemGroup::SingleItem(item) => {
-                        if item.id() == *selected {
+                        if item.id() == selected {
                             Some((Some(i), None))
                         } else {
                             None
@@ -161,7 +161,7 @@ impl Widget for Inventory<'_> {
                         .iter()
                         .enumerate()
                         .find_map(|(ii, item)| {
-                            if item.id() == *selected {
+                            if item.id() == selected {
                                 Some(ii)
                             } else {
                                 None
@@ -238,10 +238,10 @@ impl Widget for Inventory<'_> {
 
                         if click_pos.is_some_and(|pos| rect.contains(pos)) {
                             let id = item.id();
-                            if self.selected.as_ref().is_some_and(|sel| *sel == id) {
-                                *self.selected = None;
+                            if *self.selected == id {
+                                *self.selected = SelectedItemId::None;
                             } else {
-                                *self.selected = Some(id);
+                                *self.selected = id;
                             }
                             selected_changed = true;
                         }
@@ -276,10 +276,10 @@ impl Widget for Inventory<'_> {
                             }
                             if click_pos.is_some_and(|pos| rect.contains(pos)) {
                                 let id = item.id();
-                                if self.selected.as_ref().is_some_and(|sel| *sel == id) {
-                                    *self.selected = None;
+                                if *self.selected == id {
+                                    *self.selected = SelectedItemId::None;
                                 } else {
-                                    *self.selected = Some(id);
+                                    *self.selected = id;
                                 }
                                 selected_changed = true;
                             }
@@ -302,10 +302,10 @@ impl Widget for Inventory<'_> {
                     }
                     if click_pos.is_some_and(|pos| rect.contains(pos)) {
                         let id = item.id();
-                        if self.selected.as_ref().is_some_and(|sel| *sel == id) {
-                            *self.selected = None;
+                        if *self.selected == id {
+                            *self.selected = SelectedItemId::None;
                         } else {
-                            *self.selected = Some(id);
+                            *self.selected = id;
                         }
                     }
                     let rect = apply_margin_to_rect(rect, self.item_margin);
@@ -316,18 +316,16 @@ impl Widget for Inventory<'_> {
             }
         }
 
-        if selected_changed {
-            if let Some(selected_id) = self.selected.as_ref() {
-                if let Some(group) = selected_group {
-                    ui.memory_mut(|mem| {
-                        let m = mem.data.get_temp_mut_or_default::<InventoryMemory>(id);
-                        let mut last_group_items = m.last_group_items.write();
-                        for item in group {
-                            last_group_items.remove(item.id().deref());
-                        }
-                        last_group_items.insert(selected_id.clone());
-                    });
-                }
+        if selected_changed && *self.selected != SelectedItemId::None {
+            if let Some(group) = selected_group {
+                ui.memory_mut(|mem| {
+                    let m = mem.data.get_temp_mut_or_default::<InventoryMemory>(id);
+                    let mut last_group_items = m.last_group_items.write();
+                    for item in group {
+                        last_group_items.remove(&item.id());
+                    }
+                    last_group_items.insert(self.selected.clone());
+                });
             }
         }
 

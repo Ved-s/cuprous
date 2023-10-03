@@ -33,6 +33,9 @@ use self::selection::{SelectedWorldObject, Selection};
 pub mod selection;
 
 pub struct CircuitBoard {
+    pub name: String,
+    pub uid: u128, 
+
     pub wires: FixedVec<Wire>,
     pub circuits: FixedVec<Circuit>,
     pub states: StateCollection,
@@ -45,6 +48,8 @@ pub struct CircuitBoard {
 impl CircuitBoard {
     pub fn new() -> Self {
         Self {
+            uid: rand::random(),
+            name: "".into(),
             wires: vec![].into(),
             circuits: vec![].into(),
             states: StateCollection::new(),
@@ -161,9 +166,11 @@ impl CircuitBoard {
         Some(new_wire_id)
     }
 
-    pub fn save(&self) -> crate::io::CircuitBoardData {
-        let sim_lock = self.sim_lock.write();
+    pub fn save(&self, sim_lock: bool) -> crate::io::CircuitBoardData {
+        let sim_lock = sim_lock.then(|| self.sim_lock.write() );
         let data = crate::io::CircuitBoardData {
+            name: self.name.clone(),
+            uid: self.uid,
             wires: self
                 .wires
                 .inner()
@@ -232,6 +239,8 @@ impl CircuitBoard {
         );
 
         let board = CircuitBoard {
+            name: data.name.clone(),
+            uid: data.uid,
             wires,
             circuits,
             states: StateCollection::new(),
@@ -323,12 +332,12 @@ impl ActiveCircuitBoard {
     pub const WIRE_THICKNESS: f32 = 0.2;
     pub const WIRE_POINT_THICKNESS: f32 = 0.35;
 
-    pub fn new(board: Arc<RwLock<CircuitBoard>>, state: usize) -> Option<Self> {
-        let state = {
-            let board = board.read();
-            board.states.get(state)?
-        };
 
+    pub fn new_main(board: Arc<RwLock<CircuitBoard>>) -> Self {
+        Self::new(board.clone(), board.clone().read().states.get_or_create_main(board))
+    }
+
+    pub fn new(board: Arc<RwLock<CircuitBoard>>, state: Arc<State>) -> Self {
         let (wires, circuits) = {
             let board = board.read();
             let mut wires = Chunks2D::<16, WireNode>::default();
@@ -388,7 +397,7 @@ impl ActiveCircuitBoard {
             (wires, circuits)
         };
 
-        Some(Self {
+        Self {
             board,
             wire_nodes: wires,
             circuit_nodes: circuits,
@@ -397,7 +406,7 @@ impl ActiveCircuitBoard {
             selection: RefCell::new(Selection::new()),
 
             wires_drawn: AtomicUsize::new(0),
-        })
+        }
     }
 
     pub fn update(&mut self, ctx: &PaintContext, selected: SelectedItem, debug: bool) {

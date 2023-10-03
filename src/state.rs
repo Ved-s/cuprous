@@ -7,17 +7,13 @@ use std::{
 #[cfg(not(feature = "single_thread"))]
 use std::thread::{self, JoinHandle};
 
-use crate::{time::Instant, containers::Queue};
+use crate::{containers::Queue, time::Instant};
 use eframe::epaint::Color32;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    board::CircuitBoard,
-    circuits::*,
-    containers::FixedVec,
-    unwrap_option_or_break, unwrap_option_or_return,
-    wires::*,
-    Mutex, RwLock,
+    board::CircuitBoard, circuits::*, containers::FixedVec, unwrap_option_or_break,
+    unwrap_option_or_return, wires::*, Mutex, RwLock,
 };
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -60,7 +56,11 @@ impl WireState {
         Color32::from_rgb(rgb[0], rgb[1], rgb[2])
     }
 
-    pub fn combine_boolean(self, state: WireState, combiner: impl FnOnce(bool, bool) -> bool) -> WireState {
+    pub fn combine_boolean(
+        self,
+        state: WireState,
+        combiner: impl FnOnce(bool, bool) -> bool,
+    ) -> WireState {
         match (self, state) {
             (WireState::None, other) | (other, WireState::None) => other,
             (WireState::Error, _) | (_, WireState::Error) => WireState::Error,
@@ -140,6 +140,7 @@ impl CircuitState {
 
 #[derive(Clone)]
 pub struct StateCollection {
+    /// State 0 should be always allocated for main [`ActiveCircuitBoard`]
     states: Arc<RwLock<FixedVec<Arc<State>>>>,
 }
 
@@ -164,7 +165,7 @@ impl StateCollection {
 
     pub fn create_state(&self, board: Arc<RwLock<CircuitBoard>>) -> (usize, Arc<State>) {
         let mut vec = self.states.write();
-        let id = vec.first_free_pos();
+        let id = vec.first_free_pos().max(1); // id 0 reserved
         let state = Arc::new(State::new(board));
         vec.set(state.clone(), id);
         (id, state)
@@ -209,6 +210,19 @@ impl StateCollection {
 
     pub fn get(&self, state: usize) -> Option<Arc<State>> {
         self.states.read().get(state).cloned()
+    }
+
+    /// Get or create state 0
+    pub fn get_or_create_main(&self, board: Arc<RwLock<CircuitBoard>>) -> Arc<State> {
+        let state = self.states.read().get(0).cloned();
+        match state {
+            Some(v) => v,
+            None => self
+                .states
+                .write()
+                .get_or_create_mut(0, || Arc::new(State::new(board)))
+                .clone(),
+        }
     }
 
     pub fn init_circuit(&self, circuit: &Circuit) {
@@ -734,10 +748,7 @@ impl StateThread {
                 }
                 None => {
                     let mut lock = self.sync.1.lock();
-                    let result = self
-                        .sync
-                        .0
-                        .wait_for(&mut lock, Duration::from_secs(1));
+                    let result = self.sync.0.wait_for(&mut lock, Duration::from_secs(1));
                     if result.timed_out() || *lock {
                         return;
                     }

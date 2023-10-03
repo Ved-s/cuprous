@@ -14,6 +14,7 @@ use std::{
     sync::Arc,
 };
 
+use app::SelectedItemId;
 use board::{selection::Selection, ActiveCircuitBoard};
 use cache::GLOBAL_STR_CACHE;
 use eframe::{
@@ -338,8 +339,8 @@ impl Screen {
 
 struct SelectionInventoryItem {}
 impl InventoryItem for SelectionInventoryItem {
-    fn id(&self) -> DynStaticStr {
-        "selection".into()
+    fn id(&self) -> SelectedItemId {
+        SelectedItemId::Selection
     }
 
     fn draw(&self, ctx: &PaintContext) {
@@ -371,8 +372,8 @@ impl InventoryItem for SelectionInventoryItem {
 
 struct WireInventoryItem {}
 impl InventoryItem for WireInventoryItem {
-    fn id(&self) -> DynStaticStr {
-        "wire".into()
+    fn id(&self) -> SelectedItemId {
+        SelectedItemId::Wires
     }
 
     fn draw(&self, ctx: &PaintContext) {
@@ -411,8 +412,8 @@ struct CircuitInventoryItem {
     id: DynStaticStr,
 }
 impl InventoryItem for CircuitInventoryItem {
-    fn id(&self) -> DynStaticStr {
-        self.id.clone()
+    fn id(&self) -> SelectedItemId {
+        SelectedItemId::Circuit(self.id.clone())
     }
 
     fn draw(&self, ctx: &PaintContext) {

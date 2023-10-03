@@ -1901,6 +1901,7 @@ dependencies = [
  "js-sys",
  "parking_lot",
  "paste",
+ "rand",
  "ron",
  "serde",
  "serde-intermediate",

@@ -74,6 +74,13 @@ pub struct StateData {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct CircuitBoardData {
+
+    #[serde(default)]
+    pub name: String,
+
+    #[serde(default = "rand::random")]
+    pub uid: u128,
+
     pub wires: Vec<Option<WireData>>,
     pub circuits: Vec<Option<CircuitData>>,
     pub states: Vec<Option<StateData>>,
