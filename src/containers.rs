@@ -224,6 +224,15 @@ impl<T> FixedVec<T> {
             None => self.vec.len(),
         }
     }
+    /// Warning: will not return intil `f` returns true
+    pub fn first_free_pos_filtered(&self, f: impl Fn(usize) -> bool) -> usize {
+        for i in 0.. {
+            if self.vec.get(i).and_then(|o| o.as_ref()).is_none() && f(i) {
+                return i;
+            }
+        }
+        unreachable!()
+    }
 
     pub fn iter(&self) -> FixedVecIterator<'_, T> {
         FixedVecIterator {

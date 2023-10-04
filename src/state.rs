@@ -165,7 +165,7 @@ impl StateCollection {
 
     pub fn create_state(&self, board: Arc<RwLock<CircuitBoard>>) -> (usize, Arc<State>) {
         let mut vec = self.states.write();
-        let id = vec.first_free_pos().max(1); // id 0 reserved
+        let id = vec.first_free_pos_filtered(|i| i > 0); // id 0 reserved
         let state = Arc::new(State::new(board));
         vec.set(state.clone(), id);
         (id, state)
