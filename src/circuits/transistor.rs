@@ -28,9 +28,9 @@ struct Circuit {
 impl Circuit {
     fn new() -> Self {
         Self {
-            collector: CircuitPinInfo::new([1, 0], InternalPinDirection::Inside, "collector"),
-            base: CircuitPinInfo::new([0, 1], InternalPinDirection::Inside, "base"),
-            emitter: CircuitPinInfo::new([1, 2], InternalPinDirection::Outside, "emitter"),
+            collector: CircuitPinInfo::new([1, 0], InternalPinDirection::Inside, "collector", "Collector", Direction4::Up),
+            base: CircuitPinInfo::new([0, 1], InternalPinDirection::Inside, "base", "Base", Direction4::Left),
+            emitter: CircuitPinInfo::new([1, 2], InternalPinDirection::Outside, "emitter", "Emitter", Direction4::Down),
             ty: Type::NPN,
             dir: Direction4::Left,
             flip: false,
@@ -163,11 +163,18 @@ impl CircuitImpl for Circuit {
     fn create_pins(&mut self, props: &CircuitPropertyStore) -> Box<[CircuitPinInfo]> {
         let pin_positions = Circuit::pin_positions(props);
 
+        let pin_rot = props.read_clone("dir").unwrap_or(Direction4::Left).rotate_clockwise();
+        let flip = props.read_clone("flip").unwrap_or(false);
+        let inv_pin_rot = match flip {
+            true => pin_rot.inverted(),
+            false => pin_rot,
+        };
+
         self.collector =
-            CircuitPinInfo::new(pin_positions[0], InternalPinDirection::Inside, "collector");
-        self.base = CircuitPinInfo::new(pin_positions[1], InternalPinDirection::Inside, "base");
+            CircuitPinInfo::new(pin_positions[0], InternalPinDirection::Inside, "collector", "Collector", Direction4::Up.rotate_clockwise_by(inv_pin_rot));
+        self.base = CircuitPinInfo::new(pin_positions[1], InternalPinDirection::Inside, "base", "Base", Direction4::Left.rotate_clockwise_by(pin_rot));
         self.emitter =
-            CircuitPinInfo::new(pin_positions[2], InternalPinDirection::Outside, "emitter");
+            CircuitPinInfo::new(pin_positions[2], InternalPinDirection::Outside, "emitter", "Emitter", Direction4::Down.rotate_clockwise_by(inv_pin_rot));
 
         vec![
             self.collector.clone(),

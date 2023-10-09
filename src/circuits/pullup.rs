@@ -11,7 +11,7 @@ struct Circuit {
 impl Circuit {
     fn new() -> Self {
         Self {
-            pin: CircuitPinInfo::new([0, 0], InternalPinDirection::Custom, "pin"),
+            pin: CircuitPinInfo::new([0, 0], InternalPinDirection::Custom, "pin", "", None),
         }
     }
 

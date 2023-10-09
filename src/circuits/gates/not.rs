@@ -20,8 +20,8 @@ struct Circuit {
 impl Circuit {
     fn new() -> Self {
         Self {
-            input: CircuitPinInfo::new([0, 0], InternalPinDirection::Inside, "in"),
-            output: CircuitPinInfo::new([1, 0], InternalPinDirection::Outside, "out"),
+            input: CircuitPinInfo::new([0, 0], InternalPinDirection::Inside, "in", "In", Direction4::Left),
+            output: CircuitPinInfo::new([1, 0], InternalPinDirection::Outside, "out", "Out", Direction4::Right),
             dir: Direction4::Right,
         }
     }
@@ -89,8 +89,9 @@ impl CircuitImpl for Circuit {
 
     fn create_pins(&mut self, props: &CircuitPropertyStore) -> Box<[CircuitPinInfo]> {
         let pin_positions = Circuit::pin_positions(props);
-        self.input = CircuitPinInfo::new(pin_positions[0], InternalPinDirection::Inside, "in");
-        self.output = CircuitPinInfo::new(pin_positions[1], InternalPinDirection::Outside, "out");
+        let pin_rot = props.read_clone("dir").unwrap_or(Direction4::Right).rotate_counterclockwise();
+        self.input = CircuitPinInfo::new(pin_positions[0], InternalPinDirection::Inside, "in", "In", Direction4::Left.rotate_clockwise_by(pin_rot));
+        self.output = CircuitPinInfo::new(pin_positions[1], InternalPinDirection::Outside, "out", "Out", Direction4::Right.rotate_clockwise_by(pin_rot));
         vec![self.input.clone(), self.output.clone()].into_boxed_slice()
     }
 

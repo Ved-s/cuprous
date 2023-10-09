@@ -15,7 +15,7 @@ struct Circuit {
 impl Circuit {
     fn new() -> Self {
         Self {
-            out_pin: CircuitPinInfo::new([2, 1], InternalPinDirection::Outside, "out"),
+            out_pin: CircuitPinInfo::new([2, 1], InternalPinDirection::Outside, "out", "Out", Direction4::Right),
         }
     }
 
@@ -96,7 +96,7 @@ impl CircuitImpl for Circuit {
             Direction4::Down => [1, 2],
             Direction4::Right => [2, 1],
         };
-        self.out_pin = CircuitPinInfo::new(pos, InternalPinDirection::Outside, "out");
+        self.out_pin = CircuitPinInfo::new(pos, InternalPinDirection::Outside, "out", "Out", dir);
 
         vec![self.out_pin.clone()].into_boxed_slice()
     }

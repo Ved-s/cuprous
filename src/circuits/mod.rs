@@ -7,7 +7,7 @@ use crate::{
     state::{CircuitState, InternalCircuitState, State, StateCollection, WireState},
     time::Instant,
     vector::{Vec2i, Vec2u, Vector},
-    DynStaticStr, OptionalInt, PaintContext, RwLock,
+    DynStaticStr, OptionalInt, PaintContext, RwLock, Direction4,
 };
 
 use self::props::CircuitPropertyStore;
@@ -158,6 +158,8 @@ impl CircuitPin {
 
 #[derive(Debug, Clone)]
 pub struct CircuitPinInfo {
+    pub display_name: DynStaticStr,
+    pub display_dir: Option<Direction4>,
     pub name: DynStaticStr,
     pub pos: Vec2u,
     pub pin: Arc<RwLock<CircuitPin>>,
@@ -247,6 +249,8 @@ impl CircuitPinInfo {
         pos: impl Into<Vec2u>,
         dir: InternalPinDirection,
         name: impl Into<DynStaticStr>,
+        display_name: impl Into<DynStaticStr>,
+        display_dir: impl Into<Option<Direction4>>,
     ) -> Self {
         let name = name.into();
         Self {
@@ -258,6 +262,8 @@ impl CircuitPinInfo {
                 name: name.clone(),
             })),
             name,
+            display_name: display_name.into(),
+            display_dir: display_dir.into()
         }
     }
 }

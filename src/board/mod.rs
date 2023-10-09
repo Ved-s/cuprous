@@ -3,6 +3,7 @@ use std::{
     collections::{HashMap, HashSet},
     f32::consts::TAU,
     num::NonZeroU32,
+    ops::Deref,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -10,10 +11,10 @@ use std::{
 };
 
 use eframe::{
-    egui::{self, Sense, TextStyle},
-    epaint::{Color32, Rounding, Stroke},
+    egui::{self, FontSelection, Sense, TextStyle, WidgetText},
+    epaint::{Color32, FontId, Rounding, Stroke, TextShape},
 };
-use emath::{vec2, Align2, Rect};
+use emath::{vec2, Align2, Pos2, Rect};
 
 use crate::{
     circuits::{
@@ -23,7 +24,7 @@ use crate::{
     containers::{Chunks2D, ChunksLookaround, FixedVec},
     state::{State, StateCollection},
     unwrap_option_or_continue, unwrap_option_or_return,
-    vector::{IsZero, Vec2f, Vec2i, Vec2u},
+    vector::{IsZero, Vec2f, Vec2i, Vec2isize, Vec2u},
     wires::{FoundWireNode, TileWires, Wire, WireNode, WirePart, WirePoint},
     Direction2, Direction4, PaintContext, PastePreview, RwLock, Screen,
 };
@@ -39,7 +40,7 @@ pub struct CircuitBoard {
 
     // RwLock for blocking simulation while modifying board
     pub sim_lock: Arc<RwLock<()>>,
-    ordered_queue: bool
+    ordered_queue: bool,
 }
 
 impl CircuitBoard {
@@ -49,7 +50,7 @@ impl CircuitBoard {
             circuits: vec![].into(),
             states: StateCollection::new(),
             sim_lock: Default::default(),
-            ordered_queue: false
+            ordered_queue: false,
         }
     }
 
@@ -87,8 +88,7 @@ impl CircuitBoard {
 
         for point in points.values() {
             if let Some(pin) = &point.pin {
-                pin.write()
-                    .set_wire(&self.states, Some(id), false, true);
+                pin.write().set_wire(&self.states, Some(id), false, true);
             }
         }
 
@@ -184,7 +184,7 @@ impl CircuitBoard {
                 .iter()
                 .map(|s| s.as_ref().map(|s| s.save()))
                 .collect(),
-            ordered: self.ordered_queue
+            ordered: self.ordered_queue,
         };
         drop(sim_lock);
         data
@@ -236,7 +236,7 @@ impl CircuitBoard {
             circuits,
             states: StateCollection::new(),
             sim_lock: Default::default(),
-            ordered_queue: data.ordered
+            ordered_queue: data.ordered,
         };
         let board = Arc::new(RwLock::new(board));
 
@@ -557,8 +557,177 @@ impl ActiveCircuitBoard {
         );
 
         self.update_wires(ctx, selected.wire());
+
+        self.draw_hovered_circuit_pin_names(ctx);
+
         self.update_previews(ctx, selected);
         self.selection.borrow_mut().update_selection(ctx);
+    }
+
+    fn draw_hovered_circuit_pin_names(&self, ctx: &PaintContext) {
+        let mouse_tile_pos = ctx
+            .egui_ctx
+            .input(|input| input.pointer.interact_pos())
+            .map(|p| ctx.screen.screen_to_world(Vec2f::from(p)));
+
+        let mouse_tile_pos = unwrap_option_or_return!(mouse_tile_pos);
+        let mouse_tile_pos = mouse_tile_pos.convert(|v| v.floor() as isize);
+        let node = self.circuit_nodes.get(mouse_tile_pos);
+        let node = unwrap_option_or_return!(node);
+        let circuit = unwrap_option_or_return!(node.circuit.get());
+
+        let pos = mouse_tile_pos - node.origin_dist.convert(|v| v as isize);
+        let info = self
+            .board
+            .read()
+            .circuits
+            .get(circuit)
+            .map(|c| c.info.clone());
+        let info = unwrap_option_or_return!(info);
+
+        let info = info.read();
+        ActiveCircuitBoard::draw_pin_names(
+            pos,
+            info.pins
+                .iter()
+                .map(|pin| (pin.pos, pin.display_name.deref(), pin.display_dir)),
+            ctx,
+        );
+    }
+
+    fn draw_pin_names<'a>(
+        pos: Vec2isize,
+        pins: impl Iterator<Item = (Vec2u, &'a str, Option<Direction4>)>,
+        ctx: &PaintContext,
+    ) {
+        fn draw_pin_name(
+            name: &str,
+            dir: Option<Direction4>,
+            circ_pos: Vec2isize,
+            pin_pos: Vec2u,
+            ctx: &PaintContext,
+        ) {
+            if name.is_empty() {
+                return;
+            }
+            let textoffset = ctx.screen.scale * 0.5;
+
+            let galley = WidgetText::from(name).into_galley(
+                ctx.ui,
+                Some(false),
+                f32::INFINITY,
+                FontSelection::FontId(FontId::monospace(ctx.screen.scale * 0.5)),
+            );
+
+            //         n|
+            //         i|
+            //         P|
+            //      +--*--+
+            //      |  *  * Pin
+            //  Pin * Pin |
+            //      +--*--+
+            //        |P
+            //        |i          | marks text bottom
+            //        |n
+
+            let textsize = galley.size();
+            let (dtx, dty, angle) = match dir {
+                Some(Direction4::Up) => (-textsize.y * 0.5, -textoffset, TAU * 0.75),
+                Some(Direction4::Left) => (-textsize.x - textoffset, -textsize.y * 0.5, 0.0),
+                Some(Direction4::Down) => (textsize.y * 0.5, textoffset, TAU * 0.25),
+                Some(Direction4::Right) => (textoffset, -textsize.y * 0.5, 0.0),
+
+                None => (-textsize.x * 0.5, textoffset, 0.0),
+            };
+
+            let (drx, dry, vertical) = match dir {
+                Some(Direction4::Up) => (-textsize.y * 0.5, -textoffset - textsize.x, true),
+                Some(Direction4::Left) => (-textsize.x - textoffset, -textsize.y * 0.5, false),
+                Some(Direction4::Down) => (-textsize.y * 0.5, textoffset, true),
+                Some(Direction4::Right) => (textoffset, -textsize.y * 0.5, false),
+
+                None => (-textsize.x * 0.5, textoffset, false),
+            };
+
+            let centerpos = Pos2::from(ctx.screen.world_to_screen(
+                circ_pos.convert(|v| v as f32) + pin_pos.convert(|v| v as f32) + 0.5,
+            ));
+
+            let textpos = centerpos + vec2(dtx, dty);
+            let rectpos = centerpos + vec2(drx, dry);
+            let rectsize = match vertical {
+                true => vec2(textsize.y, textsize.x),
+                false => textsize,
+            };
+            let rect = Rect::from_min_size(rectpos, rectsize).expand(ctx.screen.scale * 0.1);
+
+            let visual = &ctx.ui.style().visuals;
+            ctx.paint.rect(
+                rect,
+                Rounding::same(ctx.screen.scale * 0.15),
+                visual.window_fill.linear_multiply(0.6),
+                visual.window_stroke,
+            );
+            ctx.paint.add(TextShape {
+                pos: textpos,
+                galley: galley.galley,
+                underline: Stroke::NONE,
+                override_text_color: Some(visual.text_color()),
+                angle,
+            });
+        }
+
+        for (pin_pos, pin_name, pin_dir) in pins {
+            //     let u = pin_pos.y() == 0;
+            //     let l = pin_pos.x() == 0;
+            //     let d = pin_pos.y() + 1 >= size.y();
+            //     let r = pin_pos.x() + 1 >= size.x();
+
+            //     let dir = match (u, l, d, r) {
+            //         (true, true, true, true) => None,
+            //         (false, false, false, false) => None,
+
+            //         (true, false, _, false) => Some(Direction4::Up),
+            //         (false, true, false, _) => Some(Direction4::Left),
+            //         (false, false, true, false) => Some(Direction4::Down),
+            //         (false, false, false, true) => Some(Direction4::Right),
+
+            //         (true, true, false, true) => Some(Direction4::Up),
+            //         (true, true, true, false) => Some(Direction4::Left),
+            //         (false, true, true, true) => Some(Direction4::Down),
+            //         (true, false, true, true) => Some(Direction4::Right),
+
+            //         (true, true, _, _) => {
+            //             let dist_t = info
+            //                 .pins
+            //                 .iter()
+            //                 .map(|i| i.pos)
+            //                 .filter(|p| p.y() == 0)
+            //                 .map(|p| p.x())
+            //                 .filter(|d| *d > 0)
+            //                 .min()
+            //                 .unwrap_or(u32::MAX);
+            //             let dist_l = info
+            //                 .pins
+            //                 .iter()
+            //                 .map(|i| i.pos)
+            //                 .filter(|p| p.x() == 0)
+            //                 .map(|p| p.y())
+            //                 .filter(|d| *d > 0)
+            //                 .min()
+            //                 .unwrap_or(u32::MAX);
+
+            //             if dist_t < dist_l {
+            //                 Some(Direction4::Up)
+            //             } else {
+            //                 Some(Direction4::Left)
+            //             }
+            //         }
+
+            //         _ => None,
+            //     };
+            draw_pin_name(pin_name, pin_dir, pos, pin_pos, ctx);
+        }
     }
 
     /* #region Drawing nodes */
@@ -1148,8 +1317,7 @@ impl ActiveCircuitBoard {
                     }
                 }
                 if let Some(pin) = &pin {
-                    pin.write()
-                        .set_wire(&states, Some(wire), false, true);
+                    pin.write().set_wire(&states, Some(wire), false, true);
                 }
             }
         }
@@ -1226,12 +1394,8 @@ impl ActiveCircuitBoard {
         {
             let pin = self.pin_at(pos);
             if let Some(pin) = &pin {
-                pin.write().set_wire(
-                    &self.board.read().states.clone(),
-                    wire,
-                    false,
-                    true,
-                );
+                pin.write()
+                    .set_wire(&self.board.read().states.clone(), wire, false, true);
             }
 
             let mut board = self.board.write();
@@ -1518,9 +1682,7 @@ impl ActiveCircuitBoard {
 
             self.set_node_wires(points.iter(), wire);
         }
-        self.board
-            .write()
-            .merge_wires(wire, with, update_state);
+        self.board.write().merge_wires(wire, with, update_state);
     }
 
     fn split_wires(&mut self, id: usize, update_states: bool) {
@@ -1830,14 +1992,10 @@ impl ActiveCircuitBoard {
                 };
 
                 if let Some(wire) = wire {
-                    pin.pin
-                        .write()
-                        .set_wire(&states, Some(wire), true, false);
+                    pin.pin.write().set_wire(&states, Some(wire), true, false);
                 }
             } else {
-                pin.pin
-                    .write()
-                    .set_wire(&states, None, true, false);
+                pin.pin.write().set_wire(&states, None, true, false);
             }
         }
     }
