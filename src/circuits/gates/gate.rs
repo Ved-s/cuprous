@@ -35,11 +35,11 @@ impl Circuit {
         Self {
             template,
             inputs: vec![
-                CircuitPinInfo::new([0, 0], InternalPinDirection::Inside, "in_0"),
-                CircuitPinInfo::new([0, 2], InternalPinDirection::Inside, "in_1"),
+                CircuitPinInfo::new([0, 0], InternalPinDirection::Inside, "in_0", "A", Direction4::Left),
+                CircuitPinInfo::new([0, 2], InternalPinDirection::Inside, "in_1", "B", Direction4::Left),
             ]
             .into_boxed_slice(),
-            output: CircuitPinInfo::new([3, 1], InternalPinDirection::Outside, "out"),
+            output: CircuitPinInfo::new([3, 1], InternalPinDirection::Outside, "out", "Out", Direction4::Right),
             dir: Direction4::Right,
         }
     }
@@ -74,12 +74,13 @@ impl CircuitImpl for Circuit {
     fn create_pins(&mut self, props: &CircuitPropertyStore) -> Box<[CircuitPinInfo]> {
         
         let pin_positions = Circuit::pin_positions(props);
+        let pin_rot = props.read_clone("dir").unwrap_or(Direction4::Right).rotate_counterclockwise();
         self.inputs = vec![
-            CircuitPinInfo::new(pin_positions[0], InternalPinDirection::Inside, "in_0"),
-            CircuitPinInfo::new(pin_positions[1], InternalPinDirection::Inside, "in_1"),
+            CircuitPinInfo::new(pin_positions[0], InternalPinDirection::Inside, "in_0", "A", Direction4::Left.rotate_clockwise_by(pin_rot)),
+            CircuitPinInfo::new(pin_positions[1], InternalPinDirection::Inside, "in_1", "B", Direction4::Left.rotate_clockwise_by(pin_rot)),
         ]
         .into_boxed_slice();
-        self.output = CircuitPinInfo::new(pin_positions[2], InternalPinDirection::Outside, "out");
+        self.output = CircuitPinInfo::new(pin_positions[2], InternalPinDirection::Outside, "out", "Out", Direction4::Right.rotate_clockwise_by(pin_rot));
         let mut vec = vec![self.output.clone()];
         vec.extend(self.inputs.iter().cloned());
         vec.into_boxed_slice()

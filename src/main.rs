@@ -753,6 +753,16 @@ impl Direction4 {
             Direction4::Up    => TAU * 0.75,
         }
     }
+
+    // Up - no rotation, Right - one, Down - two, etc
+    pub fn rotate_clockwise_by(self, other: Direction4) -> Self {
+        match other {
+            Direction4::Up => self,
+            Direction4::Right => self.rotate_clockwise(),
+            Direction4::Down => self.inverted(),
+            Direction4::Left => self.rotate_counterclockwise(),
+        }
+    }
 }
 
 impl From<Direction2> for Direction4 {
