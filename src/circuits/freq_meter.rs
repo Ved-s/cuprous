@@ -25,8 +25,9 @@ struct Circuit {
 
 impl Circuit {
     fn new() -> Self {
+        let description = Self::describe(Direction4::Left);
         Self {
-            input: CircuitPinInfo::new([0, 1], InternalPinDirection::Inside, "pin", "In", Direction4::Left),
+            input: description.pins[0].to_info()
         }
     }
 
@@ -48,14 +49,11 @@ impl Circuit {
         );
 
         fn format_freq(f: f32) -> String {
-
             if f >= 10_000.0 {
-                format!("{} kHz", (f/1000.0) as i32)
-            }
-            else if f >= 1000.0 {
+                format!("{} kHz", (f / 1000.0) as i32)
+            } else if f >= 1000.0 {
                 format!("{:.01} kHz", f / 1000.0)
-            }
-            else if f >= 100.0 {
+            } else if f >= 100.0 {
                 format!("{} Hz", f as i32)
             } else {
                 format!("{f:.01} Hz")
@@ -91,17 +89,26 @@ impl Circuit {
         );
     }
 
-    fn size(_: &CircuitPropertyStore) -> Vec2u {
-        [5, 3].into()
+    fn describe_props(props: &CircuitPropertyStore) -> CircuitDescription<1> {
+        let dir = props.read_clone("dir").unwrap_or(Direction4::Left);
+        Self::describe(dir)
     }
 
-    fn pin_positions(props: &CircuitPropertyStore) -> [u32; 2] {
-        let dir = props.read_clone("dir").unwrap_or(Direction4::Left);
-        match dir {
-            Direction4::Up => [2, 0],
-            Direction4::Left => [0, 1],
-            Direction4::Down => [2, 2],
-            Direction4::Right => [4, 1],
+    fn describe(dir: Direction4) -> CircuitDescription<1> {
+        CircuitDescription {
+            size: [5, 3].into(),
+            pins: [CircuitPinDescription {
+                display_name: "In".into(),
+                display_dir: Some(dir),
+                dir: InternalPinDirection::Inside,
+                name: "pin".into(),
+                pos: match dir {
+                    Direction4::Up => [2, 0],
+                    Direction4::Left => [0, 1],
+                    Direction4::Down => [2, 2],
+                    Direction4::Right => [4, 1],
+                }.into(),
+            }],
         }
     }
 }
@@ -112,9 +119,8 @@ impl CircuitImpl for Circuit {
     }
 
     fn create_pins(&mut self, props: &CircuitPropertyStore) -> Box<[CircuitPinInfo]> {
-        let pin_position = Circuit::pin_positions(props);
-        let pin_dir = props.read_clone("dir").unwrap_or(Direction4::Left);
-        self.input = CircuitPinInfo::new(pin_position, InternalPinDirection::Inside, "pin", "In", pin_dir);
+        let description = Self::describe_props(props);
+        self.input = description.pins[0].to_info();
         vec![self.input.clone()].into_boxed_slice()
     }
 
@@ -126,7 +132,7 @@ impl CircuitImpl for Circuit {
     }
 
     fn size(&self, props: &CircuitPropertyStore) -> Vec2u {
-        Circuit::size(props)
+        Self::describe_props(props).size
     }
 
     fn prop_changed(&self, prop_id: &str, _: &mut bool, recreate_pins: &mut bool) {
@@ -144,17 +150,12 @@ impl CircuitPreviewImpl for Preview {
         "freq_meter".into()
     }
 
-    fn draw_preview(&self, props: &CircuitPropertyStore, ctx: &PaintContext, in_world: bool) {
+    fn draw_preview(&self, _: &CircuitPropertyStore, ctx: &PaintContext, in_world: bool) {
         Circuit::draw(ctx, None, in_world);
-        draw_pins_preview(ctx, Circuit::size(props), [Circuit::pin_positions(props)])
     }
 
     fn create_impl(&self) -> Box<dyn CircuitImpl> {
         Box::new(Circuit::new())
-    }
-
-    fn size(&self, props: &CircuitPropertyStore) -> Vec2u {
-        Circuit::size(props)
     }
 
     fn load_impl_data(
@@ -170,5 +171,9 @@ impl CircuitPreviewImpl for Preview {
 
     fn display_name(&self) -> DynStaticStr {
         "Frequency meter".into()
+    }
+
+    fn describe(&self, props: &CircuitPropertyStore) -> DynCircuitDescription {
+        Circuit::describe_props(props).to_dyn()
     }
 }

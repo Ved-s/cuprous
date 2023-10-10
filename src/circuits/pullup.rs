@@ -10,8 +10,9 @@ struct Circuit {
 
 impl Circuit {
     fn new() -> Self {
+        let description = Self::describe();
         Self {
-            pin: CircuitPinInfo::new([0, 0], InternalPinDirection::Custom, "pin", "", None),
+            pin: description.pins[0].to_info(),
         }
     }
 
@@ -23,8 +24,21 @@ impl Circuit {
         )
     }
 
-    fn size(_: &CircuitPropertyStore) -> Vec2u {
-        [1, 1].into()
+    fn describe_props(_: &CircuitPropertyStore) -> CircuitDescription<1> {
+        Self::describe()
+    }
+
+    fn describe() -> CircuitDescription<1> {
+        CircuitDescription {
+            size: [1, 1].into(),
+            pins: [CircuitPinDescription {
+                display_name: "".into(),
+                display_dir: None,
+                dir: InternalPinDirection::Custom,
+                name: "pin".into(),
+                pos: [0, 0].into(),
+            }],
+        }
     }
 }
 
@@ -51,7 +65,7 @@ impl CircuitImpl for Circuit {
     }
 
     fn size(&self, props: &CircuitPropertyStore) -> Vec2u {
-        Circuit::size(props)
+        Self::describe_props(props).size
     }
 }
 
@@ -62,11 +76,7 @@ impl CircuitPreviewImpl for Preview {
     fn draw_preview(&self, _: &CircuitPropertyStore, ctx: &PaintContext, in_world: bool) {
         Circuit::draw(ctx, in_world);
     }
-
-    fn size(&self, props: &CircuitPropertyStore) -> Vec2u {
-        Circuit::size(props)
-    }
-
+    
     fn create_impl(&self) -> Box<dyn CircuitImpl> {
         Box::new(Circuit::new())
     }
@@ -85,5 +95,9 @@ impl CircuitPreviewImpl for Preview {
 
     fn display_name(&self) -> DynStaticStr {
         "Pullup".into()
+    }
+
+    fn describe(&self, props: &CircuitPropertyStore) -> DynCircuitDescription {
+        Circuit::describe_props(props).to_dyn()
     }
 }

@@ -22,7 +22,7 @@ use crate::{
         Circuit, CircuitNode, CircuitPin, CircuitPinId, CircuitPreview, CircuitStateContext,
     },
     containers::{Chunks2D, ChunksLookaround, FixedVec},
-    state::{State, StateCollection},
+    state::{State, StateCollection, WireState},
     unwrap_option_or_continue, unwrap_option_or_return,
     vector::{IsZero, Vec2f, Vec2i, Vec2isize, Vec2u},
     wires::{FoundWireNode, TileWires, Wire, WireNode, WirePart, WirePoint},
@@ -1077,7 +1077,8 @@ impl ActiveCircuitBoard {
         };
 
         if let SelectedItem::Circuit(p) = selected {
-            let size = p.size();
+            let description = p.describe();
+            let size = description.size;
             if size.x() == 0 || size.y() == 0 {
                 return;
             }
@@ -1087,6 +1088,27 @@ impl ActiveCircuitBoard {
                 (size.convert(|v| v as f32) * ctx.screen.scale).into(),
             );
             p.draw(&ctx.with_rect(rect), true);
+
+            for pin in description.pins.iter() {
+                let pos = ctx.screen.world_to_screen(
+                    place_pos.convert(|v| v as f32) + pin.pos.convert(|v| v as f32) + 0.5,
+                );
+                ctx.paint.circle_filled(
+                    pos.into(),
+                    ActiveCircuitBoard::WIRE_THICKNESS * 0.5 * ctx.screen.scale,
+                    WireState::False.color(),
+                );
+            }
+
+            Self::draw_pin_names(
+                place_pos.convert(|v| v as isize),
+                description
+                    .pins
+                    .iter()
+                    .map(|i| (i.pos, i.display_name.deref(), i.display_dir)),
+                ctx,
+            );
+
             let interaction = ctx.ui.interact(ctx.rect, ctx.ui.id(), Sense::click());
 
             if interaction.clicked_by(eframe::egui::PointerButton::Primary) {
@@ -1943,7 +1965,7 @@ impl ActiveCircuitBoard {
         props_override: Option<CircuitPropertyStore>,
         handler: &dyn Fn(&mut ActiveCircuitBoard, usize),
     ) -> Option<usize> {
-        let size = preview.size();
+        let size = preview.describe().size;
         if !self.can_place_circuit_at(size, place_pos, None) {
             return None;
         }

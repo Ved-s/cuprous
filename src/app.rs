@@ -121,7 +121,10 @@ impl eframe::App for App {
 
                 if let SelectedItem::Circuit(p) = self.selected_item() {
                     let props = [((), &p.props).into()];
-                    App::properties_ui(&mut self.props_ui, ui, Some(props));
+                    let changed = App::properties_ui(&mut self.props_ui, ui, Some(props)).is_some_and(|v| !v.is_empty());
+                    if changed {
+
+                    }
                 } else {
                     let selection = self.board.selection.borrow();
                     if !selection.selection.is_empty() {
@@ -592,6 +595,7 @@ impl App {
     ) {
         if let SelectedItem::Circuit(pre) = selected_item {
             pre.props.write(id, f);
+            pre.prop_changed();
         } else {
             let selected_circuits: Vec<_> = self
                 .board
@@ -712,7 +716,7 @@ impl App {
                                     let (rect, scale) = align_rect_scaled(
                                         resp.rect.min,
                                         vec2(font.size, font.size),
-                                        preview.size().convert(|v| v as f32).into(),
+                                        preview.describe().size.convert(|v| v as f32).into(),
                                     );
 
                                     let paint_ctx = PaintContext::new_on_ui(ui, rect, scale);

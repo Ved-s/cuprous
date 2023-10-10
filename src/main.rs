@@ -416,7 +416,7 @@ impl InventoryItem for CircuitInventoryItem {
     }
 
     fn draw(&self, ctx: &PaintContext) {
-        let size = self.preview.size().convert(|v| v as f32);
+        let size = self.preview.describe().size.convert(|v| v as f32);
         let scale = Vec2f::from(ctx.rect.size()) / size;
         let scale = scale.x().min(scale.y());
         let size = size * scale;
@@ -602,35 +602,35 @@ impl Direction4 {
         vec + self.unit_vector() * distance
     }
 
-    pub fn is_vertical(self) -> bool {
+    pub const fn is_vertical(self) -> bool {
         match self {
             Self::Left | Self::Right => false,
             Self::Up | Self::Down => true,
         }
     }
 
-    pub fn is_horizontal(self) -> bool {
+    pub const fn is_horizontal(self) -> bool {
         match self {
             Self::Left | Self::Right => true,
             Self::Up | Self::Down => false,
         }
     }
 
-    pub fn is_left_up(self) -> bool {
+    pub const fn is_left_up(self) -> bool {
         match self {
             Self::Left | Self::Up => true,
             Self::Right | Self::Down => false,
         }
     }
 
-    pub fn is_right_bottom(self) -> bool {
+    pub const fn is_right_bottom(self) -> bool {
         match self {
             Self::Right | Self::Down => true,
             Self::Left | Self::Up => false,
         }
     }
 
-    pub fn inverted(self) -> Self {
+    pub const fn inverted(self) -> Self {
         match self {
             Self::Up => Self::Down,
             Self::Left => Self::Right,
@@ -639,7 +639,7 @@ impl Direction4 {
         }
     }
 
-    pub fn inverted_ud(self) -> Self {
+    pub const fn inverted_ud(self) -> Self {
         match self {
             Self::Up => Self::Down,
             Self::Left => Self::Left,
@@ -648,7 +648,7 @@ impl Direction4 {
         }
     }
 
-    pub fn inverted_lr(self) -> Self {
+    pub const fn inverted_lr(self) -> Self {
         match self {
             Self::Up => Self::Up,
             Self::Left => Self::Right,
@@ -658,7 +658,7 @@ impl Direction4 {
     }
 
     /// Returns: (direction, forward)
-    pub fn into_dir2(self) -> (Direction2, bool) {
+    pub const fn into_dir2(self) -> (Direction2, bool) {
         match self {
             Self::Up => (Direction2::Up, true),
             Self::Left => (Direction2::Left, true),
@@ -689,7 +689,7 @@ impl Direction4 {
         }
     }
 
-    pub fn rotate_clockwise(self) -> Self {
+    pub const fn rotate_clockwise(self) -> Self {
         match self {
             Self::Up => Self::Right,
             Self::Left => Self::Up,
@@ -698,7 +698,7 @@ impl Direction4 {
         }
     }
 
-    pub fn rotate_counterclockwise(self) -> Self {
+    pub const fn rotate_counterclockwise(self) -> Self {
         match self {
             Self::Up => Self::Left,
             Self::Left => Self::Down,
@@ -707,7 +707,7 @@ impl Direction4 {
         }
     }
 
-    pub fn into_char(self) -> char {
+    pub const fn into_char(self) -> char {
         match self {
             Direction4::Up => 'u',
             Direction4::Left => 'l',
@@ -716,7 +716,7 @@ impl Direction4 {
         }
     }
 
-    pub fn from_char(char: char) -> Option<Self> {
+    pub const fn from_char(char: char) -> Option<Self> {
         match char {
             'u' => Some(Direction4::Up),
             'l' => Some(Direction4::Left),
@@ -726,7 +726,7 @@ impl Direction4 {
         }
     }
 
-    pub fn name(self) -> &'static str {
+    pub const fn name(self) -> &'static str {
         match self {
             Direction4::Up => "Up",
             Direction4::Left => "Left",
@@ -754,12 +754,22 @@ impl Direction4 {
     }
 
     // Up - no rotation, Right - one, Down - two, etc
-    pub fn rotate_clockwise_by(self, other: Direction4) -> Self {
+    pub const fn rotate_clockwise_by(self, other: Direction4) -> Self {
         match other {
             Direction4::Up => self,
             Direction4::Right => self.rotate_clockwise(),
             Direction4::Down => self.inverted(),
             Direction4::Left => self.rotate_counterclockwise(),
+        }
+    }
+
+    // Up - no rotation, Left - one, Down - two, etc
+    pub const fn rotate_counterclockwise_by(self, other: Direction4) -> Self {
+        match other {
+            Direction4::Up => self,
+            Direction4::Left => self.rotate_clockwise(),
+            Direction4::Down => self.inverted(),
+            Direction4::Right => self.rotate_counterclockwise(),
         }
     }
 }
@@ -960,7 +970,7 @@ impl PastePreview {
                 .into()
             }
             for (circuit, preview) in circuits.iter() {
-                let br = circuit.pos + preview.size();
+                let br = circuit.pos + preview.describe().size;
                 size = [size.x().max(br.x()), size.y().max(br.y())].into()
             }
             size
@@ -996,7 +1006,7 @@ impl PastePreview {
         }
 
         for (circuit, preview) in self.circuits.iter() {
-            let size = preview.size();
+            let size = preview.describe().size;
             if size.x() == 0 || size.y() == 0 {
                 return;
             }
@@ -1013,7 +1023,7 @@ impl PastePreview {
         if self
             .circuits
             .iter()
-            .any(|(c, p)| !board.can_place_circuit_at(p.size(), pos + c.pos.convert(|v| v as i32), None))
+            .any(|(c, p)| !board.can_place_circuit_at(p.describe().size, pos + c.pos.convert(|v| v as i32), None))
         {
             return;
         }

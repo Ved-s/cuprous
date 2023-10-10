@@ -7,7 +7,7 @@ use crate::{
     state::{CircuitState, InternalCircuitState, State, StateCollection, WireState},
     time::Instant,
     vector::{Vec2i, Vec2u, Vector},
-    DynStaticStr, OptionalInt, PaintContext, RwLock, Direction4,
+    Direction4, DynStaticStr, OptionalInt, PaintContext, RwLock,
 };
 
 use self::props::CircuitPropertyStore;
@@ -263,7 +263,7 @@ impl CircuitPinInfo {
             })),
             name,
             display_name: display_name.into(),
-            display_dir: display_dir.into()
+            display_dir: display_dir.into(),
         }
     }
 }
@@ -471,11 +471,13 @@ pub trait CircuitImpl: Send + Sync {
 pub struct CircuitPreview {
     pub imp: Box<dyn CircuitPreviewImpl>,
     pub props: CircuitPropertyStore,
+    pub description: RwLock<DynCircuitDescription>,
 }
 
 impl CircuitPreview {
     pub fn new(imp: Box<dyn CircuitPreviewImpl>, props: CircuitPropertyStore) -> Self {
-        Self { imp, props }
+        let description = RwLock::new(imp.describe(&props));
+        Self { imp, props, description  }
     }
 
     pub fn load_with_data(
@@ -495,12 +497,14 @@ impl CircuitPreview {
         let imp = self.imp.load_impl_data(imp)?;
         let props = imp.default_props();
         props.load(props_data);
-        Some(Self { imp, props })
+        let description = RwLock::new(imp.describe(&props));
+        Some(Self { imp, props, description })
     }
 
-    pub fn from_impl(p: Box<dyn CircuitPreviewImpl>) -> Self {
-        let props = p.default_props();
-        Self { imp: p, props }
+    pub fn from_impl(imp: Box<dyn CircuitPreviewImpl>) -> Self {
+        let props = imp.default_props();
+        let description = RwLock::new(imp.describe(&props));
+        Self { imp, props, description }
     }
 
     pub fn draw(&self, ctx: &PaintContext, in_world: bool) {
@@ -518,16 +522,21 @@ impl CircuitPreview {
         }
     }
 
-    pub fn size(&self) -> Vec2u {
-        self.imp.size(&self.props)
+    pub fn prop_changed(&self) {
+        *self.description.write() = self.imp.describe(&self.props);
     }
+
+    pub fn describe(&self) -> DynCircuitDescription {
+        self.description.read().clone()
+    }
+
 }
 
 pub trait CircuitPreviewImpl {
     fn type_name(&self) -> DynStaticStr;
     fn display_name(&self) -> DynStaticStr;
     fn draw_preview(&self, props: &CircuitPropertyStore, ctx: &PaintContext, in_world: bool);
-    fn size(&self, props: &CircuitPropertyStore) -> Vec2u;
+    fn describe(&self, props: &CircuitPropertyStore) -> DynCircuitDescription;
     fn create_impl(&self) -> Box<dyn CircuitImpl>;
     fn load_impl_data(
         &self,
@@ -542,20 +551,167 @@ pub struct CircuitNode {
     pub circuit: OptionalInt<usize>,
 }
 
-pub fn draw_pins_preview<T: Into<Vec2u>>(
-    ctx: &PaintContext,
-    size: impl Into<Vec2u>,
-    pins: impl IntoIterator<Item = T>,
-) {
-    let size = size.into().convert(|v| v as f32);
-    for pin in pins.into_iter() {
-        let pos = ctx
-            .rect
-            .lerp_inside((pin.into().convert(|v| v as f32 + 0.5) / size).into());
-        ctx.paint.circle_filled(
-            pos,
-            ActiveCircuitBoard::WIRE_THICKNESS * 0.5 * ctx.screen.scale,
-            WireState::False.color(),
-        );
+#[derive(Clone)]
+pub struct CircuitPinDescription {
+    pub display_name: DynStaticStr,
+    pub display_dir: Option<Direction4>,
+    pub dir: InternalPinDirection,
+    pub name: DynStaticStr,
+    pub pos: Vec2u,
+}
+
+#[derive(Clone)]
+pub struct CircuitDescription<const P: usize> {
+    pub size: Vec2u,
+    pub pins: [CircuitPinDescription; P],
+}
+
+#[derive(Clone)]
+pub struct DynCircuitDescription {
+    pub size: Vec2u,
+    pub pins: Arc<[CircuitPinDescription]>,
+}
+
+impl CircuitPinDescription {
+    pub fn to_info(&self) -> CircuitPinInfo {
+        CircuitPinInfo::new(
+            self.pos,
+            self.dir,
+            self.name.clone(),
+            self.display_name.clone(),
+            self.display_dir,
+        )
     }
+}
+
+impl<const P: usize> CircuitDescription<P> {
+    pub fn to_dyn(&self) -> DynCircuitDescription {
+        DynCircuitDescription {
+            size: self.size,
+            pins: Arc::new(self.pins.clone()),
+        }
+    }
+}
+
+//  # - - - +  + - - +  + - - - +  + - - #
+//  | * *   |  |     |  |       |  |   * |
+//  |       |  | *   |  |   * * |  |   * |
+//  + - - - +  | *   |  + - - - #  |     |
+//             # - - +             + - - +
+//   Up         Left     Down       Right
+
+const fn rotate_pos(pos: [u32; 2], size: [u32; 2], dir: Direction4) -> [u32; 2] {
+    match dir {
+        Direction4::Up => pos,
+        Direction4::Left => [pos[1], size[1] - pos[0] - 1],
+        Direction4::Down => [size[0] - pos[0] - 1, size[1] - pos[1] - 1],
+        Direction4::Right => [size[0] - pos[1] - 1, pos[0]],
+    }
+}
+
+#[macro_export]
+macro_rules! describe_directional_circuit {
+    (
+        default_dir: $default_dir:expr,
+        dir: $dir:expr,
+        size: [$width:literal, $height: literal],
+
+        $(
+            $pin_name:literal:
+                $pin_dir:expr,
+                $pin_dname:literal,
+                $pin_ddir:expr,
+                [$pin_x:literal, $pin_y: literal]
+        ),*
+        $(,)?
+    ) => {
+        {
+            use Direction4::*;
+
+            let dir = $dir;
+            let default_dir = $default_dir;
+            let dir_normalized = dir.rotate_counterclockwise_by(default_dir);
+            let size_rotated = if default_dir.is_horizontal() == dir.is_horizontal() {
+                [$width, $height]
+            } else {
+                [$height, $width]
+            };
+
+            {
+                use InternalPinDirection::*;
+
+                $crate::circuits::CircuitDescription {
+                    size: size_rotated.into(),
+                    pins: [
+                        $(
+                            $crate::circuits::CircuitPinDescription {
+                                name: $pin_name.into(),
+                                dir: $pin_dir,
+                                display_name: $pin_dname.into(),
+                                display_dir: Option::<Direction4>::from($pin_ddir)
+                                    .map(|d| d.rotate_clockwise_by(dir_normalized)),
+                                pos: $crate::circuits::rotate_pos([$pin_x, $pin_y], size_rotated, dir_normalized).into(),
+                            },
+                        )*
+                    ]
+                }
+            }
+        }
+    };
+}
+
+
+#[macro_export]
+macro_rules! describe_directional_custom_circuit {
+    (
+        default_dir: $default_dir:expr,
+        dir: $dir:expr,
+        flip: $flip:expr,
+        size: [$width:literal, $height: literal],
+
+        $(
+            $pin_name:literal:
+                $pin_dir:expr,
+                $pin_dname:literal,
+                $pin_ddir:expr,
+                [$pin_x:literal, $pin_y: literal],
+        )*
+
+        dir_proc: |$dir_proc_param:ident| $dir_proc_body:expr,
+        pos_proc: |$pos_proc_param:ident| $pos_proc_body:expr
+        $(,)?
+    ) => {
+        {
+            use Direction4::*;
+
+            let dir = $dir;
+            let default_dir = $default_dir;
+            let dir_normalized = dir.rotate_counterclockwise_by(default_dir);
+            let size_rotated = if default_dir.is_horizontal() == dir.is_horizontal() {
+                [$width, $height]
+            } else {
+                [$height, $width]
+            };
+
+            {
+                use InternalPinDirection::*;
+
+                $crate::circuits::CircuitDescription {
+                    size: size_rotated.into(),
+                    pins: [
+                        $(
+                            $crate::circuits::CircuitPinDescription {
+                                name: $pin_name.into(),
+                                dir: $pin_dir,
+                                display_name: $pin_dname.into(),
+                                display_dir: Option::<Direction4>::from($pin_ddir)
+                                    .map(|$dir_proc_param| $dir_proc_body.rotate_clockwise_by(dir_normalized)),
+                                pos: $crate::circuits::rotate_pos( { let $pos_proc_param = [$pin_x, $pin_y]; $pos_proc_body }, size_rotated, dir_normalized).into(),
+                            },
+                        )*
+                    ]
+                }
+            }
+        }
+    };
 }
