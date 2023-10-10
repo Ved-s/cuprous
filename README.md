@@ -3,14 +3,12 @@
 
 Logisim-inspired logic circuits simulator
 
-### TODOs
+### Global TODOs
 
 - [ ] Remove wire with Wire tool
 - [ ] Rotate selection
-- [ ] Proper UI
 - [ ] Circuit interactables 
 > special circuit interfaces that can be exposed on containinc circuit design and can receive user input
-- [ ] Circuit list
 - [ ] Place circuit boards as circuits
 - [ ] Circuit designer for circuit boards
 
