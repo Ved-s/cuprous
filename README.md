@@ -8,7 +8,7 @@ Logisim-inspired logic circuits simulator
 - [ ] Remove wire with Wire tool
 - [ ] Rotate selection
 - [ ] Circuit interactables 
-> special circuit interfaces that can be exposed on containinc circuit design and can receive user input
+> special circuit interfaces that can be exposed on containing circuit design and can receive user input
 - [ ] Place circuit boards as circuits
 - [ ] Circuit designer for circuit boards
 
