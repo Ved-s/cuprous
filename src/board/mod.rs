@@ -26,7 +26,7 @@ use crate::{
     unwrap_option_or_continue, unwrap_option_or_return,
     vector::{IsZero, Vec2f, Vec2i, Vec2isize, Vec2u},
     wires::{FoundWireNode, TileWires, Wire, WireNode, WirePart, WirePoint},
-    Direction2, Direction4, PaintContext, PastePreview, RwLock, Screen,
+    ArcString, Direction2, Direction4, PaintContext, PastePreview, RwLock, Screen,
 };
 
 use self::selection::{SelectedWorldObject, Selection};
@@ -408,7 +408,7 @@ impl ActiveCircuitBoard {
 
         let selected_something = !self.selection.borrow().selection.is_empty();
 
-        if selected_something {
+        if selected_something && !ctx.egui_ctx.wants_keyboard_input() {
             cfg_if::cfg_if! {
                 if #[cfg(all(not(web_sys_unstable_apis), feature = "wasm"))] {
                     let copy_request = ctx.egui_ctx.input(|input| {
@@ -487,7 +487,7 @@ impl ActiveCircuitBoard {
                 if #[cfg(all(not(web_sys_unstable_apis), feature = "wasm"))] {
                     let delete_request = ctx
                         .egui_ctx
-                        .input(|input| input.modifiers.ctrl && input.key_pressed(egui::Key::X));
+                        .input(|input| input.modifiers.ctrl && input.key_pressed(egui::Key::X)) ;
                 } else {
                     let delete_request = ctx
                         .egui_ctx
@@ -496,9 +496,9 @@ impl ActiveCircuitBoard {
             }
 
             if delete_request
-                || ctx.egui_ctx.input(|input| {
-                    input.key_pressed(egui::Key::Delete) || input.key_pressed(egui::Key::Backspace)
-                })
+                || ctx
+                    .egui_ctx
+                    .input(|input| input.key_pressed(egui::Key::Delete))
             {
                 let mut affected_wires = HashSet::new();
                 let drain = {
@@ -1009,6 +1009,49 @@ impl ActiveCircuitBoard {
         }
 
         imp.draw(&state_ctx, &circ_ctx);
+
+        let name = circuit.props.read("name", |s: &ArcString| s.get_arc());
+        let label_dir = circuit.props.read_clone::<Direction4>("label_dir");
+
+        if let (Some(name), Some(label_dir)) = (name, label_dir) {
+            if !name.is_empty() {
+                let offset = 0.5 * ctx.screen.scale;
+                let galley = WidgetText::from(name.deref()).into_galley(
+                    ctx.ui,
+                    Some(false),
+                    f32::INFINITY,
+                    FontSelection::FontId(FontId::monospace(ctx.screen.scale * 0.7)),
+                );
+
+                let textsize = galley.size();
+                let pos = match label_dir {
+                    Direction4::Up => {
+                        rect.center_top() + vec2(-textsize.x * 0.5, -offset - textsize.y)
+                    }
+                    Direction4::Left => {
+                        rect.left_center() + vec2(-textsize.x - offset, -textsize.y * 0.5)
+                    }
+                    Direction4::Down => rect.center_bottom() + vec2(-textsize.x * 0.5, offset),
+                    Direction4::Right => rect.right_center() + vec2(offset, -textsize.y * 0.5),
+                };
+
+                let rect = Rect::from_min_size(pos, textsize).expand(ctx.screen.scale * 0.15);
+                let visual = &ctx.ui.style().visuals;
+                ctx.paint.rect(
+                    rect,
+                    Rounding::same(ctx.screen.scale * 0.15),
+                    visual.window_fill.linear_multiply(1.1),
+                    visual.window_stroke,
+                );
+                ctx.paint.add(TextShape {
+                    pos,
+                    galley: galley.galley,
+                    underline: Stroke::NONE,
+                    override_text_color: Some(visual.text_color()),
+                    angle: 0.0,
+                });
+            }
+        }
     }
 
     /* #endregion */

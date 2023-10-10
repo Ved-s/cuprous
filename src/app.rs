@@ -101,15 +101,17 @@ impl eframe::App for App {
             self.selected_id = Some("paste".into());
         }
 
-        if ctx.input(|input| input.key_pressed(Key::F9)) {
-            self.debug = !self.debug;
-        } else if ctx.input(|input| input.key_pressed(Key::F8)) {
-            let board = self.board.board.clone();
-            self.board = ActiveCircuitBoard::new(board, 0).unwrap();
-        } else if ctx.input(|input| input.key_pressed(Key::F4)) {
-            let state = &self.board.state;
-            state.reset();
-            state.update_everything();
+        if !ctx.wants_keyboard_input() {
+            if ctx.input(|input| input.key_pressed(Key::F9)) {
+                self.debug = !self.debug;
+            } else if ctx.input(|input| input.key_pressed(Key::F8)) {
+                let board = self.board.board.clone();
+                self.board = ActiveCircuitBoard::new(board, 0).unwrap();
+            } else if ctx.input(|input| input.key_pressed(Key::F4)) {
+                let state = &self.board.state;
+                state.reset();
+                state.update_everything();
+            }
         }
 
         egui::CentralPanel::default()
@@ -121,10 +123,9 @@ impl eframe::App for App {
 
                 if let SelectedItem::Circuit(p) = self.selected_item() {
                     let props = [((), &p.props).into()];
-                    let changed = App::properties_ui(&mut self.props_ui, ui, Some(props)).is_some_and(|v| !v.is_empty());
-                    if changed {
-
-                    }
+                    let changed = App::properties_ui(&mut self.props_ui, ui, Some(props))
+                        .is_some_and(|v| !v.is_empty());
+                    if changed {}
                 } else {
                     let selection = self.board.selection.borrow();
                     if !selection.selection.is_empty() {
@@ -564,24 +565,26 @@ impl App {
 
         let selected_item = self.selected_item();
 
-        if ctx.egui_ctx.input(|input| input.key_pressed(Key::R)) {
-            self.change_selected_props(&selected_item, "dir", |d: &mut Direction4| {
-                *d = d.rotate_clockwise()
-            });
-        }
+        if !ctx.egui_ctx.wants_keyboard_input() {
+            if ctx.egui_ctx.input(|input| input.key_pressed(Key::R)) {
+                self.change_selected_props(&selected_item, "dir", |d: &mut Direction4| {
+                    *d = d.rotate_clockwise()
+                });
+            }
 
-        if ctx.egui_ctx.input(|input| input.key_pressed(Key::F)) {
-            self.change_selected_props(&selected_item, "flip", |f: &mut bool| *f = !*f);
-        }
+            if ctx.egui_ctx.input(|input| input.key_pressed(Key::F)) {
+                self.change_selected_props(&selected_item, "flip", |f: &mut bool| *f = !*f);
+            }
 
-        if ctx.egui_ctx.input(|input| input.key_pressed(Key::Q)) {
-            let sim_lock = self.board.board.read().sim_lock.clone();
-            let sim_lock = sim_lock.write();
+            if ctx.egui_ctx.input(|input| input.key_pressed(Key::Q)) {
+                let sim_lock = self.board.board.read().sim_lock.clone();
+                let sim_lock = sim_lock.write();
 
-            let mut board = self.board.board.write();
-            let ordered = board.is_ordered_queue();
-            board.set_ordered_queue(!ordered, false);
-            drop(sim_lock);
+                let mut board = self.board.board.write();
+                let ordered = board.is_ordered_queue();
+                board.set_ordered_queue(!ordered, false);
+                drop(sim_lock);
+            }
         }
 
         self.board.update(&ctx, selected_item, self.debug);

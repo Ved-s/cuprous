@@ -11,7 +11,10 @@ use std::{
     hash::Hash,
     num::NonZeroU32,
     ops::{Deref, Range},
-    sync::Arc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
 };
 
 use board::{selection::Selection, ActiveCircuitBoard};
@@ -81,7 +84,6 @@ impl<K: Borrow<str> + Eq + Hash> io::LoadingContext for BasicLoadingContext<'_, 
 }
 
 fn main() {
-
     #[cfg(all(feature = "deadlock_detection", not(feature = "single_thread")))]
     debug::set_this_thread_debug_name("egui main thread");
 
@@ -569,7 +571,8 @@ pub enum Direction4 {
 impl<'de> Deserialize<'de> for Direction4 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
-        D: serde::Deserializer<'de> {
+        D: serde::Deserializer<'de>,
+    {
         Ok(Direction4::from_char(char::deserialize(deserializer)?).unwrap_or(Direction4::Up))
     }
 }
@@ -577,7 +580,8 @@ impl<'de> Deserialize<'de> for Direction4 {
 impl Serialize for Direction4 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
-        S: serde::Serializer {
+        S: serde::Serializer,
+    {
         self.into_char().serialize(serializer)
     }
 }
@@ -722,7 +726,7 @@ impl Direction4 {
             'l' => Some(Direction4::Left),
             'd' => Some(Direction4::Down),
             'r' => Some(Direction4::Right),
-            _ => None
+            _ => None,
         }
     }
 
@@ -738,18 +742,18 @@ impl Direction4 {
     pub fn angle_to_right(self) -> f32 {
         match self {
             Direction4::Right => TAU * 0.0,
-            Direction4::Up =>    TAU * 0.25,
-            Direction4::Left =>  TAU * 0.5,
-            Direction4::Down =>  TAU * 0.75,
+            Direction4::Up => TAU * 0.25,
+            Direction4::Left => TAU * 0.5,
+            Direction4::Down => TAU * 0.75,
         }
     }
 
     pub fn angle_to_left(self) -> f32 {
         match self {
-            Direction4::Left  => TAU * 0.0,
-            Direction4::Down  => TAU * 0.25,
+            Direction4::Left => TAU * 0.0,
+            Direction4::Down => TAU * 0.25,
             Direction4::Right => TAU * 0.5,
-            Direction4::Up    => TAU * 0.75,
+            Direction4::Up => TAU * 0.75,
         }
     }
 
@@ -1020,11 +1024,9 @@ impl PastePreview {
     }
 
     fn place(&self, board: &mut ActiveCircuitBoard, pos: Vec2i) {
-        if self
-            .circuits
-            .iter()
-            .any(|(c, p)| !board.can_place_circuit_at(p.describe().size, pos + c.pos.convert(|v| v as i32), None))
-        {
+        if self.circuits.iter().any(|(c, p)| {
+            !board.can_place_circuit_at(p.describe().size, pos + c.pos.convert(|v| v as i32), None)
+        }) {
             return;
         }
 
@@ -1061,10 +1063,8 @@ impl PastePreview {
                                 let state = state.get_circuit(id);
                                 let mut state = state.write();
 
-                                state.internal = circuit
-                                    .imp
-                                    .write()
-                                    .load_internal(&circuit_data.internal);
+                                state.internal =
+                                    circuit.imp.write().load_internal(&circuit_data.internal);
                             }
                         }
 
@@ -1087,5 +1087,116 @@ impl PastePreview {
             states.update_wire(wire, true);
         }
         drop(sim_lock)
+    }
+}
+
+#[derive(Default)]
+pub struct ArcString {
+    string: Option<String>,
+    arc: RwLock<Option<Arc<str>>>,
+    check_str: AtomicBool,
+}
+
+impl Clone for ArcString {
+    fn clone(&self) -> Self {
+
+        if self.string.is_none() && self.arc.read().is_none() {
+            return Default::default();
+        }
+
+
+        Self {
+            string: None,
+            arc: RwLock::new(Some(self.get_arc())),
+            check_str: AtomicBool::new(self.check_str.load(Ordering::Relaxed)),
+        }
+    }
+}
+
+impl ArcString {
+    fn check_string(&self, s: &str) -> bool {
+        let check_str = self.check_str.load(Ordering::Relaxed);
+
+        if !check_str {
+            return true;
+        }
+        let str = match &self.string {
+            Some(s) => s.as_str(),
+            None => "",
+        };
+        if str == s {
+            self.check_str.store(false, Ordering::Relaxed);
+            return true;
+        }
+        false
+    }
+
+    pub fn get_arc(&self) -> Arc<str> {
+        let arc = self.arc.read().clone();
+        if let Some(arc) = arc {
+            if self.check_string(&arc) {
+                return arc;
+            }
+        }
+
+        let mut arc = self.arc.write();
+        if let Some(arc) = arc.clone() {
+            if self.check_string(&arc) {
+                return arc;
+            }
+        }
+
+        self.check_str.store(false, Ordering::Relaxed);
+        let str = match &self.string {
+            Some(s) => s,
+            None => "",
+        };
+        let new_arc = Arc::<str>::from(str);
+
+        *arc = Some(new_arc.clone());
+        new_arc
+    }
+
+    pub fn get_mut(&mut self) -> &mut String {
+        self.check_str.store(true, Ordering::Relaxed);
+        self.string.get_or_insert_with(|| self.arc.read().as_ref().map(|a| a.deref().into()).unwrap_or_default())
+    }
+
+    pub fn get_str(&self) -> ArcBorrowStr<'_> {
+        if let Some(string) = &self.string {
+            ArcBorrowStr::Borrow(string)
+        }
+        else if let Some(arc) = self.arc.read().as_ref() {
+            ArcBorrowStr::Arc(arc.clone())
+        }
+        else {
+            ArcBorrowStr::Borrow("")
+        }
+    }
+}
+
+impl From<&str> for ArcString {
+    fn from(value: &str) -> Self {
+        Self {
+            string: Some(value.into()),
+            arc: RwLock::new(None),
+            check_str: AtomicBool::new(false),
+        }
+    }
+}
+
+pub enum ArcBorrowStr<'a> {
+    Arc(Arc<str>),
+    Borrow(&'a str)
+}
+
+impl<'a> Deref for ArcBorrowStr<'a> {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            ArcBorrowStr::Arc(a) => a.deref(),
+            ArcBorrowStr::Borrow(b) => b,
+        }
     }
 }

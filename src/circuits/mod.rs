@@ -529,7 +529,6 @@ impl CircuitPreview {
     pub fn describe(&self) -> DynCircuitDescription {
         self.description.read().clone()
     }
-
 }
 
 pub trait CircuitPreviewImpl {

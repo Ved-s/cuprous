@@ -1,19 +1,24 @@
 use std::{
     any::{Any, TypeId},
-    collections::HashMap,
+    collections::HashMap, ops::Deref,
 };
 
 use eframe::egui::{Ui, ComboBox};
 
-use crate::{unwrap_option_or_return, Direction4, DynStaticStr, RwLock, unwrap_option_or_continue};
+use crate::{unwrap_option_or_return, Direction4, DynStaticStr, RwLock, unwrap_option_or_continue, ArcString};
 
-#[derive(Default)]
 pub struct CircuitPropertyStore(RwLock<HashMap<DynStaticStr, CircuitProperty>>);
+
+impl Default for CircuitPropertyStore {
+    fn default() -> Self {
+        Self::new([])
+    }
+}
 
 impl CircuitPropertyStore {
     pub fn new(props: impl IntoIterator<Item = CircuitProperty>) -> Self {
         Self(RwLock::new(HashMap::from_iter(
-            props.into_iter().map(|p| (p.id(), p)),
+            Self::default_props().chain(props.into_iter()).map(|p| (p.id(), p)),
         )))
     }
 
@@ -96,6 +101,13 @@ impl CircuitPropertyStore {
 
     pub fn inner(&self) -> &RwLock<HashMap<DynStaticStr, CircuitProperty>> {
         &self.0
+    }
+
+    fn default_props() -> impl Iterator<Item = CircuitProperty> {
+        [
+            CircuitProperty::new("name", "Name", ArcString::default()),
+            CircuitProperty::new("label_dir", "Label dir", Direction4::Down),
+        ].into_iter()
     }
 }
 
@@ -220,7 +232,8 @@ impl CircuitPropertyImpl for Direction4 {
     fn ui(&mut self, ui: &mut Ui, not_equal: bool) -> Option<Box<dyn CircuitPropertyImpl>> {
         let old = *self;
         let mut changed = false;
-        ComboBox::from_id_source("dir4_ui")
+        ui.skip_ahead_auto_ids(1);
+        ComboBox::from_id_source(ui.next_auto_id())
         .selected_text(if not_equal { Default::default() } else { self.name() })
         .show_ui(ui, |ui| {
             for dir in Direction4::iter_all() {
@@ -296,6 +309,60 @@ impl CircuitPropertyImpl for bool {
     fn copy_into(&self, other: &mut dyn CircuitPropertyImpl) {
         if let Some(r) = other.downcast_mut() {
             *r = *self;
+        }
+    }
+}
+
+impl CircuitPropertyImpl for ArcString {
+    fn equals(&self, other: &dyn CircuitPropertyImpl) -> bool {
+        other.is_type_and(|s: &ArcString| s.get_str().deref() == self.get_str().deref())
+    }
+
+    fn ui(&mut self, ui: &mut Ui, not_equal: bool) -> Option<Box<dyn CircuitPropertyImpl>> {
+        let old = self.get_arc();
+
+        let mut empty = String::new();
+        let r = if not_equal {
+            &mut empty
+        } else {
+            self.get_mut()
+        };
+
+        if ui.text_edit_singleline(r).changed() {
+
+            if not_equal {
+                let string = self.get_mut();
+                string.clear();
+                string.push_str(&empty);
+            }
+            Some(Box::new(ArcString::from(old.deref())))
+        }
+        else {
+            None
+        }
+    }
+
+    fn clone(&self) -> Box<dyn CircuitPropertyImpl> {
+        Box::new(Clone::clone(self))
+    }
+
+    fn load(&mut self, data: &serde_intermediate::Intermediate) {
+        if let Some(str) = data.as_str() {
+            let string = self.get_mut();
+            string.clear();
+            string.push_str(str);
+        }
+    }
+
+    fn save(&self) -> serde_intermediate::Intermediate {
+        serde_intermediate::to_intermediate(self.get_str().deref()).unwrap_or_default()
+    }
+
+    fn copy_into(&self, other: &mut dyn CircuitPropertyImpl) {
+        if let Some(r) = other.downcast_mut::<Self>() {
+            let string = r.get_mut();
+            string.clear();
+            string.push_str(self.get_str().deref());
         }
     }
 }
