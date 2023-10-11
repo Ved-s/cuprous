@@ -6,6 +6,7 @@ use crate::{
         props::{CircuitProperty, CircuitPropertyStore},
         *,
     },
+    describe_directional_circuit,
     path::{PathItem, PathItemIterator},
     vector::Vec2f,
     Direction4, Mutex,
@@ -32,35 +33,32 @@ struct Circuit {
 
 impl Circuit {
     fn new(template: GateTemplate) -> Self {
+        let description = Self::describe(Direction4::Right);
         Self {
             template,
             inputs: vec![
-                CircuitPinInfo::new([0, 0], InternalPinDirection::Inside, "in_0", "A", Direction4::Left),
-                CircuitPinInfo::new([0, 2], InternalPinDirection::Inside, "in_1", "B", Direction4::Left),
+                description.pins[0].to_info(),
+                description.pins[1].to_info(),
             ]
             .into_boxed_slice(),
-            output: CircuitPinInfo::new([3, 1], InternalPinDirection::Outside, "out", "Out", Direction4::Right),
+            output: description.pins[2].to_info(),
             dir: Direction4::Right,
         }
     }
 
-    fn size(props: &CircuitPropertyStore) -> Vec2u {
+    fn describe_props(props: &CircuitPropertyStore) -> CircuitDescription<3> {
         let dir = props.read_clone("dir").unwrap_or(Direction4::Right);
-        if dir.is_horizontal() {
-            [4, 3].into()
-        } else {
-            [3, 4].into()
-        }
+        Self::describe(dir)
     }
 
-    /// [in_1, in_2, out]
-    fn pin_positions(props: &CircuitPropertyStore) -> [[u32; 2]; 3] {
-        let dir = props.read_clone("dir").unwrap_or(Direction4::Right);
-        match dir {
-            Direction4::Up => [[0, 3], [2, 3], [1, 0]],
-            Direction4::Left => [[3, 0], [3, 2], [0, 1]],
-            Direction4::Down => [[0, 0], [2, 0], [1, 3]],
-            Direction4::Right => [[0, 0], [0, 2], [3, 1]],
+    fn describe(dir: Direction4) -> CircuitDescription<3> {
+        describe_directional_circuit! {
+            default_dir: Right,
+            dir: dir,
+            size: [4, 3],
+            "in_0": Inside, "A", Left, [0, 0],
+            "in_1": Inside, "B", Left, [0, 2],
+            "out": Outside, "Out", Right, [3, 1],
         }
     }
 }
@@ -72,15 +70,13 @@ impl CircuitImpl for Circuit {
     }
 
     fn create_pins(&mut self, props: &CircuitPropertyStore) -> Box<[CircuitPinInfo]> {
-        
-        let pin_positions = Circuit::pin_positions(props);
-        let pin_rot = props.read_clone("dir").unwrap_or(Direction4::Right).rotate_counterclockwise();
+        let description = Self::describe_props(props);
         self.inputs = vec![
-            CircuitPinInfo::new(pin_positions[0], InternalPinDirection::Inside, "in_0", "A", Direction4::Left.rotate_clockwise_by(pin_rot)),
-            CircuitPinInfo::new(pin_positions[1], InternalPinDirection::Inside, "in_1", "B", Direction4::Left.rotate_clockwise_by(pin_rot)),
+            description.pins[0].to_info(),
+            description.pins[1].to_info(),
         ]
         .into_boxed_slice();
-        self.output = CircuitPinInfo::new(pin_positions[2], InternalPinDirection::Outside, "out", "Out", Direction4::Right.rotate_clockwise_by(pin_rot));
+        self.output = description.pins[2].to_info();
         let mut vec = vec![self.output.clone()];
         vec.extend(self.inputs.iter().cloned());
         vec.into_boxed_slice()
@@ -106,16 +102,14 @@ impl CircuitImpl for Circuit {
             if b.is_empty() {
                 self.output.set_state(state_ctx, WireState::None);
             } else {
-                self.output.set_state(
-                    state_ctx,
-                    (self.template.process_inputs)(&b).into(),
-                );
+                self.output
+                    .set_state(state_ctx, (self.template.process_inputs)(&b).into());
             }
         });
     }
 
     fn size(&self, props: &CircuitPropertyStore) -> Vec2u {
-        Circuit::size(props)
+        Self::describe_props(props).size
     }
 
     fn prop_changed(&self, prop_id: &str, resize: &mut bool, recreate_pins: &mut bool) {
@@ -136,18 +130,11 @@ pub struct Preview {
 
 impl CircuitPreviewImpl for Preview {
     fn draw_preview(&self, props: &CircuitPropertyStore, ctx: &PaintContext, in_world: bool) {
-        let angle = props
-            .read_clone("dir")
-            .unwrap_or(Direction4::Right)
+        let dir = props.read_clone("dir").unwrap_or(Direction4::Right);
+        let angle = dir
             .inverted_ud()
             .angle_to_right();
         (self.template.drawer)(ctx, angle, in_world);
-
-        draw_pins_preview(ctx, self.size(props), Circuit::pin_positions(props))
-    }
-
-    fn size(&self, props: &CircuitPropertyStore) -> Vec2u {
-        Circuit::size(props)
     }
 
     fn create_impl(&self) -> Box<dyn CircuitImpl> {
@@ -173,6 +160,11 @@ impl CircuitPreviewImpl for Preview {
 
     fn display_name(&self) -> DynStaticStr {
         self.template.name.into()
+    }
+
+    fn describe(&self, props: &CircuitPropertyStore) -> DynCircuitDescription {
+        let dir = props.read_clone("dir").unwrap_or(Direction4::Right);
+        Circuit::describe(dir).to_dyn()
     }
 }
 

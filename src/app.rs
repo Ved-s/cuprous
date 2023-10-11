@@ -2,8 +2,8 @@ use std::{collections::HashMap, fmt::Write, ops::Deref, sync::Arc};
 
 use eframe::{
     egui::{
-        self, CollapsingHeader, Context, FontSelection, Frame, Key, Margin, Sense,
-        SidePanel, TextEdit, TextStyle, Ui, WidgetText,
+        self, CollapsingHeader, Context, FontSelection, Frame, Key, Margin, Sense, SidePanel,
+        TextEdit, TextStyle, Ui, WidgetText,
     },
     epaint::{Color32, Rounding, Stroke, TextShape},
     CreationContext,
@@ -115,16 +115,18 @@ impl eframe::App for App {
             self.selected_id = SelectedItemId::Paste;
         }
 
-        if ctx.input(|input| input.key_pressed(Key::F9)) {
-            self.debug = !self.debug;
-        } else if ctx.input(|input| input.key_pressed(Key::F8)) {
-            let board = self.board.board.clone();
-            let state = self.board.state.clone();
-            self.board = ActiveCircuitBoard::new(board, state);
-        } else if ctx.input(|input| input.key_pressed(Key::F4)) {
-            let state = &self.board.state;
-            state.reset();
-            state.update_everything();
+        if !ctx.wants_keyboard_input() {
+            if ctx.input(|input| input.key_pressed(Key::F9)) {
+                self.debug = !self.debug;
+            } else if ctx.input(|input| input.key_pressed(Key::F8)) {
+                let board = self.board.board.clone();
+                let state = self.board.state.clone();
+                self.board = ActiveCircuitBoard::new(board, state);
+            } else if ctx.input(|input| input.key_pressed(Key::F4)) {
+                let state = &self.board.state;
+                state.reset();
+                state.update_everything();
+            }
         }
 
         egui::CentralPanel::default()
@@ -136,7 +138,9 @@ impl eframe::App for App {
 
                 if let SelectedItem::Circuit(p) = self.selected_item() {
                     let props = [((), &p.props).into()];
-                    App::properties_ui(&mut self.props_ui, ui, Some(props));
+                    let changed = App::properties_ui(&mut self.props_ui, ui, Some(props))
+                        .is_some_and(|v| !v.is_empty());
+                    if changed {}
                 } else {
                     let selection = self.board.selection.borrow();
                     if !selection.selection.is_empty() {
@@ -608,24 +612,26 @@ impl App {
 
         let selected_item = self.selected_item();
 
-        if ctx.egui_ctx.input(|input| input.key_pressed(Key::R)) {
-            self.change_selected_props(&selected_item, "dir", |d: &mut Direction4| {
-                *d = d.rotate_clockwise()
-            });
-        }
+        if !ctx.egui_ctx.wants_keyboard_input() {
+            if ctx.egui_ctx.input(|input| input.key_pressed(Key::R)) {
+                self.change_selected_props(&selected_item, "dir", |d: &mut Direction4| {
+                    *d = d.rotate_clockwise()
+                });
+            }
 
-        if ctx.egui_ctx.input(|input| input.key_pressed(Key::F)) {
-            self.change_selected_props(&selected_item, "flip", |f: &mut bool| *f = !*f);
-        }
+            if ctx.egui_ctx.input(|input| input.key_pressed(Key::F)) {
+                self.change_selected_props(&selected_item, "flip", |f: &mut bool| *f = !*f);
+            }
 
-        if ctx.egui_ctx.input(|input| input.key_pressed(Key::Q)) {
-            let sim_lock = self.board.board.read().sim_lock.clone();
-            let sim_lock = sim_lock.write();
+            if ctx.egui_ctx.input(|input| input.key_pressed(Key::Q)) {
+                let sim_lock = self.board.board.read().sim_lock.clone();
+                let sim_lock = sim_lock.write();
 
-            let mut board = self.board.board.write();
-            let ordered = board.is_ordered_queue();
-            board.set_ordered_queue(!ordered, false);
-            drop(sim_lock);
+                let mut board = self.board.board.write();
+                let ordered = board.is_ordered_queue();
+                board.set_ordered_queue(!ordered, false);
+                drop(sim_lock);
+            }
         }
 
         self.board.update(&ctx, selected_item, self.debug);
@@ -639,6 +645,7 @@ impl App {
     ) {
         if let SelectedItem::Circuit(pre) = selected_item {
             pre.props.write(id, f);
+            pre.prop_changed();
         } else {
             let selected_circuits: Vec<_> = self
                 .board
@@ -759,7 +766,7 @@ impl App {
                                     let (rect, scale) = align_rect_scaled(
                                         resp.rect.min,
                                         vec2(font.size, font.size),
-                                        preview.size().convert(|v| v as f32).into(),
+                                        preview.describe().size.convert(|v| v as f32).into(),
                                     );
 
                                     let paint_ctx = PaintContext::new_on_ui(ui, rect, scale);
@@ -886,7 +893,12 @@ impl App {
                         if let Some(uid) = queued_deletion {
                             self.boards.remove(&uid);
                             if self.board.board.read().uid == uid {
-                                let board = self.boards.values().next().expect("Boards must exist!").clone();
+                                let board = self
+                                    .boards
+                                    .values()
+                                    .next()
+                                    .expect("Boards must exist!")
+                                    .clone();
                                 self.board = ActiveCircuitBoard::new_main(board);
                             }
                         }

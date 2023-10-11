@@ -4,7 +4,7 @@ use eframe::{
 };
 use emath::Align2;
 
-use crate::Direction4;
+use crate::{Direction4, describe_directional_circuit};
 
 use super::{*, props::CircuitProperty};
 
@@ -14,8 +14,9 @@ struct Circuit {
 
 impl Circuit {
     fn new() -> Self {
+        let description = Self::describe(Direction4::Right);
         Self {
-            out_pin: CircuitPinInfo::new([2, 1], InternalPinDirection::Outside, "out", "Out", Direction4::Right),
+            out_pin: description.pins[0].to_info(),
         }
     }
 
@@ -53,8 +54,19 @@ impl Circuit {
         );
     }
 
-    fn size(_: &CircuitPropertyStore) -> Vec2u {
-        [3, 3].into()
+    fn describe_props(props: &CircuitPropertyStore) -> CircuitDescription<1> {
+        let dir = props.read_clone("dir").unwrap_or(Direction4::Right);
+        Self::describe(dir)
+    }
+
+    fn describe(dir: Direction4) -> CircuitDescription<1> {
+        describe_directional_circuit! {
+            default_dir: Right,
+            dir: dir,
+            size: [3, 3],
+
+            "out": Outside, "Out", Right, [2, 1]
+        }
     }
 }
 
@@ -89,14 +101,8 @@ impl CircuitImpl for Circuit {
 
     fn create_pins(&mut self, props: &CircuitPropertyStore) -> Box<[CircuitPinInfo]> {
 
-        let dir = props.read_clone("dir").unwrap_or(Direction4::Right);
-        let pos = match dir {
-            Direction4::Up => [1, 0],
-            Direction4::Left => [0, 1],
-            Direction4::Down => [1, 2],
-            Direction4::Right => [2, 1],
-        };
-        self.out_pin = CircuitPinInfo::new(pos, InternalPinDirection::Outside, "out", "Out", dir);
+        let description = Self::describe_props(props);
+        self.out_pin = description.pins[0].to_info();
 
         vec![self.out_pin.clone()].into_boxed_slice()
     }
@@ -118,7 +124,7 @@ impl CircuitImpl for Circuit {
     }
 
     fn size(&self, props: &CircuitPropertyStore) -> Vec2u {
-        Circuit::size(props)
+        Self::describe_props(props).size
     }
 }
 
@@ -137,17 +143,8 @@ impl InternalCircuitState for State {
 pub struct Preview {}
 
 impl CircuitPreviewImpl for Preview {
-    fn draw_preview(&self, props: &CircuitPropertyStore, ctx: &PaintContext, in_world: bool) {
+    fn draw_preview(&self, _: &CircuitPropertyStore, ctx: &PaintContext, in_world: bool) {
         Circuit::draw(None, ctx, in_world);
-        let dir = props.read_clone("dir").unwrap_or(Direction4::Right);
-        let pos = (dir.unit_vector() + [1, 1]).convert(|v| v as u32);
-        let size = [3, 3];
-
-        draw_pins_preview(ctx, size, [pos]);
-    }
-
-    fn size(&self, props: &CircuitPropertyStore) -> Vec2u {
-        Circuit::size(props)
     }
 
     fn create_impl(&self) -> Box<dyn CircuitImpl> {
@@ -173,5 +170,9 @@ impl CircuitPreviewImpl for Preview {
 
     fn display_name(&self) -> DynStaticStr {
         "Button".into()
+    }
+
+    fn describe(&self, props: &CircuitPropertyStore) -> DynCircuitDescription {
+        Circuit::describe_props(props).to_dyn()
     }
 }

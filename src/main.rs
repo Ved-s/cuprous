@@ -11,7 +11,10 @@ use std::{
     hash::Hash,
     num::NonZeroU32,
     ops::{Deref, Range},
-    sync::Arc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
 };
 
 use app::SelectedItemId;
@@ -82,7 +85,6 @@ impl<K: Borrow<str> + Eq + Hash> io::LoadingContext for BasicLoadingContext<'_, 
 }
 
 fn main() {
-
     #[cfg(all(feature = "deadlock_detection", not(feature = "single_thread")))]
     debug::set_this_thread_debug_name("egui main thread");
 
@@ -417,7 +419,7 @@ impl InventoryItem for CircuitInventoryItem {
     }
 
     fn draw(&self, ctx: &PaintContext) {
-        let size = self.preview.size().convert(|v| v as f32);
+        let size = self.preview.describe().size.convert(|v| v as f32);
         let scale = Vec2f::from(ctx.rect.size()) / size;
         let scale = scale.x().min(scale.y());
         let size = size * scale;
@@ -570,7 +572,8 @@ pub enum Direction4 {
 impl<'de> Deserialize<'de> for Direction4 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
-        D: serde::Deserializer<'de> {
+        D: serde::Deserializer<'de>,
+    {
         Ok(Direction4::from_char(char::deserialize(deserializer)?).unwrap_or(Direction4::Up))
     }
 }
@@ -578,7 +581,8 @@ impl<'de> Deserialize<'de> for Direction4 {
 impl Serialize for Direction4 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
-        S: serde::Serializer {
+        S: serde::Serializer,
+    {
         self.into_char().serialize(serializer)
     }
 }
@@ -603,35 +607,35 @@ impl Direction4 {
         vec + self.unit_vector() * distance
     }
 
-    pub fn is_vertical(self) -> bool {
+    pub const fn is_vertical(self) -> bool {
         match self {
             Self::Left | Self::Right => false,
             Self::Up | Self::Down => true,
         }
     }
 
-    pub fn is_horizontal(self) -> bool {
+    pub const fn is_horizontal(self) -> bool {
         match self {
             Self::Left | Self::Right => true,
             Self::Up | Self::Down => false,
         }
     }
 
-    pub fn is_left_up(self) -> bool {
+    pub const fn is_left_up(self) -> bool {
         match self {
             Self::Left | Self::Up => true,
             Self::Right | Self::Down => false,
         }
     }
 
-    pub fn is_right_bottom(self) -> bool {
+    pub const fn is_right_bottom(self) -> bool {
         match self {
             Self::Right | Self::Down => true,
             Self::Left | Self::Up => false,
         }
     }
 
-    pub fn inverted(self) -> Self {
+    pub const fn inverted(self) -> Self {
         match self {
             Self::Up => Self::Down,
             Self::Left => Self::Right,
@@ -640,7 +644,7 @@ impl Direction4 {
         }
     }
 
-    pub fn inverted_ud(self) -> Self {
+    pub const fn inverted_ud(self) -> Self {
         match self {
             Self::Up => Self::Down,
             Self::Left => Self::Left,
@@ -649,7 +653,7 @@ impl Direction4 {
         }
     }
 
-    pub fn inverted_lr(self) -> Self {
+    pub const fn inverted_lr(self) -> Self {
         match self {
             Self::Up => Self::Up,
             Self::Left => Self::Right,
@@ -659,7 +663,7 @@ impl Direction4 {
     }
 
     /// Returns: (direction, forward)
-    pub fn into_dir2(self) -> (Direction2, bool) {
+    pub const fn into_dir2(self) -> (Direction2, bool) {
         match self {
             Self::Up => (Direction2::Up, true),
             Self::Left => (Direction2::Left, true),
@@ -690,7 +694,7 @@ impl Direction4 {
         }
     }
 
-    pub fn rotate_clockwise(self) -> Self {
+    pub const fn rotate_clockwise(self) -> Self {
         match self {
             Self::Up => Self::Right,
             Self::Left => Self::Up,
@@ -699,7 +703,7 @@ impl Direction4 {
         }
     }
 
-    pub fn rotate_counterclockwise(self) -> Self {
+    pub const fn rotate_counterclockwise(self) -> Self {
         match self {
             Self::Up => Self::Left,
             Self::Left => Self::Down,
@@ -708,7 +712,7 @@ impl Direction4 {
         }
     }
 
-    pub fn into_char(self) -> char {
+    pub const fn into_char(self) -> char {
         match self {
             Direction4::Up => 'u',
             Direction4::Left => 'l',
@@ -717,17 +721,17 @@ impl Direction4 {
         }
     }
 
-    pub fn from_char(char: char) -> Option<Self> {
+    pub const fn from_char(char: char) -> Option<Self> {
         match char {
             'u' => Some(Direction4::Up),
             'l' => Some(Direction4::Left),
             'd' => Some(Direction4::Down),
             'r' => Some(Direction4::Right),
-            _ => None
+            _ => None,
         }
     }
 
-    pub fn name(self) -> &'static str {
+    pub const fn name(self) -> &'static str {
         match self {
             Direction4::Up => "Up",
             Direction4::Left => "Left",
@@ -739,28 +743,38 @@ impl Direction4 {
     pub fn angle_to_right(self) -> f32 {
         match self {
             Direction4::Right => TAU * 0.0,
-            Direction4::Up =>    TAU * 0.25,
-            Direction4::Left =>  TAU * 0.5,
-            Direction4::Down =>  TAU * 0.75,
+            Direction4::Up => TAU * 0.25,
+            Direction4::Left => TAU * 0.5,
+            Direction4::Down => TAU * 0.75,
         }
     }
 
     pub fn angle_to_left(self) -> f32 {
         match self {
-            Direction4::Left  => TAU * 0.0,
-            Direction4::Down  => TAU * 0.25,
+            Direction4::Left => TAU * 0.0,
+            Direction4::Down => TAU * 0.25,
             Direction4::Right => TAU * 0.5,
-            Direction4::Up    => TAU * 0.75,
+            Direction4::Up => TAU * 0.75,
         }
     }
 
     // Up - no rotation, Right - one, Down - two, etc
-    pub fn rotate_clockwise_by(self, other: Direction4) -> Self {
+    pub const fn rotate_clockwise_by(self, other: Direction4) -> Self {
         match other {
             Direction4::Up => self,
             Direction4::Right => self.rotate_clockwise(),
             Direction4::Down => self.inverted(),
             Direction4::Left => self.rotate_counterclockwise(),
+        }
+    }
+
+    // Up - no rotation, Left - one, Down - two, etc
+    pub const fn rotate_counterclockwise_by(self, other: Direction4) -> Self {
+        match other {
+            Direction4::Up => self,
+            Direction4::Left => self.rotate_clockwise(),
+            Direction4::Down => self.inverted(),
+            Direction4::Right => self.rotate_counterclockwise(),
         }
     }
 }
@@ -961,7 +975,7 @@ impl PastePreview {
                 .into()
             }
             for (circuit, preview) in circuits.iter() {
-                let br = circuit.pos + preview.size();
+                let br = circuit.pos + preview.describe().size;
                 size = [size.x().max(br.x()), size.y().max(br.y())].into()
             }
             size
@@ -997,7 +1011,7 @@ impl PastePreview {
         }
 
         for (circuit, preview) in self.circuits.iter() {
-            let size = preview.size();
+            let size = preview.describe().size;
             if size.x() == 0 || size.y() == 0 {
                 return;
             }
@@ -1011,11 +1025,9 @@ impl PastePreview {
     }
 
     fn place(&self, board: &mut ActiveCircuitBoard, pos: Vec2i) {
-        if self
-            .circuits
-            .iter()
-            .any(|(c, p)| !board.can_place_circuit_at(p.size(), pos + c.pos.convert(|v| v as i32), None))
-        {
+        if self.circuits.iter().any(|(c, p)| {
+            !board.can_place_circuit_at(p.describe().size, pos + c.pos.convert(|v| v as i32), None)
+        }) {
             return;
         }
 
@@ -1052,10 +1064,8 @@ impl PastePreview {
                                 let state = state.get_circuit(id);
                                 let mut state = state.write();
 
-                                state.internal = circuit
-                                    .imp
-                                    .write()
-                                    .load_internal(&circuit_data.internal);
+                                state.internal =
+                                    circuit.imp.write().load_internal(&circuit_data.internal);
                             }
                         }
 
@@ -1078,5 +1088,116 @@ impl PastePreview {
             states.update_wire(wire, true);
         }
         drop(sim_lock)
+    }
+}
+
+#[derive(Default)]
+pub struct ArcString {
+    string: Option<String>,
+    arc: RwLock<Option<Arc<str>>>,
+    check_str: AtomicBool,
+}
+
+impl Clone for ArcString {
+    fn clone(&self) -> Self {
+
+        if self.string.is_none() && self.arc.read().is_none() {
+            return Default::default();
+        }
+
+
+        Self {
+            string: None,
+            arc: RwLock::new(Some(self.get_arc())),
+            check_str: AtomicBool::new(self.check_str.load(Ordering::Relaxed)),
+        }
+    }
+}
+
+impl ArcString {
+    fn check_string(&self, s: &str) -> bool {
+        let check_str = self.check_str.load(Ordering::Relaxed);
+
+        if !check_str {
+            return true;
+        }
+        let str = match &self.string {
+            Some(s) => s.as_str(),
+            None => "",
+        };
+        if str == s {
+            self.check_str.store(false, Ordering::Relaxed);
+            return true;
+        }
+        false
+    }
+
+    pub fn get_arc(&self) -> Arc<str> {
+        let arc = self.arc.read().clone();
+        if let Some(arc) = arc {
+            if self.check_string(&arc) {
+                return arc;
+            }
+        }
+
+        let mut arc = self.arc.write();
+        if let Some(arc) = arc.clone() {
+            if self.check_string(&arc) {
+                return arc;
+            }
+        }
+
+        self.check_str.store(false, Ordering::Relaxed);
+        let str = match &self.string {
+            Some(s) => s,
+            None => "",
+        };
+        let new_arc = Arc::<str>::from(str);
+
+        *arc = Some(new_arc.clone());
+        new_arc
+    }
+
+    pub fn get_mut(&mut self) -> &mut String {
+        self.check_str.store(true, Ordering::Relaxed);
+        self.string.get_or_insert_with(|| self.arc.read().as_ref().map(|a| a.deref().into()).unwrap_or_default())
+    }
+
+    pub fn get_str(&self) -> ArcBorrowStr<'_> {
+        if let Some(string) = &self.string {
+            ArcBorrowStr::Borrow(string)
+        }
+        else if let Some(arc) = self.arc.read().as_ref() {
+            ArcBorrowStr::Arc(arc.clone())
+        }
+        else {
+            ArcBorrowStr::Borrow("")
+        }
+    }
+}
+
+impl From<&str> for ArcString {
+    fn from(value: &str) -> Self {
+        Self {
+            string: Some(value.into()),
+            arc: RwLock::new(None),
+            check_str: AtomicBool::new(false),
+        }
+    }
+}
+
+pub enum ArcBorrowStr<'a> {
+    Arc(Arc<str>),
+    Borrow(&'a str)
+}
+
+impl<'a> Deref for ArcBorrowStr<'a> {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            ArcBorrowStr::Arc(a) => a.deref(),
+            ArcBorrowStr::Borrow(b) => b,
+        }
     }
 }

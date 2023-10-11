@@ -78,6 +78,11 @@ impl Inventory<'_> {
         current_index: Option<usize>,
         current_sub_index: Option<usize>,
     ) -> (Option<usize>, Option<usize>) {
+
+        if ui.ctx().wants_keyboard_input() {
+            return (current_index, current_sub_index);
+        }
+
         let digit_key = ui.input(|input| {
             NUMBER_KEYS
                 .iter()
@@ -446,6 +451,7 @@ impl PropertyEditor {
 
                 let equal = props.windows(2).all(|w| w[0].1.imp().equals(w[1].1.imp()));
 
+                
                 ui.label(id.name.deref());
 
                 if let Some(old) = props[0].1.imp_mut().ui(ui, !equal) {

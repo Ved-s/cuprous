@@ -4,7 +4,7 @@ use eframe::{
 };
 use emath::vec2;
 
-use crate::{circuits::*, vector::Vec2f, Direction4};
+use crate::{circuits::*, vector::Vec2f, Direction4, describe_directional_custom_circuit};
 
 use super::props::{CircuitProperty, CircuitPropertyImpl};
 
@@ -27,10 +27,11 @@ struct Circuit {
 
 impl Circuit {
     fn new() -> Self {
+        let description = Self::describe(Direction4::Left, false);
         Self {
-            collector: CircuitPinInfo::new([1, 0], InternalPinDirection::Inside, "collector", "Collector", Direction4::Up),
-            base: CircuitPinInfo::new([0, 1], InternalPinDirection::Inside, "base", "Base", Direction4::Left),
-            emitter: CircuitPinInfo::new([1, 2], InternalPinDirection::Outside, "emitter", "Emitter", Direction4::Down),
+            collector: description.pins[0].to_info(),
+            base: description.pins[1].to_info(),
+            emitter: description.pins[2].to_info(),
             ty: Type::NPN,
             dir: Direction4::Left,
             flip: false,
@@ -105,30 +106,24 @@ impl Circuit {
         });
     }
 
-    fn size(props: &CircuitPropertyStore) -> Vec2u {
-        let dir = props.read_clone("dir").unwrap_or(Direction4::Right);
-        if dir.is_horizontal() {
-            [2, 3].into()
-        } else {
-            [3, 2].into()
-        }
-    }
-
-    fn pin_positions(props: &CircuitPropertyStore) -> [[u32; 2]; 3] {
+    fn describe_props(props: &CircuitPropertyStore) -> CircuitDescription<3> {
         let dir = props.read_clone("dir").unwrap_or(Direction4::Left);
         let flip = props.read_clone("flip").unwrap_or(false);
+        Self::describe(dir, flip)
+    }
 
-        let pins = match dir {
-            Direction4::Up => [[2, 1], [1, 0], [0, 1]],
-            Direction4::Left => [[1, 0], [0, 1], [1, 2]],
-            Direction4::Down => [[0, 0], [1, 1], [2, 0]],
-            Direction4::Right => [[0, 2], [1, 1], [0, 0]],
-        };
+    fn describe(dir: Direction4, flip: bool) -> CircuitDescription<3> {
+        describe_directional_custom_circuit! {
+            default_dir: Left,
+            dir: dir,
+            flip: flip,
+            size: [2, 3],
+            "collector": Inside, "Collector", Up, [1, 0],
+            "base":      Inside, "Base", Left, [0, 1],
+            "emitter":   Outside, "Emitter", Down, [1, 2],
 
-        if flip {
-            [pins[2], pins[1], pins[0]]
-        } else {
-            pins
+            dir_proc: |dir| if flip && dir != Left { dir.inverted() } else { dir },
+            pos_proc: |pos| if flip { [pos[0], 2 - pos[1]] } else { pos }
         }
     }
 
@@ -151,7 +146,7 @@ impl CircuitImpl for Circuit {
 
         let angle = self.dir.inverted_ud().angle_to_left();
 
-        Circuit::draw(
+        Self::draw(
             self.ty,
             Some((state_ctx, [collector, base, emitter])),
             paint_ctx,
@@ -161,21 +156,11 @@ impl CircuitImpl for Circuit {
     }
 
     fn create_pins(&mut self, props: &CircuitPropertyStore) -> Box<[CircuitPinInfo]> {
-        let pin_positions = Circuit::pin_positions(props);
+        let dscription = Self::describe_props(props);
 
-        let pin_rot = props.read_clone("dir").unwrap_or(Direction4::Left).rotate_clockwise();
-        let flip = props.read_clone("flip").unwrap_or(false);
-        let inv_pin_rot = match flip {
-            true => pin_rot.inverted(),
-            false => pin_rot,
-        };
-
-        self.collector =
-            CircuitPinInfo::new(pin_positions[0], InternalPinDirection::Inside, "collector", "Collector", Direction4::Up.rotate_clockwise_by(inv_pin_rot));
-        self.base = CircuitPinInfo::new(pin_positions[1], InternalPinDirection::Inside, "base", "Base", Direction4::Left.rotate_clockwise_by(pin_rot));
-        self.emitter =
-            CircuitPinInfo::new(pin_positions[2], InternalPinDirection::Outside, "emitter", "Emitter", Direction4::Down.rotate_clockwise_by(inv_pin_rot));
-
+        self.collector = dscription.pins[0].to_info();
+        self.base = dscription.pins[1].to_info();
+        self.emitter = dscription.pins[2].to_info();
         vec![
             self.collector.clone(),
             self.base.clone(),
@@ -203,7 +188,7 @@ impl CircuitImpl for Circuit {
     }
 
     fn size(&self, props: &CircuitPropertyStore) -> Vec2u {
-        Circuit::size(props)
+        Self::describe_props(props).size
     }
 
     fn apply_props(&mut self, props: &CircuitPropertyStore, changed: Option<&str>) {
@@ -244,15 +229,10 @@ impl CircuitPreviewImpl for Preview {
         let flip = props.read_clone("flip").unwrap_or(false);
         let ty = props.read_clone("ty").unwrap_or(Type::NPN);
         Circuit::draw(ty, None, ctx, angle, flip);
-        draw_pins_preview(ctx, Circuit::size(props), Circuit::pin_positions(props))
     }
 
     fn create_impl(&self) -> Box<dyn CircuitImpl> {
         Box::new(Circuit::new())
-    }
-
-    fn size(&self, props: &CircuitPropertyStore) -> Vec2u {
-        Circuit::size(props)
     }
 
     fn load_impl_data(
@@ -272,6 +252,10 @@ impl CircuitPreviewImpl for Preview {
 
     fn display_name(&self) -> DynStaticStr {
         "Transistor".into()
+    }
+
+    fn describe(&self, props: &CircuitPropertyStore) -> DynCircuitDescription {
+        Circuit::describe_props(props).to_dyn()
     }
 }
 
