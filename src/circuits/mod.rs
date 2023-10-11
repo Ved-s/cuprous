@@ -19,10 +19,15 @@ pub mod props;
 pub mod pullup;
 pub mod transistor;
 
-// so template is always valid
+// so templates are always valid
+
 #[cfg(test)]
 #[path = "../../templates/circuit_template.rs"]
 mod circuit_template;
+
+#[cfg(test)]
+#[path = "../../templates/directional_circuit_template.rs"]
+mod directional_circuit_template;
 
 pub struct CircuitInfo {
     pub size: Vec2u,
@@ -482,7 +487,11 @@ pub struct CircuitPreview {
 impl CircuitPreview {
     pub fn new(imp: Box<dyn CircuitPreviewImpl>, props: CircuitPropertyStore) -> Self {
         let description = RwLock::new(imp.describe(&props));
-        Self { imp, props, description  }
+        Self {
+            imp,
+            props,
+            description,
+        }
     }
 
     pub fn load_with_data(
@@ -503,13 +512,21 @@ impl CircuitPreview {
         let props = imp.default_props();
         props.load(props_data);
         let description = RwLock::new(imp.describe(&props));
-        Some(Self { imp, props, description })
+        Some(Self {
+            imp,
+            props,
+            description,
+        })
     }
 
     pub fn from_impl(imp: Box<dyn CircuitPreviewImpl>) -> Self {
         let props = imp.default_props();
         let description = RwLock::new(imp.describe(&props));
-        Self { imp, props, description }
+        Self {
+            imp,
+            props,
+            description,
+        }
     }
 
     pub fn draw(&self, ctx: &PaintContext, in_world: bool) {
@@ -663,7 +680,6 @@ macro_rules! describe_directional_circuit {
         }
     };
 }
-
 
 #[macro_export]
 macro_rules! describe_directional_custom_circuit {
