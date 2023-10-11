@@ -19,6 +19,11 @@ pub mod props;
 pub mod pullup;
 pub mod transistor;
 
+// so template is always valid
+#[cfg(test)]
+#[path = "../../templates/circuit_template.rs"]
+mod circuit_template;
+
 pub struct CircuitInfo {
     pub size: Vec2u,
     pub pins: Box<[CircuitPinInfo]>,

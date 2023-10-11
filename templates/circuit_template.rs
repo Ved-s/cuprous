@@ -1,3 +1,5 @@
+#![allow(warnings)]
+
 use crate::circuits::*;
 
 struct Circuit {}
@@ -11,11 +13,11 @@ impl Circuit {
         todo!()
     }
 
-    fn size(props: &CircuitPropertyStore) -> Vec2u {
-        todo!()
+    fn describe_props(props: &CircuitPropertyStore) -> CircuitDescription<0> {
+        Self::describe()
     }
 
-    fn pin_positions(props: &CircuitPropertyStore) -> _ {
+    fn describe() -> CircuitDescription<0> {
         todo!()
     }
 }
@@ -26,7 +28,7 @@ impl CircuitImpl for Circuit {
     }
 
     fn create_pins(&mut self, props: &CircuitPropertyStore) -> Box<[CircuitPinInfo]> {
-        let pin_positions = Circuit::pin_positions(props);
+        let description = Self::describe_props(props);
         vec![].into_boxed_slice()
     }
 
@@ -35,7 +37,7 @@ impl CircuitImpl for Circuit {
     }
 
     fn size(&self, props: &CircuitPropertyStore) -> Vec2u {
-        Circuit::size(props)
+        Self::describe_props(props).size
     }
 }
 
@@ -48,15 +50,10 @@ impl CircuitPreviewImpl for Preview {
 
     fn draw_preview(&self, props: &CircuitPropertyStore, ctx: &PaintContext, in_world: bool) {
         Circuit::draw(None, ctx, in_world);
-        draw_pins_preview(ctx, Circuit::size(props), Circuit::pin_positions(props))
     }
 
     fn create_impl(&self) -> Box<dyn CircuitImpl> {
         Box::new(Circuit::new())
-    }
-
-    fn size(&self, props: &CircuitPropertyStore) -> Vec2u {
-        Circuit::size(props)
     }
 
     fn load_impl_data(
@@ -68,5 +65,13 @@ impl CircuitPreviewImpl for Preview {
 
     fn default_props(&self) -> CircuitPropertyStore {
         todo!()
+    }
+
+    fn display_name(&self) -> DynStaticStr {
+        todo!()
+    }
+
+    fn describe(&self, props: &CircuitPropertyStore) -> DynCircuitDescription {
+        Circuit::describe_props(props).to_dyn()
     }
 }
