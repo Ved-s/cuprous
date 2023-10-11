@@ -32,6 +32,7 @@ impl Circuit {
         CircuitDescription {
             size: [1, 1].into(),
             pins: [CircuitPinDescription {
+                active: true,
                 display_name: "".into(),
                 display_dir: None,
                 dir: InternalPinDirection::Custom,

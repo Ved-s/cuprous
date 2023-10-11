@@ -98,6 +98,7 @@ impl Circuit {
         CircuitDescription {
             size: [5, 3].into(),
             pins: [CircuitPinDescription {
+                active: true,
                 display_name: "In".into(),
                 display_dir: Some(dir),
                 dir: InternalPinDirection::Inside,

@@ -15,6 +15,7 @@ use self::props::CircuitPropertyStore;
 pub mod button;
 pub mod freq_meter;
 pub mod gates;
+pub mod pin;
 pub mod props;
 pub mod pullup;
 pub mod transistor;
@@ -214,6 +215,10 @@ impl CircuitPinInfo {
         if let Some(wire) = pin.wire {
             state_ctx.global_state.update_wire(wire, false)
         }
+    }
+
+    pub fn get_direction(&self, state_ctx: &CircuitStateContext) -> PinDirection {
+        self.pin.read().direction(state_ctx.global_state)
     }
 
     pub fn set_direction(&self, state_ctx: &CircuitStateContext, dir: PinDirection) {
@@ -574,6 +579,7 @@ pub struct CircuitNode {
 
 #[derive(Clone)]
 pub struct CircuitPinDescription {
+    pub active: bool,
     pub display_name: DynStaticStr,
     pub display_dir: Option<Direction4>,
     pub dir: InternalPinDirection,
@@ -603,6 +609,19 @@ impl CircuitPinDescription {
             self.display_dir,
         )
     }
+
+    pub fn to_active_info(&self) -> Option<CircuitPinInfo> {
+        match self.active {
+            false => None,
+            true => Some(CircuitPinInfo::new(
+                self.pos,
+                self.dir,
+                self.name.clone(),
+                self.display_name.clone(),
+                self.display_dir,
+            )),
+        }
+    }
 }
 
 impl<const P: usize> CircuitDescription<P> {
@@ -631,18 +650,25 @@ const fn rotate_pos(pos: [u32; 2], size: [u32; 2], dir: Direction4) -> [u32; 2] 
 }
 
 #[macro_export]
+macro_rules! expr_or_default {
+    ($e:expr, $def:expr) => { $e };
+    (, $def:expr) => { $def };
+}
+
+#[macro_export]
 macro_rules! describe_directional_circuit {
     (
         default_dir: $default_dir:expr,
         dir: $dir:expr,
-        size: [$width:literal, $height: literal],
+        size: [$width:expr, $height: expr],
 
         $(
             $pin_name:literal:
                 $pin_dir:expr,
                 $pin_dname:literal,
                 $pin_ddir:expr,
-                [$pin_x:literal, $pin_y: literal]
+                [$pin_x:expr, $pin_y: expr]
+                $(, active: $active:expr)?
         ),*
         $(,)?
     ) => {
@@ -660,12 +686,14 @@ macro_rules! describe_directional_circuit {
 
             {
                 use InternalPinDirection::*;
+                use $crate::expr_or_default;
 
                 $crate::circuits::CircuitDescription {
                     size: size_rotated.into(),
                     pins: [
                         $(
                             $crate::circuits::CircuitPinDescription {
+                                active: expr_or_default!($($active)?, true),
                                 name: $pin_name.into(),
                                 dir: $pin_dir,
                                 display_name: $pin_dname.into(),
@@ -687,14 +715,15 @@ macro_rules! describe_directional_custom_circuit {
         default_dir: $default_dir:expr,
         dir: $dir:expr,
         flip: $flip:expr,
-        size: [$width:literal, $height: literal],
+        size: [$width:expr, $height: expr],
 
         $(
             $pin_name:literal:
                 $pin_dir:expr,
                 $pin_dname:literal,
                 $pin_ddir:expr,
-                [$pin_x:literal, $pin_y: literal],
+                [$pin_x:expr, $pin_y: expr],
+                $(active: $active:expr,)?
         )*
 
         dir_proc: |$dir_proc_param:ident| $dir_proc_body:expr,
@@ -715,12 +744,14 @@ macro_rules! describe_directional_custom_circuit {
 
             {
                 use InternalPinDirection::*;
+                use $crate::expr_or_default;
 
                 $crate::circuits::CircuitDescription {
                     size: size_rotated.into(),
                     pins: [
                         $(
                             $crate::circuits::CircuitPinDescription {
+                                active: expr_or_default!($($active)?, true),
                                 name: $pin_name.into(),
                                 dir: $pin_dir,
                                 display_name: $pin_dname.into(),

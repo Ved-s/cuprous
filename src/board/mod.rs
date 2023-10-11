@@ -1142,6 +1142,9 @@ impl ActiveCircuitBoard {
             p.draw(&ctx.with_rect(rect), true);
 
             for pin in description.pins.iter() {
+                if !pin.active {
+                    continue;
+                }
                 let pos = ctx.screen.world_to_screen(
                     place_pos.convert(|v| v as f32) + pin.pos.convert(|v| v as f32) + 0.5,
                 );
@@ -1157,6 +1160,7 @@ impl ActiveCircuitBoard {
                 description
                     .pins
                     .iter()
+                    .filter(|p| p.active)
                     .map(|i| (i.pos, i.display_name.deref(), i.display_dir)),
                 ctx,
             );

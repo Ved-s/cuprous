@@ -1,0 +1,23 @@
+<svg width="2" height="2">
+    <!-- <rect width="2" height="2" fill="transparent" stroke="black" stroke-width="0.015" /> -->
+    <circle fill="green" cx="0.5" cy="1.5" r="0.1" />
+    <circle fill="green" cx="1.5" cy="0.5" r="0.1" />
+
+    <line x1="0.9" y1="0.5" x2="1.5" y2="0.5" stroke="green" stroke-width="0.2" />
+    <path d="
+        M 1.3 0.5
+        L 1.3 0.75
+        L 1.0 0.5
+        L 1.3 0.25
+        " fill="green"/>
+    <circle fill="green" cx="0.5" cy="0.5" r="0.30" />
+    <circle stroke="green" fill="transparent" stroke-width="0.1" cx="0.5" cy="0.5" r="0.45" />
+
+    <line x1="0.5" y1="1.5" x2="0.5" y2="1.24" stroke="green" stroke-width="0.2" />
+    <path d="
+        M 0.5 1.25
+        L 0.25 1.25
+        L 0.5 1.0
+        L 0.75 1.25
+        " fill="green"/>
+</svg>
