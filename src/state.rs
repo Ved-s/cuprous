@@ -9,7 +9,7 @@ use std::thread::{self, JoinHandle};
 
 use crate::{containers::Queue, time::Instant};
 use eframe::epaint::Color32;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
     board::CircuitBoard, circuits::*, containers::FixedVec, unwrap_option_or_break,
@@ -56,20 +56,16 @@ impl WireState {
         Color32::from_rgb(rgb[0], rgb[1], rgb[2])
     }
 
-    pub fn combine_boolean(
-        self,
-        state: WireState,
-        combiner: impl FnOnce(bool, bool) -> bool,
-    ) -> WireState {
+    pub fn combine_boolean(self, state: Self, combiner: impl FnOnce(bool, bool) -> bool) -> Self {
         match (self, state) {
-            (WireState::None, other) | (other, WireState::None) => other,
-            (WireState::Error, _) | (_, WireState::Error) => WireState::Error,
+            (Self::None, other) | (other, Self::None) => other,
+            (Self::Error, _) | (_, Self::Error) => Self::Error,
 
-            (WireState::True, WireState::False) => combiner(true, false).into(),
-            (WireState::False, WireState::True) => combiner(false, true).into(),
+            (Self::True, Self::False) => combiner(true, false).into(),
+            (Self::False, Self::True) => combiner(false, true).into(),
 
-            (WireState::True, WireState::True) => combiner(true, true).into(),
-            (WireState::False, WireState::False) => combiner(false, false).into(),
+            (Self::True, Self::True) => combiner(true, true).into(),
+            (Self::False, Self::False) => combiner(false, false).into(),
         }
     }
 }
@@ -80,6 +76,54 @@ impl From<bool> for WireState {
             true => WireState::True,
             false => WireState::False,
         }
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+
+/// Safe versoion of `WireState` that can be passed through `serde_intermediate`
+pub struct SafeWireState(pub WireState);
+
+impl<'de> Deserialize<'de> for SafeWireState {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Ok(Self(
+            match char::deserialize(deserializer)?.to_ascii_lowercase() {
+                'f' => WireState::False,
+                't' => WireState::True,
+                'e' => WireState::Error,
+                _ => WireState::None,
+            },
+        ))
+    }
+}
+
+impl Serialize for SafeWireState {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self.0 {
+            WireState::None => 'n',
+            WireState::True => 't',
+            WireState::False => 'f',
+            WireState::Error => 'e',
+        }
+        .serialize(serializer)
+    }
+}
+
+impl From<WireState> for SafeWireState {
+    fn from(value: WireState) -> Self {
+        Self(value)
+    }
+}
+
+impl From<SafeWireState> for WireState {
+    fn from(value: SafeWireState) -> Self {
+        value.0
     }
 }
 

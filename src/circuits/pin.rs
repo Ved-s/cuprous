@@ -1,10 +1,11 @@
 use std::f32::consts::TAU;
 
-use eframe::egui::{ComboBox, Ui};
+use eframe::egui::{ComboBox, Sense, Ui};
 use eframe::epaint::{PathShape, Stroke};
-use emath::{pos2, vec2, Pos2};
+use emath::{pos2, vec2, Pos2, Rect};
 
 use crate::circuits::props::CircuitProperty;
+use crate::state::SafeWireState;
 use crate::vector::Vec2f;
 use crate::{circuits::*, describe_directional_circuit};
 
@@ -36,6 +37,17 @@ impl PinType {
 
     pub fn is_controlled(self) -> bool {
         matches!(self, Self::Controlled)
+    }
+}
+
+#[derive(Default, Debug, Serialize, Deserialize, Clone, Copy)]
+struct State {
+    state: SafeWireState,
+}
+
+impl InternalCircuitState for State {
+    fn serialize(&self) -> serde_intermediate::Intermediate {
+        serde_intermediate::to_intermediate(self).unwrap()
     }
 }
 
@@ -93,16 +105,22 @@ impl Circuit {
         let center = transformer(pos2(center.0 as f32 + 0.5, center.1 as f32 + 0.5));
 
         ctx.paint.line_segment(
-            [transformer(pos2(0.95, 0.5) + center_off), transformer(pos2(1.5, 0.5) + center_off)],
+            [
+                transformer(pos2(0.95, 0.5) + center_off),
+                transformer(pos2(1.5, 0.5) + center_off),
+            ],
             Stroke::new(ActiveCircuitBoard::WIRE_THICKNESS * scale, state.color()),
         );
 
         let points = if is_inside {
-            [pos2(1.12, 0.75), pos2(1.42, 0.5), pos2(1.12, 0.25)]
+            [pos2(1.12, 0.75), pos2(1.42, 0.5), pos2(1.12, 0.25)] // Right, inside
         } else {
-            [pos2(1.3, 0.75), pos2(1.0, 0.5), pos2(1.3, 0.25)]
+            [pos2(1.3, 0.75), pos2(1.0, 0.5), pos2(1.3, 0.25)] // Left, outside
         };
-        let points = points.into_iter().map(|p| transformer(p + center_off)).collect();
+        let points = points
+            .into_iter()
+            .map(|p| transformer(p + center_off))
+            .collect();
         ctx.paint.add(PathShape {
             points,
             closed: true,
@@ -118,7 +136,6 @@ impl Circuit {
         );
 
         if let Some((ctl_dir, ctl_state)) = ctl {
-
             let ctl_angle = match ctl_dir {
                 ControlPinPosition::Left => TAU * 0.5,
                 ControlPinPosition::Behind => TAU * 0.25,
@@ -130,8 +147,14 @@ impl Circuit {
             };
 
             ctx.paint.line_segment(
-                [ctl_transformer(pos2(0.5, 1.5)), ctl_transformer(pos2(0.5, 1.24))],
-                Stroke::new(ActiveCircuitBoard::WIRE_THICKNESS * scale, ctl_state.color()),
+                [
+                    ctl_transformer(pos2(0.5, 1.5)),
+                    ctl_transformer(pos2(0.5, 1.24)),
+                ],
+                Stroke::new(
+                    ActiveCircuitBoard::WIRE_THICKNESS * scale,
+                    ctl_state.color(),
+                ),
             );
 
             ctx.paint.add(PathShape {
@@ -144,7 +167,6 @@ impl Circuit {
                 fill: ctl_state.color(),
                 stroke: Stroke::NONE,
             });
-
         }
     }
 
@@ -173,8 +195,8 @@ impl Circuit {
         };
 
         let pin_dir = match ty {
-            PinType::Inside => InternalPinDirection::Inside,
-            PinType::Outside => InternalPinDirection::Outside,
+            PinType::Inside => InternalPinDirection::Outside,
+            PinType::Outside => InternalPinDirection::Inside,
             PinType::Controlled => InternalPinDirection::StateDependent {
                 default: PinDirection::Inside,
             },
@@ -188,22 +210,83 @@ impl Circuit {
             "ctl": Inside, "Direction", ctl_dir, [ctl_pos.0, ctl_pos.1], active: ty.is_controlled()
         }
     }
+
+    fn is_dir_inside(&self, state_ctx: &CircuitStateContext) -> bool {
+
+        // circuit pin Inside -> board pin Outside
+        matches!(self.pin.get_direction(state_ctx), PinDirection::Outside)
+    }
 }
 
 impl CircuitImpl for Circuit {
     fn draw(&self, state_ctx: &CircuitStateContext, paint_ctx: &PaintContext) {
-
         // TODO: fetch outside pin state
-        let outside_state = WireState::None;
-        let state = self.pin.get_wire_state(state_ctx).unwrap_or(outside_state);
+
+        let outside_state = state_ctx
+            .clone_circuit_internal_state::<State>()
+            .unwrap_or_default()
+            .state.0;
+        let state = self.pin.get_wire_state(state_ctx).unwrap_or_else(|| self.pin.get_state(state_ctx));
         let cpos = self
             .ctl
             .as_ref()
             .map(|c| (self.cpos, c.get_state(state_ctx)));
-        let is_inside = matches!(self.pin.get_direction(state_ctx), PinDirection::Inside);
+        let is_inside = self.is_dir_inside(state_ctx);
         let angle = self.dir.inverted_ud().angle_to_right();
 
         Circuit::draw(cpos, outside_state, state, is_inside, angle, paint_ctx);
+
+        // TODO: don't interact if this state has parent state
+
+        let (size, center) = match cpos {
+            None => ((2, 1), (0, 0)),
+            Some((ControlPinPosition::Left, _)) => ((2, 2), (0, 1)),
+            Some((ControlPinPosition::Right, _)) => ((2, 2), (0, 0)),
+            Some((ControlPinPosition::Behind, _)) => ((3, 1), (1, 0)),
+        };
+        let size = vec2(size.0 as f32, size.1 as f32);
+        let center = vec2(center.0 as f32, center.1 as f32);
+
+        let pos = paint_ctx.rect.lerp_inside(center / size);
+        let size = vec2(paint_ctx.screen.scale, paint_ctx.screen.scale);
+        let rect = Rect::from_min_size(pos, size);
+        let interaction = paint_ctx.ui.interact(
+            rect,
+            paint_ctx.ui.auto_id_with(state_ctx.circuit.pos),
+            Sense::click(),
+        );
+
+        if interaction.clicked() {
+            let (shift, control) = paint_ctx
+                .ui
+                .input(|input| (input.modifiers.shift, input.modifiers.command));
+            let new_state = state_ctx.write_circuit_internal_state(|s: &mut State| {
+                // None -> False -> True -> [control: Error] -> [shift ? None : False]
+                // shift: None -> False -> True -> None
+                // control: None | Error -> False -> True -> Error
+
+                s.state.0 = match (s.state.0, shift, control) {
+                    (WireState::True, false, false) => WireState::False,
+                    (WireState::False, false, false) => WireState::True,
+                    (_, false, false) => WireState::False,
+
+                    (WireState::None, _, _) => WireState::False,
+                    (WireState::False, _, _) => WireState::True,
+
+                    (WireState::True, _, true) => WireState::Error,
+                    (WireState::Error, false, true) => WireState::False,
+                    (WireState::Error, true, true) => WireState::None,
+
+                    (WireState::True, true, false) => WireState::None,
+                    (WireState::Error, true, false) => WireState::None,
+                };
+                s.state.0
+            });
+
+            if self.is_dir_inside(state_ctx) {
+                self.pin.set_state(state_ctx, new_state);
+            }
+        }
     }
 
     fn create_pins(&mut self, props: &CircuitPropertyStore) -> Box<[CircuitPinInfo]> {
@@ -220,13 +303,33 @@ impl CircuitImpl for Circuit {
     }
 
     fn update_signals(&self, state_ctx: &CircuitStateContext, changed_pin: Option<usize>) {
-        if let (None | Some(1), Some(ctl)) = (changed_pin, &self.ctl) {
-            let is_outside = matches!(ctl.get_state(state_ctx), WireState::True);
-            let dir = match is_outside {
-                true => PinDirection::Outside,
-                false => PinDirection::Inside,
+        if let None | Some(1) = changed_pin {
+
+            let dir = match &self.ctl {
+                Some(ctl) => match ctl.get_state(state_ctx) {
+                    WireState::True => PinDirection::Inside,
+                    _ => PinDirection::Outside
+                },
+                None => match self.ty {
+                    PinType::Inside => PinDirection::Outside,
+                    PinType::Outside => PinDirection::Inside,
+                    PinType::Controlled => PinDirection::Inside, // WARN: this should be invalid state
+                },
             };
+
             self.pin.set_direction(state_ctx, dir);
+        }
+        if let None | Some(0) = changed_pin {
+            if self.is_dir_inside(state_ctx) {
+                dbg!(self.pin.get_direction(state_ctx));
+                self.pin.set_state(
+                    state_ctx,
+                    state_ctx
+                        .clone_circuit_internal_state::<State>()
+                        .unwrap_or_default()
+                        .state.0,
+                )
+            }
         }
     }
 
@@ -245,6 +348,15 @@ impl CircuitImpl for Circuit {
         self.dir = props.read_clone("dir").unwrap_or(Self::DEFAULT_DIR);
         self.ty = props.read_clone("ty").unwrap_or(PinType::Inside);
         self.cpos = props.read_clone("cpos").unwrap_or(ControlPinPosition::Left);
+    }
+
+    fn load_internal(
+        &self,
+        data: &serde_intermediate::Intermediate,
+    ) -> Option<Box<dyn InternalCircuitState>> {
+        serde_intermediate::de::intermediate::deserialize::<State>(data)
+            .ok()
+            .map(|s| Box::new(s) as Box<dyn InternalCircuitState>)
     }
 }
 

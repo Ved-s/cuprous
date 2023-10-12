@@ -392,6 +392,17 @@ impl<'a> CircuitStateContext<'a> {
         self.global_state.get_circuit(self.circuit.id)
     }
 
+    pub fn clone_circuit_internal_state<T: InternalCircuitState + Clone>(
+        &self,
+    ) -> Option<T> {
+        Some(
+            self.global_state
+                .read_circuit(self.circuit.id)?
+                .read()
+                .get_internal::<T>()?.clone(),
+        )
+    }
+
     pub fn read_circuit_internal_state<T: InternalCircuitState, R>(
         &self,
         reader: impl FnOnce(&T) -> R,
