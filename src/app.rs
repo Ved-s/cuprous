@@ -140,7 +140,9 @@ impl eframe::App for App {
                     let props = [((), &p.props).into()];
                     let changed = App::properties_ui(&mut self.props_ui, ui, Some(props))
                         .is_some_and(|v| !v.is_empty());
-                    if changed {}
+                    if changed {
+                        p.prop_changed();
+                    }
                 } else {
                     let selection = self.board.selection.borrow();
                     if !selection.selection.is_empty() {
@@ -318,6 +320,7 @@ static COMPONENT_BUILTIN_ORDER: &[&str] = &[
     "xnor",
     "not",
     "transistor",
+    "pin",
     "pullup",
     "freq_meter",
 ];
@@ -348,6 +351,7 @@ impl App {
             Box::new(circuits::pullup::Preview {}),
             Box::new(circuits::transistor::Preview {}),
             Box::new(circuits::freq_meter::Preview {}),
+            Box::new(circuits::pin::Preview {}),
         ];
         let preview_data = cc
             .storage
