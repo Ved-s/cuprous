@@ -20,19 +20,19 @@ enum ControlPinPosition {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PinType {
-    Inside,
-    Outside,
+    Pico, // Parent Input, Child Output
+    Cipo, // Child Input, Parent Output
     Controlled,
 }
 
 impl PinType {
     #[allow(unused)]
-    pub fn is_inside(self) -> bool {
-        matches!(self, Self::Inside)
+    pub fn is_pico(self) -> bool {
+        matches!(self, Self::Pico)
     }
 
-    pub fn is_outside(self) -> bool {
-        matches!(self, Self::Outside)
+    pub fn is_cipo(self) -> bool {
+        matches!(self, Self::Cipo)
     }
 
     pub fn is_controlled(self) -> bool {
@@ -65,11 +65,11 @@ impl Circuit {
 
     fn new() -> Self {
         let description =
-            Self::describe(Self::DEFAULT_DIR, PinType::Inside, ControlPinPosition::Left);
+            Self::describe(Self::DEFAULT_DIR, PinType::Pico, ControlPinPosition::Left);
 
         Self {
             dir: Self::DEFAULT_DIR,
-            ty: PinType::Inside,
+            ty: PinType::Pico,
             cpos: ControlPinPosition::Left,
 
             pin: description.pins[0].to_info(),
@@ -81,7 +81,7 @@ impl Circuit {
         ctl: Option<(ControlPinPosition, WireState)>,
         outside_state: WireState,
         state: WireState,
-        is_inside: bool,
+        is_pico: bool,
         angle: f32,
         ctx: &PaintContext,
     ) -> Pos2 {
@@ -112,10 +112,10 @@ impl Circuit {
             Stroke::new(ActiveCircuitBoard::WIRE_THICKNESS * scale, state.color()),
         );
 
-        let points = if is_inside {
-            [pos2(1.12, 0.75), pos2(1.42, 0.5), pos2(1.12, 0.25)] // Right, inside
+        let points = if is_pico {
+            [pos2(1.12, 0.75), pos2(1.42, 0.5), pos2(1.12, 0.25)] // Right
         } else {
-            [pos2(1.3, 0.75), pos2(1.0, 0.5), pos2(1.3, 0.25)] // Left, outside
+            [pos2(1.3, 0.75), pos2(1.0, 0.5), pos2(1.3, 0.25)] // Left
         };
         let points = points
             .into_iter()
@@ -174,7 +174,7 @@ impl Circuit {
 
     fn describe_props(props: &CircuitPropertyStore) -> CircuitDescription<2> {
         let dir = props.read_clone("dir").unwrap_or(Circuit::DEFAULT_DIR);
-        let ty = props.read_clone("ty").unwrap_or(PinType::Inside);
+        let ty = props.read_clone("ty").unwrap_or(PinType::Pico);
         let cpos = props.read_clone("cpos").unwrap_or(ControlPinPosition::Left);
 
         Self::describe(dir, ty, cpos)
@@ -197,8 +197,8 @@ impl Circuit {
         };
 
         let pin_dir = match ty {
-            PinType::Inside => InternalPinDirection::Outside,
-            PinType::Outside => InternalPinDirection::Inside,
+            PinType::Pico => InternalPinDirection::Outside,
+            PinType::Cipo => InternalPinDirection::Inside,
             PinType::Controlled => InternalPinDirection::StateDependent {
                 default: PinDirection::Inside,
             },
@@ -213,9 +213,9 @@ impl Circuit {
         }
     }
 
-    fn is_dir_inside(&self, state_ctx: &CircuitStateContext) -> bool {
+    fn is_pico(&self, state_ctx: &CircuitStateContext) -> bool {
 
-        // circuit pin Inside -> board pin Outside
+        // parent pin Inside -> child pin Outside
         matches!(self.pin.get_direction(state_ctx), PinDirection::Outside)
     }
 }
@@ -233,10 +233,10 @@ impl CircuitImpl for Circuit {
             .ctl
             .as_ref()
             .map(|c| (self.cpos, c.get_state(state_ctx)));
-        let is_inside = self.is_dir_inside(state_ctx);
+        let is_pico = self.is_pico(state_ctx);
         let angle = self.dir.inverted_ud().angle_to_right();
 
-        let center = Circuit::draw(cpos, outside_state, state, is_inside, angle, paint_ctx);
+        let center = Circuit::draw(cpos, outside_state, state, is_pico, angle, paint_ctx);
 
         // TODO: don't interact if this state has parent state
 
@@ -275,7 +275,7 @@ impl CircuitImpl for Circuit {
                 s.state.0
             });
 
-            if self.is_dir_inside(state_ctx) {
+            if self.is_pico(state_ctx) {
                 self.pin.set_state(state_ctx, new_state);
             }
         }
@@ -303,8 +303,8 @@ impl CircuitImpl for Circuit {
                     _ => PinDirection::Outside
                 },
                 None => match self.ty {
-                    PinType::Inside => PinDirection::Outside,
-                    PinType::Outside => PinDirection::Inside,
+                    PinType::Pico => PinDirection::Outside,
+                    PinType::Cipo => PinDirection::Inside,
                     PinType::Controlled => PinDirection::Inside, // WARN: this should be invalid state
                 },
             };
@@ -312,7 +312,7 @@ impl CircuitImpl for Circuit {
             self.pin.set_direction(state_ctx, dir);
         }
         if let None | Some(0) = changed_pin {
-            if self.is_dir_inside(state_ctx) {
+            if self.is_pico(state_ctx) {
                 self.pin.set_state(
                     state_ctx,
                     state_ctx
@@ -337,7 +337,7 @@ impl CircuitImpl for Circuit {
 
     fn apply_props(&mut self, props: &CircuitPropertyStore, _: Option<&str>) {
         self.dir = props.read_clone("dir").unwrap_or(Self::DEFAULT_DIR);
-        self.ty = props.read_clone("ty").unwrap_or(PinType::Inside);
+        self.ty = props.read_clone("ty").unwrap_or(PinType::Pico);
         self.cpos = props.read_clone("cpos").unwrap_or(ControlPinPosition::Left);
     }
 
@@ -360,7 +360,7 @@ impl CircuitPreviewImpl for Preview {
 
     fn draw_preview(&self, props: &CircuitPropertyStore, ctx: &PaintContext, _: bool) {
         let dir = props.read_clone("dir").unwrap_or(Circuit::DEFAULT_DIR);
-        let ty = props.read_clone("ty").unwrap_or(PinType::Inside);
+        let ty = props.read_clone("ty").unwrap_or(PinType::Pico);
         let cpos = props.read_clone("cpos").unwrap_or(ControlPinPosition::Left);
 
         let cpos = ty.is_controlled().then_some((cpos, WireState::False));
@@ -370,7 +370,7 @@ impl CircuitPreviewImpl for Preview {
             cpos,
             WireState::False,
             WireState::False,
-            !ty.is_outside(),
+            !ty.is_cipo(),
             angle,
             ctx,
         );
@@ -390,7 +390,7 @@ impl CircuitPreviewImpl for Preview {
     fn default_props(&self) -> CircuitPropertyStore {
         CircuitPropertyStore::new([
             CircuitProperty::new("dir", "Direction", Circuit::DEFAULT_DIR),
-            CircuitProperty::new("ty", "Pin type", PinType::Inside),
+            CircuitProperty::new("ty", "Pin type", PinType::Pico),
             CircuitProperty::new("cpos", "Control pos", ControlPinPosition::Left),
         ])
     }
@@ -502,16 +502,16 @@ impl CircuitPropertyImpl for PinType {
                 Default::default()
             } else {
                 match *self {
-                    PinType::Inside => "Inside",
-                    PinType::Outside => "Outside",
+                    PinType::Pico => "Inside",
+                    PinType::Cipo => "Outside",
                     PinType::Controlled => "Controlled",
                 }
             })
             .show_ui(ui, |ui| {
-                for p in [PinType::Inside, PinType::Outside, PinType::Controlled] {
+                for p in [PinType::Pico, PinType::Cipo, PinType::Controlled] {
                     let name = match p {
-                        PinType::Inside => "Inside",
-                        PinType::Outside => "Outside",
+                        PinType::Pico => "Inside",
+                        PinType::Cipo => "Outside",
                         PinType::Controlled => "Controlled",
                     };
                     let res = ui.selectable_value(self, p, name);
@@ -550,9 +550,9 @@ impl<'de> Deserialize<'de> for PinType {
         D: serde::Deserializer<'de>,
     {
         Ok(match char::deserialize(deserializer)? {
-            'o' => Self::Outside,
+            'o' => Self::Cipo,
             'c' => Self::Controlled,
-            _ => Self::Inside,
+            _ => Self::Pico,
         })
     }
 }
@@ -563,8 +563,8 @@ impl Serialize for PinType {
         S: serde::Serializer,
     {
         match *self {
-            PinType::Inside => 'i'.serialize(serializer),
-            PinType::Outside => 'o'.serialize(serializer),
+            PinType::Pico => 'i'.serialize(serializer),
+            PinType::Cipo => 'o'.serialize(serializer),
             PinType::Controlled => 'c'.serialize(serializer),
         }
     }
