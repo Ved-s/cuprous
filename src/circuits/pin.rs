@@ -84,7 +84,7 @@ impl Circuit {
         is_inside: bool,
         angle: f32,
         ctx: &PaintContext,
-    ) {
+    ) -> Pos2 {
         let (size, center) = match ctl {
             None => ((2, 1), (0, 0)),
             Some((ControlPinPosition::Left, _)) => ((2, 2), (0, 1)),
@@ -168,6 +168,8 @@ impl Circuit {
                 stroke: Stroke::NONE,
             });
         }
+
+        center
     }
 
     fn describe_props(props: &CircuitPropertyStore) -> CircuitDescription<2> {
@@ -234,22 +236,12 @@ impl CircuitImpl for Circuit {
         let is_inside = self.is_dir_inside(state_ctx);
         let angle = self.dir.inverted_ud().angle_to_right();
 
-        Circuit::draw(cpos, outside_state, state, is_inside, angle, paint_ctx);
+        let center = Circuit::draw(cpos, outside_state, state, is_inside, angle, paint_ctx);
 
         // TODO: don't interact if this state has parent state
 
-        let (size, center) = match cpos {
-            None => ((2, 1), (0, 0)),
-            Some((ControlPinPosition::Left, _)) => ((2, 2), (0, 1)),
-            Some((ControlPinPosition::Right, _)) => ((2, 2), (0, 0)),
-            Some((ControlPinPosition::Behind, _)) => ((3, 1), (1, 0)),
-        };
-        let size = vec2(size.0 as f32, size.1 as f32);
-        let center = vec2(center.0 as f32, center.1 as f32);
-
-        let pos = paint_ctx.rect.lerp_inside(center / size);
         let size = vec2(paint_ctx.screen.scale, paint_ctx.screen.scale);
-        let rect = Rect::from_min_size(pos, size);
+        let rect = Rect::from_center_size(center, size);
         let interaction = paint_ctx.ui.interact(
             rect,
             paint_ctx.ui.auto_id_with(state_ctx.circuit.pos),
@@ -321,7 +313,6 @@ impl CircuitImpl for Circuit {
         }
         if let None | Some(0) = changed_pin {
             if self.is_dir_inside(state_ctx) {
-                dbg!(self.pin.get_direction(state_ctx));
                 self.pin.set_state(
                     state_ctx,
                     state_ctx
