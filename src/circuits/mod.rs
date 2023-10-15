@@ -3,7 +3,7 @@ use std::{sync::Arc, time::Duration};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    board::ActiveCircuitBoard,
+    board::{ActiveCircuitBoard, BoardStorage},
     state::{CircuitState, InternalCircuitState, State, StateCollection, WireState},
     time::Instant,
     vector::{Vec2i, Vec2u, Vector},
@@ -452,6 +452,9 @@ pub trait CircuitImpl: Send + Sync {
     /// Called once on circuit creation, use for update interval setup
     fn init_state(&self, state_ctx: &CircuitStateContext) {}
 
+    /// Called once when placed or loaded
+    fn postload(&mut self, state: &CircuitStateContext, boards: &BoardStorage) {}
+
     /// Called after `Self::update` to determine next update timestamp
     fn update_interval(&self, state_ctx: &CircuitStateContext) -> Option<Duration> {
         None
@@ -468,7 +471,7 @@ pub trait CircuitImpl: Send + Sync {
     }
 
     fn load(&mut self, data: &serde_intermediate::Intermediate) {}
-
+    
     fn load_internal(
         &self,
         data: &serde_intermediate::Intermediate,

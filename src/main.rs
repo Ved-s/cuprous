@@ -18,7 +18,7 @@ use std::{
 };
 
 use app::SelectedItemId;
-use board::{selection::Selection, ActiveCircuitBoard};
+use board::{selection::Selection, ActiveCircuitBoard, BoardStorage};
 use cache::GLOBAL_STR_CACHE;
 use eframe::{
     egui::{self, Context, Sense, Ui},
@@ -1024,7 +1024,7 @@ impl PastePreview {
         }
     }
 
-    fn place(&self, board: &mut ActiveCircuitBoard, pos: Vec2i) {
+    fn place(&self, board: &mut ActiveCircuitBoard, pos: Vec2i, boards: &BoardStorage) {
         if self.circuits.iter().any(|(c, p)| {
             !board.can_place_circuit_at(p.describe().size, pos + c.pos.convert(|v| v as i32), None)
         }) {
@@ -1074,6 +1074,7 @@ impl PastePreview {
                         }
                     }
                 },
+                boards
             );
             if let (Some(id), Some(dur)) = (id, circuit_data.update) {
                 let board = board.board.read();

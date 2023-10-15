@@ -7,7 +7,7 @@ use std::{
 #[cfg(not(feature = "single_thread"))]
 use std::thread::{self, JoinHandle};
 
-use crate::{containers::Queue, time::Instant};
+use crate::{containers::Queue, time::Instant, board::BoardStorage};
 use eframe::epaint::Color32;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -210,7 +210,7 @@ impl StateCollection {
     pub fn create_state(&self, board: Arc<RwLock<CircuitBoard>>) -> (usize, Arc<State>) {
         let mut vec = self.states.write();
         let id = vec.first_free_pos_filtered(|i| i > 0); // id 0 reserved
-        let state = Arc::new(State::new(board));
+        let state = Arc::new(State::new(board, id));
         vec.set(state.clone(), id);
         (id, state)
     }
@@ -264,14 +264,14 @@ impl StateCollection {
             None => self
                 .states
                 .write()
-                .get_or_create_mut(0, || Arc::new(State::new(board)))
+                .get_or_create_mut(0, || Arc::new(State::new(board, 0)))
                 .clone(),
         }
     }
 
-    pub fn init_circuit(&self, circuit: &Circuit) {
+    pub fn init_circuit(&self, circuit: &Circuit, boards: &BoardStorage) {
         for state in self.states.read().iter() {
-            state.init_circuit(circuit);
+            state.init_circuit(circuit, boards);
         }
     }
 
@@ -296,8 +296,16 @@ impl StateCollection {
     }
 }
 
+pub struct StateParent {
+    pub parent: Arc<State>,
+    pub circuit: usize 
+}
+
 #[derive(Clone)]
 pub struct State {
+    pub id: usize,
+    pub parent: Arc<RwLock<Option<StateParent>>>,
+
     pub wires: Arc<RwLock<FixedVec<Arc<RwLock<WireState>>>>>,
     pub circuits: Arc<RwLock<FixedVec<Arc<RwLock<CircuitState>>>>>,
 
@@ -306,16 +314,18 @@ pub struct State {
     #[cfg(not(feature = "single_thread"))]
     thread: Arc<RwLock<Option<StateThreadHandle>>>,
 
-    board: Arc<RwLock<CircuitBoard>>,
+    pub board: Arc<RwLock<CircuitBoard>>,
     circuit_updates_removes: Arc<Mutex<Vec<usize>>>,
 
     pub updates: Arc<Mutex<Vec<(usize, Instant)>>>,
 }
 
 impl State {
-    pub fn new(board: Arc<RwLock<CircuitBoard>>) -> Self {
+    pub fn new(board: Arc<RwLock<CircuitBoard>>, id: usize) -> Self {
         let ordered = board.read().is_ordered_queue();
         Self {
+            id,
+            parent: Arc::new(RwLock::new(None)),
             wires: Default::default(),
             circuits: Default::default(),
             queue: Arc::new(Mutex::new(Queue::new(vec![], ordered))),
@@ -409,7 +419,7 @@ impl State {
         }
     }
 
-    pub fn load(data: &crate::io::StateData, board: Arc<RwLock<CircuitBoard>>) -> State {
+    pub fn load(data: &crate::io::StateData, board: Arc<RwLock<CircuitBoard>>, id: usize) -> State {
         let now = Instant::now();
 
         let wires = data
@@ -438,6 +448,8 @@ impl State {
 
         let ordered = board.read().is_ordered_queue();
         Self {
+            id,
+            parent: Arc::new(RwLock::new(None)),
             wires: Arc::new(RwLock::new(FixedVec::from_option_vec(wires))),
             circuits: Arc::new(RwLock::new(FixedVec::from_option_vec(circuits))),
             queue: Arc::new(Mutex::new(Queue::new(data.queue.clone(), ordered))),
@@ -573,9 +585,11 @@ impl State {
         }
     }
 
-    fn init_circuit(&self, circuit: &Circuit) {
+    fn init_circuit(&self, circuit: &Circuit, boards: &BoardStorage) {
         let state_ctx = CircuitStateContext::new(self, circuit);
-        circuit.imp.read().init_state(&state_ctx);
+        let mut imp = circuit.imp.write();
+        imp.init_state(&state_ctx);
+        imp.postload(&state_ctx, boards);
     }
 
     fn update_wire_now(&self, wire: &Wire, skip_state_ckeck: bool) {

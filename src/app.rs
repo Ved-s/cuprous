@@ -11,8 +11,8 @@ use eframe::{
 use emath::{pos2, vec2, Pos2, Rect, Vec2};
 
 use crate::{
-    board::{ActiveCircuitBoard, CircuitBoard, SelectedItem},
-    circuits::{self, props::CircuitPropertyImpl, CircuitPreview, CircuitPreviewImpl},
+    board::{ActiveCircuitBoard, CircuitBoard, SelectedItem, BoardStorage},
+    circuits::{self, props::CircuitPropertyImpl, CircuitPreview, CircuitPreviewImpl, CircuitStateContext},
     time::Instant,
     ui::{
         CollapsibleSidePanel, Inventory, InventoryItem, InventoryItemGroup, PropertyEditor,
@@ -50,7 +50,8 @@ pub struct App {
 
     props_ui: crate::ui::PropertyEditor,
 
-    pub boards: HashMap<u128, Arc<RwLock<CircuitBoard>>>,
+    // TODO: proper SimulationContext
+    pub boards: BoardStorage,
 }
 
 // TODO: fix coi sometimes not working by re-registering it and reloading
@@ -401,17 +402,29 @@ impl App {
             }
         };
 
+        let boards = HashMap::from_iter(boards.into_iter().map(|b| (b.read().uid, b.clone())));
+
+        for board in boards.values() {
+            let board = board.read();
+            for state in board.states.states().read().iter() {
+                for circuit in board.circuits.iter() {
+                    let csc = CircuitStateContext::new(state, circuit);
+                    circuit.imp.write().postload(&csc, &boards);
+                }
+            }
+        }
+
         Self::new(boards, previews)
     }
 
     pub fn new(
-        mut boards: Vec<Arc<RwLock<CircuitBoard>>>,
+        mut boards: BoardStorage,
         previews: HashMap<DynStaticStr, Arc<CircuitPreview>>,
     ) -> Self {
         if boards.is_empty() {
             let mut board = CircuitBoard::new();
             board.name = "main".into();
-            boards.push(Arc::new(RwLock::new(board)));
+            boards.insert(board.uid, Arc::new(RwLock::new(board)));
         }
 
         #[cfg(not(feature = "single_thread"))]
@@ -440,7 +453,7 @@ impl App {
             #[cfg(not(feature = "wasm"))]
             last_win_size: Default::default(),
             board: ActiveCircuitBoard::new_main(
-                boards.first().expect("Board list cannot be empty").clone(),
+                boards.values().next().expect("Board list cannot be empty").clone(),
             ),
             debug: false,
 
@@ -453,10 +466,7 @@ impl App {
             circuit_previews: previews,
             paste: None,
             props_ui: Default::default(),
-            boards: HashMap::from_iter(boards.into_iter().map(|b| {
-                let uid = b.read().uid;
-                (uid, b)
-            })),
+            boards,
         }
     }
 
@@ -638,7 +648,7 @@ impl App {
             }
         }
 
-        self.board.update(&ctx, selected_item, self.debug);
+        self.board.update(&ctx, selected_item, self.debug, &self.boards);
     }
 
     fn change_selected_props<T: CircuitPropertyImpl>(

@@ -33,9 +33,11 @@ use self::selection::{SelectedWorldObject, Selection};
 
 pub mod selection;
 
+pub type BoardStorage = HashMap<u128, Arc<RwLock<CircuitBoard>>>;
+
 pub struct CircuitBoard {
     pub name: String,
-    pub uid: u128, 
+    pub uid: u128,
 
     pub wires: FixedVec<Wire>,
     pub circuits: FixedVec<Circuit>,
@@ -167,7 +169,7 @@ impl CircuitBoard {
     }
 
     pub fn save(&self, sim_lock: bool) -> crate::io::CircuitBoardData {
-        let sim_lock = sim_lock.then(|| self.sim_lock.write() );
+        let sim_lock = sim_lock.then(|| self.sim_lock.write());
         let data = crate::io::CircuitBoardData {
             name: self.name.clone(),
             uid: self.uid,
@@ -252,7 +254,11 @@ impl CircuitBoard {
         let states = StateCollection::from_fixed_vec(FixedVec::from_option_vec(
             data.states
                 .iter()
-                .map(|v| v.as_ref().map(|s| Arc::new(State::load(s, board.clone()))))
+                .enumerate()
+                .map(|(i, v)| {
+                    v.as_ref()
+                        .map(|s| Arc::new(State::load(s, board.clone(), i)))
+                })
                 .collect(),
         ));
 
@@ -314,7 +320,6 @@ impl SelectedItem {
         }
     }
 }
-
 pub struct ActiveCircuitBoard {
     pub board: Arc<RwLock<CircuitBoard>>,
     pub state: Arc<State>,
@@ -332,9 +337,11 @@ impl ActiveCircuitBoard {
     pub const WIRE_THICKNESS: f32 = 0.2;
     pub const WIRE_POINT_THICKNESS: f32 = 0.35;
 
-
     pub fn new_main(board: Arc<RwLock<CircuitBoard>>) -> Self {
-        Self::new(board.clone(), board.clone().read().states.get_or_create_main(board))
+        Self::new(
+            board.clone(),
+            board.clone().read().states.get_or_create_main(board),
+        )
     }
 
     pub fn new(board: Arc<RwLock<CircuitBoard>>, state: Arc<State>) -> Self {
@@ -409,7 +416,13 @@ impl ActiveCircuitBoard {
         }
     }
 
-    pub fn update(&mut self, ctx: &PaintContext, selected: SelectedItem, debug: bool) {
+    pub fn update(
+        &mut self,
+        ctx: &PaintContext,
+        selected: SelectedItem,
+        debug: bool,
+        boards: &BoardStorage,
+    ) {
         self.wires_drawn.store(0, Ordering::Relaxed);
         self.selection
             .borrow_mut()
@@ -569,7 +582,7 @@ impl ActiveCircuitBoard {
 
         self.draw_hovered_circuit_pin_names(ctx);
 
-        self.update_previews(ctx, selected);
+        self.update_previews(ctx, selected, boards);
         self.selection.borrow_mut().update_selection(ctx);
     }
 
@@ -1110,7 +1123,12 @@ impl ActiveCircuitBoard {
         }
     }
 
-    fn update_previews(&mut self, ctx: &PaintContext, selected: SelectedItem) {
+    fn update_previews(
+        &mut self,
+        ctx: &PaintContext,
+        selected: SelectedItem,
+        boards: &BoardStorage,
+    ) {
         match selected {
             SelectedItem::None => return,
             SelectedItem::Selection => return,
@@ -1169,7 +1187,7 @@ impl ActiveCircuitBoard {
 
             if interaction.clicked_by(eframe::egui::PointerButton::Primary) {
                 fn empty_handler(_: &mut ActiveCircuitBoard, _: usize) {}
-                self.place_circuit(place_pos, true, p.as_ref(), None, &empty_handler);
+                self.place_circuit(place_pos, true, p.as_ref(), None, &empty_handler, boards);
             }
         } else if let SelectedItem::Paste(p) = selected {
             let size = p.size;
@@ -1184,7 +1202,7 @@ impl ActiveCircuitBoard {
             p.draw(self, place_pos, &ctx.with_rect(rect));
             let interaction = ctx.ui.interact(ctx.rect, ctx.ui.id(), Sense::click());
             if interaction.clicked_by(eframe::egui::PointerButton::Primary) {
-                p.place(self, place_pos);
+                p.place(self, place_pos, boards);
             }
         }
     }
@@ -2020,6 +2038,7 @@ impl ActiveCircuitBoard {
         preview: &CircuitPreview,
         props_override: Option<CircuitPropertyStore>,
         handler: &dyn Fn(&mut ActiveCircuitBoard, usize),
+        boards: &BoardStorage,
     ) -> Option<usize> {
         let size = preview.describe().size;
         if !self.can_place_circuit_at(size, place_pos, None) {
@@ -2040,7 +2059,7 @@ impl ActiveCircuitBoard {
         self.connect_circuit_to_wires(cid);
         let board = self.board.read();
         let circ = board.circuits.get(cid).unwrap();
-        board.states.init_circuit(circ);
+        board.states.init_circuit(circ, boards);
         board.states.update_circuit_signals(cid, None);
         drop(sim_lock);
         Some(cid)
@@ -2326,5 +2345,64 @@ impl ActiveCircuitBoard {
 
         info.write().size = new_size;
         true
+    }
+}
+
+pub struct CustomDesignStorage {
+    current: usize,
+    designs: FixedVec<Arc<CustomCircuitDesign>>,
+}
+
+impl CustomDesignStorage {
+    pub fn new() -> Self {
+        let design = Arc::new(CustomCircuitDesign::default());
+        Self {
+            current: 0,
+            designs: vec![design].into(),
+        }
+    }
+
+    pub fn current(&self) -> Arc<CustomCircuitDesign> {
+        self.designs
+            .get(self.current)
+            .expect("current design must always exist")
+            .clone()
+    }
+
+    pub fn current_mut(&mut self) -> &mut CustomCircuitDesign {
+
+        // I don't care... I'm tired of endless borrowing errors
+        let ptr1 = &mut self.designs as *mut FixedVec<Arc<CustomCircuitDesign>>;
+
+        let current = self
+            .designs
+            .get_mut(self.current)
+            .expect("current design must always exist");
+
+        let ptr2 = Arc::as_ptr(current);
+
+        if let Some(unique) = Arc::get_mut(current) {
+            return unique;
+        }
+
+        unsafe {
+            
+            let mut new = (*ptr2).clone();
+            let id = (*ptr1).first_free_pos();
+            new.id = id;
+            let arc = (*ptr1).set(Arc::new(new), id).value_ref;
+            Arc::make_mut(arc) 
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct CustomCircuitDesign {
+    id: usize,
+}
+
+impl CustomCircuitDesign {
+    pub fn id(&self) -> usize {
+        self.id
     }
 }
