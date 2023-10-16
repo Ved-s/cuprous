@@ -54,12 +54,7 @@ impl CircuitImpl for Circuit {
 
     fn update_signals(&self, _: &CircuitStateContext, _: Option<usize>) {}
 
-    fn custom_pin_mutate_state(
-        &self,
-        _: &CircuitStateContext,
-        _: usize,
-        state: &mut WireState,
-    ) {
+    fn custom_pin_mutate_state(&self, _: &CircuitStateContext, _: usize, state: &mut WireState) {
         if matches!(state, WireState::None) {
             *state = WireState::False;
         }
@@ -77,7 +72,7 @@ impl CircuitPreviewImpl for Preview {
     fn draw_preview(&self, _: &CircuitPropertyStore, ctx: &PaintContext, in_world: bool) {
         Circuit::draw(ctx, in_world);
     }
-    
+
     fn create_impl(&self) -> Box<dyn CircuitImpl> {
         Box::new(Circuit::new())
     }
@@ -86,7 +81,11 @@ impl CircuitPreviewImpl for Preview {
         "pullup".into()
     }
 
-    fn load_impl_data(&self, _: &serde_intermediate::Intermediate) -> Option<Box<dyn CircuitPreviewImpl>> {
+    fn load_impl_data(
+        &self,
+        _: &serde_intermediate::Intermediate,
+        _: &BoardStorage,
+    ) -> Option<Box<dyn CircuitPreviewImpl>> {
         Some(Box::new(Preview {}))
     }
 

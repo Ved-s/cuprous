@@ -59,6 +59,7 @@ impl CircuitPreviewImpl for Preview {
     fn load_impl_data(
         &self,
         data: &serde_intermediate::Intermediate,
+        boards: &BoardStorage
     ) -> Option<Box<dyn CircuitPreviewImpl>> {
         Some(Box::new(Preview {}))
     }

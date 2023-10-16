@@ -112,6 +112,7 @@ impl eframe::App for App {
                 &BasicLoadingContext {
                     previews: &self.circuit_previews,
                 },
+                &self.boards
             )));
             self.selected_id = SelectedItemId::Paste;
         }

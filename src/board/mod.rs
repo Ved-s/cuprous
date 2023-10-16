@@ -14,7 +14,9 @@ use eframe::{
     egui::{self, FontSelection, Sense, TextStyle, WidgetText},
     epaint::{Color32, FontId, Rounding, Stroke, TextShape},
 };
-use emath::{vec2, Align2, Pos2, Rect};
+use emath::{pos2, vec2, Align2, Pos2, Rect};
+use ron::de;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     circuits::{
@@ -43,6 +45,8 @@ pub struct CircuitBoard {
     pub circuits: FixedVec<Circuit>,
     pub states: StateCollection,
 
+    pub designs: CircuitDesignStorage,
+
     // RwLock for blocking simulation while modifying board
     pub sim_lock: Arc<RwLock<()>>,
     ordered_queue: bool,
@@ -58,6 +62,7 @@ impl CircuitBoard {
             states: StateCollection::new(),
             sim_lock: Default::default(),
             ordered_queue: false,
+            designs: CircuitDesignStorage::new(CircuitDesign::default_board_design()),
         }
     }
 
@@ -194,6 +199,7 @@ impl CircuitBoard {
                 .map(|s| s.as_ref().map(|s| s.save()))
                 .collect(),
             ordered: self.ordered_queue,
+            designs: self.designs.save(),
         };
         drop(sim_lock);
         data
@@ -240,6 +246,8 @@ impl CircuitBoard {
                 .collect(),
         );
 
+        let designs = CircuitDesignStorage::load(&data.designs);
+
         let board = CircuitBoard {
             name: data.name.clone(),
             uid: data.uid,
@@ -248,6 +256,7 @@ impl CircuitBoard {
             states: StateCollection::new(),
             sim_lock: Default::default(),
             ordered_queue: data.ordered,
+            designs,
         };
         let board = Arc::new(RwLock::new(board));
 
@@ -2348,61 +2357,213 @@ impl ActiveCircuitBoard {
     }
 }
 
-pub struct CustomDesignStorage {
+pub struct CircuitDesignStorage {
     current: usize,
-    designs: FixedVec<Arc<CustomCircuitDesign>>,
+    designs: FixedVec<Arc<CircuitDesign>>,
 }
 
-impl CustomDesignStorage {
-    pub fn new() -> Self {
-        let design = Arc::new(CustomCircuitDesign::default());
+impl CircuitDesignStorage {
+    pub fn new(current: CircuitDesign) -> Self {
+        let id = current.id;
+        let design = Arc::new(current);
+        let mut designs = FixedVec::new();
+        designs.set(design, id);
+
         Self {
-            current: 0,
-            designs: vec![design].into(),
+            current: id,
+            designs,
         }
     }
 
-    pub fn current(&self) -> Arc<CustomCircuitDesign> {
+    pub fn get(&self, id: usize) -> Option<Arc<CircuitDesign>> {
+        self.designs.get(id).cloned()
+    }
+
+    pub fn current_id(&self) -> usize {
+        self.current
+    }
+
+    pub fn current(&self) -> Arc<CircuitDesign> {
         self.designs
             .get(self.current)
             .expect("current design must always exist")
             .clone()
     }
 
-    pub fn current_mut(&mut self) -> &mut CustomCircuitDesign {
+    // pub fn current_mut(&mut self) -> &mut CustomCircuitDesign {
 
-        // I don't care... I'm tired of endless borrowing errors
-        let ptr1 = &mut self.designs as *mut FixedVec<Arc<CustomCircuitDesign>>;
+    //     // I don't care... I'm tired of endless borrowing errors
+    //     let ptr1 = &mut self.designs as *mut FixedVec<Arc<CustomCircuitDesign>>;
 
-        let current = self
-            .designs
-            .get_mut(self.current)
-            .expect("current design must always exist");
+    //     let current = self
+    //         .designs
+    //         .get_mut(self.current)
+    //         .expect("current design must always exist");
 
-        let ptr2 = Arc::as_ptr(current);
+    //     let ptr2 = Arc::as_ptr(current);
 
-        if let Some(unique) = Arc::get_mut(current) {
-            return unique;
+    //     if let Some(unique) = Arc::get_mut(current) {
+    //         return unique;
+    //     }
+
+    //     unsafe {
+
+    //         let mut new = (*ptr2).clone();
+    //         let id = (*ptr1).first_free_pos();
+    //         new.id = id;
+    //         let arc = (*ptr1).set(Arc::new(new), id).value_ref;
+    //         Arc::make_mut(arc)
+    //     }
+    // }
+
+    pub fn current_mut(&mut self) -> &mut CircuitDesign {
+        let current_unique = Arc::get_mut(
+            self.designs
+                .get_mut(self.current)
+                .expect("current design must always exist"),
+        )
+        .is_some();
+
+        if !current_unique {
+            let clone = self
+                .designs
+                .get_mut(self.current)
+                .expect("current design must always exist")
+                .deref()
+                .deref()
+                .clone();
+            let id = self.designs.first_free_pos();
+            self.designs.set(Arc::new(clone.with_id(id)), id);
+            self.current = id;
         }
 
-        unsafe {
-            
-            let mut new = (*ptr2).clone();
-            let id = (*ptr1).first_free_pos();
-            new.id = id;
-            let arc = (*ptr1).set(Arc::new(new), id).value_ref;
-            Arc::make_mut(arc) 
+        Arc::get_mut(
+            self.designs
+                .get_mut(self.current)
+                .expect("current design must always exist"),
+        )
+        .expect("this should've been validated before")
+    }
+
+    fn save(&self) -> crate::io::CircuitDesignStoreData {
+        crate::io::CircuitDesignStoreData {
+            current: self.current,
+            designs: self
+                .designs
+                .inner()
+                .iter()
+                .map(|d| {
+                    d.as_ref().map(|d| crate::io::CircuitDesignData {
+                        pin_positions: d.pin_positions.inner().clone(),
+                        size: d.size,
+                        decorations: d.decorations.clone(),
+                    })
+                })
+                .collect(),
+        }
+    }
+
+    pub fn load(data: &crate::io::CircuitDesignStoreData) -> Self {
+        Self {
+            current: data.current,
+            designs: FixedVec::from_option_vec(
+                data.designs
+                    .iter()
+                    .enumerate()
+                    .map(|(i, d)| {
+                        d.as_ref().map(|d| {
+                            Arc::new(CircuitDesign {
+                                id: i,
+                                size: d.size,
+                                pin_positions: FixedVec::from_option_vec(d.pin_positions.clone()),
+                                decorations: d.decorations.clone(),
+                            })
+                        })
+                    })
+                    .collect(),
+            ),
         }
     }
 }
 
-#[derive(Clone, Default)]
-pub struct CustomCircuitDesign {
-    id: usize,
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+pub enum Decoration {
+    Rect {
+        rect: Rect,
+        rounding: Rounding,
+        fill: Color32,
+        stroke: Stroke,
+    }, // TODO: MOAR!
 }
 
-impl CustomCircuitDesign {
+enum CircuitDesignIdType {
+    Unresolved(usize),
+    Resolved(Option<Arc<CircuitDesign>>),
+}
+
+pub struct CircuitDesignId(RwLock<CircuitDesignIdType>);
+
+impl CircuitDesignId {
+
+    pub fn new_resolved(design: Option<Arc<CircuitDesign>>) -> Self {
+        Self(RwLock::new(CircuitDesignIdType::Resolved(design)))
+    }
+
+    pub fn new_unresolved(id: usize) -> Self {
+        Self(RwLock::new(CircuitDesignIdType::Unresolved(id)))
+    }
+
+    pub fn resolve<D>(&self, designs: impl FnOnce() -> D) -> Option<Arc<CircuitDesign>>
+    where
+        D: Deref<Target = CircuitDesignStorage>,
+    {
+        if let CircuitDesignIdType::Resolved(arc) = self.0.read().deref() {
+            return arc.clone();
+        }
+
+        let mut ty = self.0.write();
+        let id = match ty.deref() {
+            CircuitDesignIdType::Unresolved(id) => *id,
+            CircuitDesignIdType::Resolved(arc) => return arc.clone(),
+        };
+
+        let store = designs();
+        let arc = store.get(id);
+
+        *ty = CircuitDesignIdType::Resolved(arc.clone());
+        arc
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct CircuitDesign {
+    pub id: usize,
+
+    pub size: Vec2u,
+    pub pin_positions: FixedVec<Vec2u>,
+    pub decorations: Vec<Decoration>,
+}
+
+impl CircuitDesign {
     pub fn id(&self) -> usize {
         self.id
+    }
+
+    pub fn with_id(self, id: usize) -> Self {
+        Self { id, ..self }
+    }
+
+    pub fn default_board_design() -> Self {
+        Self {
+            id: 0,
+            size: 2.into(),
+            pin_positions: vec![].into(),
+            decorations: vec![Decoration::Rect {
+                rect: Rect::from_min_size(pos2(0.0, 0.0), vec2(2.0, 2.0)),
+                rounding: Rounding::none(),
+                fill: Color32::from_gray(100),
+                stroke: Stroke::new(0.1, Color32::BLACK),
+            }],
+        }
     }
 }

@@ -8,7 +8,7 @@ use crate::{
     },
     state::WireState,
     vector::{Vec2u, Vec2f},
-    Direction4, DynStaticStr, PaintContext, describe_directional_circuit,
+    Direction4, DynStaticStr, PaintContext, describe_directional_circuit, board::BoardStorage,
 };
 
 struct Circuit {
@@ -141,6 +141,7 @@ impl CircuitPreviewImpl for Preview {
     fn load_impl_data(
         &self,
         _: &serde_intermediate::Intermediate,
+        _: &BoardStorage
     ) -> Option<Box<dyn CircuitPreviewImpl>> {
         Some(Box::new(Preview {}))
     }

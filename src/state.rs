@@ -207,12 +207,12 @@ impl StateCollection {
         }
     }
 
-    pub fn create_state(&self, board: Arc<RwLock<CircuitBoard>>) -> (usize, Arc<State>) {
+    pub fn create_state(&self, board: Arc<RwLock<CircuitBoard>>) -> Arc<State> {
         let mut vec = self.states.write();
         let id = vec.first_free_pos_filtered(|i| i > 0); // id 0 reserved
         let state = Arc::new(State::new(board, id));
         vec.set(state.clone(), id);
-        (id, state)
+        state
     }
 
     pub fn update_pin_input(&self, circuit_id: usize, id: usize) {
@@ -258,13 +258,17 @@ impl StateCollection {
 
     /// Get or create state 0
     pub fn get_or_create_main(&self, board: Arc<RwLock<CircuitBoard>>) -> Arc<State> {
-        let state = self.states.read().get(0).cloned();
+        self.get_or_create(board, 0)
+    }
+
+    pub fn get_or_create(&self, board: Arc<RwLock<CircuitBoard>>, id: usize) -> Arc<State> {
+        let state = self.states.read().get(id).cloned();
         match state {
             Some(v) => v,
             None => self
                 .states
                 .write()
-                .get_or_create_mut(0, || Arc::new(State::new(board, 0)))
+                .get_or_create_mut(id, || Arc::new(State::new(board, id)))
                 .clone(),
         }
     }

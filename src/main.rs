@@ -954,14 +954,14 @@ pub struct PastePreview {
 }
 
 impl PastePreview {
-    pub fn new(data: crate::io::CopyPasteData, ctx: &impl io::LoadingContext) -> Self {
+    pub fn new(data: crate::io::CopyPasteData, ctx: &impl io::LoadingContext, boards: &BoardStorage) -> Self {
         let wires = data.wires;
         let circuits: Vec<_> = data
             .circuits
             .into_iter()
             .filter_map(|d| {
                 ctx.get_circuit_preview(&d.ty)
-                    .and_then(|p| p.load_new(&d.imp, &d.props).map(|b| (d, b)))
+                    .and_then(|p| p.load_new(&d.imp, &d.props, boards).map(|b| (d, b)))
             })
             .collect();
 
@@ -1200,5 +1200,38 @@ impl<'a> Deref for ArcBorrowStr<'a> {
             ArcBorrowStr::Arc(a) => a.deref(),
             ArcBorrowStr::Borrow(b) => b,
         }
+    }
+}
+
+enum MaybeResolvedType<I, T> {
+    Unresolved(I),
+    Resolved(T)
+}
+
+pub struct MaybeResolved<I, T: Clone>(RwLock<MaybeResolvedType<I, T>>);
+
+impl<I, T: Clone> MaybeResolved<I, T> {
+    pub fn new_unresolved(id: I) -> Self {
+        Self(RwLock::new(MaybeResolvedType::Unresolved(id)))
+    }
+
+    pub fn new_resolved(value: T) -> Self {
+        Self(RwLock::new(MaybeResolvedType::Resolved(value)))
+    }
+
+    pub fn resolve(&self, resolver: impl FnOnce(&I) -> T) -> T {
+        if let MaybeResolvedType::Resolved(value) = self.0.read().deref() {
+            return value.clone();
+        }
+
+        let mut ty = self.0.write();
+        let id = match ty.deref() {
+            MaybeResolvedType::Unresolved(id) => id,
+            MaybeResolvedType::Resolved(value) => return value.clone(),
+        };
+
+        let value = resolver(id);
+        *ty = MaybeResolvedType::Resolved(value.clone());
+        value
     }
 }

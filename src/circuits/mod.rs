@@ -12,6 +12,7 @@ use crate::{
 
 use self::props::CircuitPropertyStore;
 
+pub mod board;
 pub mod button;
 pub mod freq_meter;
 pub mod gates;
@@ -392,14 +393,13 @@ impl<'a> CircuitStateContext<'a> {
         self.global_state.get_circuit(self.circuit.id)
     }
 
-    pub fn clone_circuit_internal_state<T: InternalCircuitState + Clone>(
-        &self,
-    ) -> Option<T> {
+    pub fn clone_circuit_internal_state<T: InternalCircuitState + Clone>(&self) -> Option<T> {
         Some(
             self.global_state
                 .read_circuit(self.circuit.id)?
                 .read()
-                .get_internal::<T>()?.clone(),
+                .get_internal::<T>()?
+                .clone(),
         )
     }
 
@@ -471,7 +471,7 @@ pub trait CircuitImpl: Send + Sync {
     }
 
     fn load(&mut self, data: &serde_intermediate::Intermediate) {}
-    
+
     fn load_internal(
         &self,
         data: &serde_intermediate::Intermediate,
@@ -526,8 +526,9 @@ impl CircuitPreview {
         &self,
         imp: &serde_intermediate::Intermediate,
         props_data: &crate::io::CircuitPropertyStoreData,
+        boards: &BoardStorage
     ) -> Option<Self> {
-        let imp = self.imp.load_impl_data(imp)?;
+        let imp = self.imp.load_impl_data(imp, boards)?;
         let props = imp.default_props();
         props.load(props_data);
         let description = RwLock::new(imp.describe(&props));
@@ -581,6 +582,7 @@ pub trait CircuitPreviewImpl {
     fn load_impl_data(
         &self,
         data: &serde_intermediate::Intermediate,
+        boards: &BoardStorage
     ) -> Option<Box<dyn CircuitPreviewImpl>>;
     fn default_props(&self) -> CircuitPropertyStore;
 }
@@ -665,8 +667,12 @@ const fn rotate_pos(pos: [u32; 2], size: [u32; 2], dir: Direction4) -> [u32; 2] 
 
 #[macro_export]
 macro_rules! expr_or_default {
-    ($e:expr, $def:expr) => { $e };
-    (, $def:expr) => { $def };
+    ($e:expr, $def:expr) => {
+        $e
+    };
+    (, $def:expr) => {
+        $def
+    };
 }
 
 #[macro_export]
