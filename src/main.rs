@@ -26,7 +26,7 @@ use eframe::{
 };
 use emath::{pos2, vec2, Pos2, Rect};
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer, Deserializer};
 #[cfg(feature = "wasm")]
 use wasm_bindgen::{prelude::*, JsValue};
 
@@ -553,6 +553,22 @@ macro_rules! impl_optional_int {
                     None => Self::NONE_VALUE,
                     Some(v) => v,
                 }
+            }
+        }
+    
+        impl<T: Serialize + Integer> Serialize for $name<T> {
+            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: Serializer {
+                self.0.serialize(serializer)
+            }
+        }
+
+        impl<'de, T: Deserialize<'de> + Integer> Deserialize<'de> for $name<T> {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: Deserializer<'de> {
+                Ok(Self(T::deserialize(deserializer)?))
             }
         }
     };

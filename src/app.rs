@@ -430,7 +430,7 @@ impl App {
 
         #[cfg(not(feature = "single_thread"))]
         {
-            for board in &boards {
+            for board in boards.values() {
                 board.read().activate();
             }
         }

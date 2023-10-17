@@ -349,13 +349,25 @@ impl CircuitImpl for Circuit {
             .ok()
             .map(|s| Box::new(s) as Box<dyn InternalCircuitState>)
     }
+
+    fn postload(&mut self, state: &CircuitStateContext, _: &BoardStorage) {
+        let pos = state.circuit.pos;
+        let hex_x = format!("{:x}", pos.x());
+        let hex_y = format!("{:x}", pos.x());
+        let uid = format!("{:x}:{:x}:{}{}", hex_x.len(), hex_y.len(), hex_x, hex_y);
+        
+        let mut board = state.global_state.board.write();
+        board.pins.insert(uid.into(), state.circuit.id);
+    }
 }
+
+pub const TYPEID: &str = "pin";
 
 pub struct Preview {}
 
 impl CircuitPreviewImpl for Preview {
     fn type_name(&self) -> DynStaticStr {
-        "pin".into()
+        TYPEID.into()
     }
 
     fn draw_preview(&self, props: &CircuitPropertyStore, ctx: &PaintContext, _: bool) {

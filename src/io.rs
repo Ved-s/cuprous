@@ -6,7 +6,7 @@ use serde_intermediate::Intermediate;
 use crate::{
     circuits::{PinDirection, CircuitPreview},
     state::{UpdateTask, WireState},
-    vector::{Vec2i, Vec2u}, DynStaticStr, Direction2, board::Decoration,
+    vector::{Vec2i, Vec2u}, DynStaticStr, Direction2, board::{Decoration, CircuitDesignPin},
 };
 
 #[cfg(all(not(web_sys_unstable_apis), feature = "wasm"))]
@@ -80,7 +80,7 @@ pub struct CircuitDesignStoreData {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct CircuitDesignData {
-    pub pin_positions: Vec<Option<Vec2u>>,
+    pub pins: Vec<CircuitDesignPin>,
     pub size: Vec2u,
     pub decorations: Vec<Decoration>
 }

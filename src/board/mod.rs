@@ -10,25 +10,25 @@ use std::{
     },
 };
 
+use bimap::BiMap;
 use eframe::{
     egui::{self, FontSelection, Sense, TextStyle, WidgetText},
     epaint::{Color32, FontId, Rounding, Stroke, TextShape},
 };
 use emath::{pos2, vec2, Align2, Pos2, Rect};
-use ron::de;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     circuits::{
         props::{CircuitPropertyImpl, CircuitPropertyStore},
-        Circuit, CircuitNode, CircuitPin, CircuitPinId, CircuitPreview, CircuitStateContext,
+        Circuit, CircuitNode, CircuitPin, CircuitPinId, CircuitPreview, CircuitStateContext, InternalPinDirection,
     },
     containers::{Chunks2D, ChunksLookaround, FixedVec},
     state::{State, StateCollection, WireState},
     unwrap_option_or_continue, unwrap_option_or_return,
     vector::{IsZero, Vec2f, Vec2i, Vec2isize, Vec2u},
     wires::{FoundWireNode, TileWires, Wire, WireNode, WirePart, WirePoint},
-    ArcString, Direction2, Direction4, PaintContext, PastePreview, RwLock, Screen,
+    ArcString, Direction2, Direction4, PaintContext, PastePreview, RwLock, Screen, DynStaticStr,
 };
 
 use self::selection::{SelectedWorldObject, Selection};
@@ -46,6 +46,7 @@ pub struct CircuitBoard {
     pub states: StateCollection,
 
     pub designs: CircuitDesignStorage,
+    pub pins: BiMap<Arc<str>, usize>,
 
     // RwLock for blocking simulation while modifying board
     pub sim_lock: Arc<RwLock<()>>,
@@ -63,6 +64,7 @@ impl CircuitBoard {
             sim_lock: Default::default(),
             ordered_queue: false,
             designs: CircuitDesignStorage::new(CircuitDesign::default_board_design()),
+            pins: Default::default(),
         }
     }
 
@@ -257,6 +259,7 @@ impl CircuitBoard {
             sim_lock: Default::default(),
             ordered_queue: data.ordered,
             designs,
+            pins: Default::default()
         };
         let board = Arc::new(RwLock::new(board));
 
@@ -2454,7 +2457,7 @@ impl CircuitDesignStorage {
                 .iter()
                 .map(|d| {
                     d.as_ref().map(|d| crate::io::CircuitDesignData {
-                        pin_positions: d.pin_positions.inner().clone(),
+                        pins: d.pins.clone(),
                         size: d.size,
                         decorations: d.decorations.clone(),
                     })
@@ -2475,7 +2478,7 @@ impl CircuitDesignStorage {
                             Arc::new(CircuitDesign {
                                 id: i,
                                 size: d.size,
-                                pin_positions: FixedVec::from_option_vec(d.pin_positions.clone()),
+                                pins: d.pins.clone(),
                                 decorations: d.decorations.clone(),
                             })
                         })
@@ -2535,12 +2538,21 @@ impl CircuitDesignId {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CircuitDesignPin {
+    pub id: DynStaticStr,
+    pub pos: Vec2u,
+    pub dir: InternalPinDirection,
+    pub display_dir: Option<Direction4>,
+    pub display_name: DynStaticStr
+}
+
 #[derive(Clone, Default)]
 pub struct CircuitDesign {
     pub id: usize,
 
     pub size: Vec2u,
-    pub pin_positions: FixedVec<Vec2u>,
+    pub pins: Vec<CircuitDesignPin>,
     pub decorations: Vec<Decoration>,
 }
 
@@ -2557,7 +2569,7 @@ impl CircuitDesign {
         Self {
             id: 0,
             size: 2.into(),
-            pin_positions: vec![].into(),
+            pins: vec![],
             decorations: vec![Decoration::Rect {
                 rect: Rect::from_min_size(pos2(0.0, 0.0), vec2(2.0, 2.0)),
                 rounding: Rounding::none(),

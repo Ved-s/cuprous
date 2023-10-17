@@ -36,7 +36,7 @@ pub struct CircuitInfo {
     pub pins: Box<[CircuitPinInfo]>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum InternalPinDirection {
     StateDependent { default: PinDirection },
     Inside,

@@ -19,6 +19,7 @@ Logisim-inspired logic circuits simulator
 - Separate into backend and frontend crates
 - Figure out themes
 - Proper mobile support
+- Proper errors
 
 - Remove wire with Wire tool
 - Rotate selection

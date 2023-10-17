@@ -758,6 +758,10 @@ impl State {
     pub fn queue_len(&self) -> usize {
         self.queue.lock().len()
     }
+
+    pub fn get_self_arc(&self) -> Arc<State> {
+        self.board.read().states.get(self.id).expect("this state must exist")
+    }
 }
 
 impl Drop for State {
