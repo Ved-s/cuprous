@@ -3,7 +3,7 @@ use std::{collections::HashMap, fmt::Write, ops::Deref, sync::Arc};
 use eframe::{
     egui::{
         self, CollapsingHeader, Context, FontSelection, Frame, Key, Margin, Sense, SidePanel,
-        TextStyle, Ui, WidgetText,
+        TextStyle, Ui, WidgetText, PointerButton,
     },
     epaint::{Color32, Rounding, Stroke, TextShape},
     CreationContext,
@@ -172,6 +172,10 @@ impl eframe::App for App {
 
                     let mut selected = self.selected_id.take();
                     if ui.input(|input| input.key_pressed(Key::Escape)) {
+                        selected = None;
+                    }
+
+                    if ui.input(|input| input.pointer.button_released(PointerButton::Secondary) && !input.pointer.is_decidedly_dragging()) {
                         selected = None;
                     }
 

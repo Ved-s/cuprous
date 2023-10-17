@@ -11,7 +11,7 @@ use std::{
 };
 
 use eframe::{
-    egui::{self, FontSelection, Sense, TextStyle, WidgetText},
+    egui::{self, FontSelection, Sense, TextStyle, WidgetText, PointerButton},
     epaint::{Color32, FontId, Rounding, Stroke, TextShape},
 };
 use emath::{vec2, Align2, Pos2, Rect};
@@ -498,7 +498,7 @@ impl ActiveCircuitBoard {
             if delete_request
                 || ctx
                     .egui_ctx
-                    .input(|input| input.key_pressed(egui::Key::Delete))
+                    .input(|input| input.key_pressed(egui::Key::Delete) || input.pointer.button_pressed(PointerButton::Secondary))
             {
                 let mut affected_wires = HashSet::new();
                 let drain = {
