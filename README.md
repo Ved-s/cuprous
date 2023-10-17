@@ -5,12 +5,23 @@ Logisim-inspired logic circuits simulator
 
 ### Global TODOs
 
-- [ ] Remove wire with Wire tool
-- [ ] Rotate selection
-- [ ] Circuit interactables 
+- [In progress] Place circuit boards as circuits
+- Circuit designer for circuit boards
+- Circuit interactables 
 > special circuit interfaces that can be exposed on containing circuit design and can receive user input
-- [ ] Place circuit boards as circuits
-- [ ] Circuit designer for circuit boards
+
+- Rename the project
+
+- More components (LEDs, 7-segments...)
+
+- Embed as `iframe`s
+- Some sort of plugin api
+- Separate into backend and frontend crates
+- Figure out themes
+- Proper mobile support
+
+- Remove wire with Wire tool
+- Rotate selection
 
 ![](progress_preview.png)
 
