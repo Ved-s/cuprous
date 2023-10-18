@@ -1,7 +1,6 @@
 #![allow(incomplete_features)]
 #![feature(generic_const_exprs)]
 #![feature(int_roundings)]
-#![feature(lazy_cell)]
 #![feature(thread_id_value)]
 
 use std::{

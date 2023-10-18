@@ -424,7 +424,7 @@ impl PropertyEditor {
                             }),
                     );
                 for str in self.ids_cache_remove.iter() {
-                    self.ids_cache.remove(str.deref());
+                    self.ids_cache.remove(str);
                 }
             }
             stores.push(store);
@@ -453,7 +453,7 @@ impl PropertyEditor {
 
                 let equal = props.windows(2).all(|w| w[0].1.imp().equals(w[1].1.imp()));
 
-                
+
                 ui.label(id.name.deref());
 
                 if let Some(old) = props[0].1.imp_mut().ui(ui, !equal) {
