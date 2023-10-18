@@ -12,10 +12,10 @@ use std::{
 
 use bimap::BiMap;
 use eframe::{
-    egui::{self, FontSelection, Sense, TextStyle, WidgetText},
+    egui::{self, FontSelection, Sense, TextStyle, WidgetText, Painter},
     epaint::{Color32, FontId, Rounding, Stroke, TextShape},
 };
-use emath::{pos2, vec2, Align2, Pos2, Rect};
+use emath::{pos2, vec2, Align2, Pos2, Rect, Vec2};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -51,6 +51,8 @@ pub struct CircuitBoard {
     // RwLock for blocking simulation while modifying board
     pub sim_lock: Arc<RwLock<()>>,
     ordered_queue: bool,
+
+    pub main_preview: Option<crate::circuits::board::Preview>
 }
 
 impl CircuitBoard {
@@ -65,6 +67,7 @@ impl CircuitBoard {
             ordered_queue: false,
             designs: CircuitDesignStorage::new(CircuitDesign::default_board_design()),
             pins: Default::default(),
+            main_preview: None
         }
     }
 
@@ -259,7 +262,8 @@ impl CircuitBoard {
             sim_lock: Default::default(),
             ordered_queue: data.ordered,
             designs,
-            pins: Default::default()
+            pins: Default::default(),
+            main_preview: None,
         };
         let board = Arc::new(RwLock::new(board));
 
@@ -2499,42 +2503,14 @@ pub enum Decoration {
     }, // TODO: MOAR!
 }
 
-enum CircuitDesignIdType {
-    Unresolved(usize),
-    Resolved(Option<Arc<CircuitDesign>>),
-}
-
-pub struct CircuitDesignId(RwLock<CircuitDesignIdType>);
-
-impl CircuitDesignId {
-
-    pub fn new_resolved(design: Option<Arc<CircuitDesign>>) -> Self {
-        Self(RwLock::new(CircuitDesignIdType::Resolved(design)))
-    }
-
-    pub fn new_unresolved(id: usize) -> Self {
-        Self(RwLock::new(CircuitDesignIdType::Unresolved(id)))
-    }
-
-    pub fn resolve<D>(&self, designs: impl FnOnce() -> D) -> Option<Arc<CircuitDesign>>
-    where
-        D: Deref<Target = CircuitDesignStorage>,
-    {
-        if let CircuitDesignIdType::Resolved(arc) = self.0.read().deref() {
-            return arc.clone();
+impl Decoration {
+    pub fn draw(&self, painter: &Painter, base_pos: Pos2, scale: Vec2) {
+        match self {
+            Decoration::Rect { rect, rounding, fill, stroke } => {
+                let rect = Rect::from_min_size(rect.left_top() + base_pos.to_vec2(), rect.size() * scale);
+                painter.rect(rect, *rounding, *fill, *stroke);
+            },
         }
-
-        let mut ty = self.0.write();
-        let id = match ty.deref() {
-            CircuitDesignIdType::Unresolved(id) => *id,
-            CircuitDesignIdType::Resolved(arc) => return arc.clone(),
-        };
-
-        let store = designs();
-        let arc = store.get(id);
-
-        *ty = CircuitDesignIdType::Resolved(arc.clone());
-        arc
     }
 }
 
@@ -2576,6 +2552,14 @@ impl CircuitDesign {
                 fill: Color32::from_gray(100),
                 stroke: Stroke::new(0.1, Color32::BLACK),
             }],
+        }
+    }
+
+    pub fn draw_decorations(&self, painter: &Painter, rect: Rect) {
+        let base_pos = rect.left_top();
+        let scale = rect.size() / Vec2::from(self.size.convert(|v| v as f32));
+        for decoration in self.decorations.iter() {
+            decoration.draw(painter, base_pos, scale);
         }
     }
 }

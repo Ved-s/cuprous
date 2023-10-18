@@ -1,4 +1,9 @@
-use std::{sync::Arc, time::Duration};
+use std::{
+    any::{Any, TypeId},
+    ops::{Deref, DerefMut},
+    sync::Arc,
+    time::Duration,
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -370,6 +375,30 @@ impl Circuit {
             props: self.props.save(),
         }
     }
+
+    pub fn read_imp<T: CircuitImpl, R>(&self, reader: impl FnOnce(&T) -> R) -> Option<R> {
+        let imp = self.imp.read();
+        let imp = imp.deref();
+        if TypeId::of::<T>() != imp.type_id() {
+            None
+        } else {
+            let imp = unsafe { &*(imp.deref() as *const dyn CircuitImpl as *const T) };
+            let res = reader(imp);
+            Some(res)
+        }
+    }
+
+    pub fn write_imp<T: CircuitImpl, R>(&self, writer: impl FnOnce(&mut T) -> R) -> Option<R> {
+        let mut imp = self.imp.write();
+        let ty = imp.deref().type_id();
+        if TypeId::of::<T>() != ty {
+            None
+        } else {
+            let imp = unsafe { &mut *(imp.deref_mut().deref_mut() as *mut dyn CircuitImpl as *mut T) };
+            let res = writer(imp);
+            Some(res)
+        }
+    }
 }
 
 pub struct CircuitStateContext<'a> {
@@ -438,7 +467,7 @@ impl<'a> CircuitStateContext<'a> {
 }
 
 #[allow(unused_variables)]
-pub trait CircuitImpl: Send + Sync {
+pub trait CircuitImpl: Any + Send + Sync {
     fn draw(&self, state_ctx: &CircuitStateContext, paint_ctx: &PaintContext);
 
     /// After calling this, consider all connected pins invalid
@@ -526,7 +555,7 @@ impl CircuitPreview {
         &self,
         imp: &serde_intermediate::Intermediate,
         props_data: &crate::io::CircuitPropertyStoreData,
-        boards: &BoardStorage
+        boards: &BoardStorage,
     ) -> Option<Self> {
         let imp = self.imp.load_impl_data(imp, boards)?;
         let props = imp.default_props();
@@ -582,7 +611,7 @@ pub trait CircuitPreviewImpl {
     fn load_impl_data(
         &self,
         data: &serde_intermediate::Intermediate,
-        boards: &BoardStorage
+        boards: &BoardStorage,
     ) -> Option<Box<dyn CircuitPreviewImpl>>;
     fn default_props(&self) -> CircuitPropertyStore;
 }

@@ -301,7 +301,7 @@ impl StateCollection {
 }
 
 pub struct StateParent {
-    pub parent: Arc<State>,
+    pub state: Arc<State>,
     pub circuit: usize 
 }
 

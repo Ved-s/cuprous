@@ -1,6 +1,11 @@
 use std::{collections::HashSet, ops::Deref};
 
 use bimap::BiMap;
+use eframe::{
+    egui::{TextStyle, WidgetText},
+    epaint::{Color32, Rounding, Stroke, TextShape},
+};
+use emath::pos2;
 
 use crate::{
     board::{CircuitBoard, CircuitDesign},
@@ -15,6 +20,20 @@ struct ResolvedCircuitData {
     design: Option<Arc<CircuitDesign>>,
 }
 
+impl ResolvedCircuitData {
+    fn unresolve_into(&self, unresolved: &mut UnresolvedCircuitData) {
+        if let Some(board) = &self.board {
+            unresolved.board = board.read().uid;
+        }
+        if let Some(state) = &self.state {
+            unresolved.state = state.id;
+        }
+        if let Some(design) = &self.design {
+            unresolved.design = OptionalInt::new(design.id);
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct UnresolvedCircuitData {
     board: u128,
@@ -22,11 +41,7 @@ struct UnresolvedCircuitData {
     design: OptionalInt<usize>,
 }
 impl UnresolvedCircuitData {
-    fn resolve_into(
-        &self,
-        resolved: &mut ResolvedCircuitData,
-        boards: &BoardStorage,
-    ) {
+    fn resolve_into(&self, resolved: &mut ResolvedCircuitData, boards: &BoardStorage) {
         if resolved.board.is_none() {
             resolved.board = boards.get(&self.board).cloned();
         }
@@ -64,7 +79,7 @@ impl CircuitDataModel {
 }
 
 #[derive(Default)]
-struct Circuit {
+pub struct Circuit {
     unresolved: Option<UnresolvedCircuitData>,
     resolved: ResolvedCircuitData,
 
@@ -74,17 +89,78 @@ struct Circuit {
     unresolved_inner_pins: RwLock<HashSet<usize>>,
     unresolved_outer_pins: RwLock<HashSet<usize>>,
     pins: Box<[CircuitPinInfo]>,
+    parent_error: bool,
 }
 
 // TODO: handle state destruction on remove
 impl Circuit {
     fn draw(
         data: &ResolvedCircuitData,
-        state: Option<&CircuitStateContext>,
+        ignore_state: bool,
+        parent_error: bool,
         ctx: &PaintContext,
         semi_transparent: bool,
     ) {
-        todo!()
+        let trans = if semi_transparent { 0.6 } else { 1.0 };
+
+        let draw_error = |s: &str| {
+            ctx.paint.rect(
+                ctx.rect,
+                Rounding::none(),
+                Color32::RED.gamma_multiply(0.8 * trans),
+                Stroke::new(2.0, Color32::BLACK.gamma_multiply(trans)),
+            );
+
+            let rect = ctx.rect.shrink(2.0);
+            let galley = WidgetText::from(s)
+                .into_galley(ctx.ui, Some(true), rect.width(), TextStyle::Monospace)
+                .galley;
+
+            let pos = pos2(
+                rect.left() + (rect.width() - galley.size().x) * 0.5,
+                rect.top() + (rect.height() - galley.size().y) * 0.5,
+            );
+
+            ctx.paint.add(TextShape {
+                pos,
+                galley,
+                underline: Stroke::NONE,
+                override_text_color: Some(Color32::WHITE),
+                angle: 0.0,
+            })
+        };
+
+        if parent_error {
+            draw_error("Parent error");
+            return;
+        }
+
+        let board = match &data.board {
+            Some(v) => v,
+            None => {
+                draw_error("Invalid board");
+                return;
+            }
+        };
+
+        let state = match &data.state {
+            Some(v) => Some(v),
+            None if !ignore_state => {
+                draw_error("Invalid state");
+                return;
+            }
+            None => None
+        };
+
+        let design = match &data.design {
+            Some(v) => v,
+            None => {
+                draw_error("Invalid design");
+                return;
+            }
+        };
+
+        design.draw_decorations(ctx.ui.painter(), ctx.rect);
     }
 
     fn describe_props(
@@ -185,7 +261,7 @@ impl Circuit {
 
 impl CircuitImpl for Circuit {
     fn draw(&self, state_ctx: &CircuitStateContext, paint_ctx: &PaintContext) {
-        Circuit::draw(&self.resolved, Some(state_ctx), paint_ctx, false);
+        Circuit::draw(&self.resolved, false, self.parent_error, paint_ctx, false);
     }
 
     fn create_pins(&mut self, props: &CircuitPropertyStore) -> Box<[CircuitPinInfo]> {
@@ -268,10 +344,17 @@ impl CircuitImpl for Circuit {
         }
 
         if let Some(inner_state) = &self.resolved.state {
-            *inner_state.parent.write() = Some(crate::state::StateParent {
-                parent: state.global_state.get_self_arc(),
-                circuit: state.circuit.id,
-            })
+            let mut parent = inner_state.parent.write();
+
+            if parent.is_none() {
+                *parent = Some(crate::state::StateParent {
+                    state: state.global_state.get_self_arc(),
+                    circuit: state.circuit.id,
+                })
+            }
+            else {
+                self.parent_error = true;
+            }
         }
     }
 
@@ -318,19 +401,46 @@ pub struct Preview {
     resolved: ResolvedCircuitData,
 }
 
+impl Preview {
+    fn resolve_data(&self, create_state: bool) -> ResolvedCircuitData {
+        match (&self.unresolved, &self.resolved.board) {
+            // Try selecting current circuit design
+            (Some(unresolved), Some(board)) =>
+            {
+                let mut resolved = self.resolved.clone();
+                if unresolved.design.is_none() && self.resolved.design.is_none() {
+                    resolved.design = Some(board.read().designs.current());
+                }
+                if create_state {
+                    resolved.state = Some(board.read().states.create_state(board.clone()));
+                }
+
+                resolved
+            }
+            _ => self.resolved.clone(),
+        }
+    }
+}
+
 impl CircuitPreviewImpl for Preview {
     fn type_name(&self) -> DynStaticStr {
         "board".into()
     }
 
     fn draw_preview(&self, _: &CircuitPropertyStore, ctx: &PaintContext, in_world: bool) {
-        Circuit::draw(&self.resolved, None, ctx, in_world)
+        Circuit::draw(&self.resolve_data(false), true, false, ctx, in_world);
     }
 
     fn create_impl(&self) -> Box<dyn CircuitImpl> {
+        let resolved = self.resolve_data(true);
+        let unresolved = self.unresolved.map(|mut u| {
+            resolved.unresolve_into(&mut u);
+            u
+        });
+
         Box::new(Circuit {
-            resolved: self.resolved.clone(),
-            unresolved: self.unresolved,
+            resolved,
+            unresolved,
             ..Circuit::default()
         })
     }
