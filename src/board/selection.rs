@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use eframe::{
-    egui::{self, Sense},
+    egui::{self, Sense, PointerButton},
     epaint::{Color32, Rounding, Stroke},
 };
 use emath::Rect;
@@ -180,6 +180,14 @@ impl Selection {
 
                 self.change.clear();
             }
+
+            if self.start_pos.is_none() && ctx.ui.input(|input| {
+                input.pointer.button_released(PointerButton::Secondary)
+                    && !input.pointer.is_decidedly_dragging()
+            }) {
+                self.clear_selection();
+                return;
+            }
         }
 
         let mut possible_points = HashSet::new();
@@ -247,6 +255,13 @@ impl Selection {
                 }
             }
         }
+    }
+
+    pub fn clear_selection(&mut self) {
+        self.rect = None;
+
+        self.selection.clear();
+        self.change.clear();
     }
 
     pub fn update_selection(&mut self, ctx: &PaintContext) {
