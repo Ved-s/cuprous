@@ -2,7 +2,7 @@ name: Rust WASM Page
 
 on:
   push:
-    branches: [ "master", "update_build" ]
+    branches: [ "master" ]
   pull_request:
     branches: [ "master" ]
   workflow_dispatch:
