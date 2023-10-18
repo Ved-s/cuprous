@@ -3,16 +3,18 @@ use std::{any::TypeId, collections::HashSet, f32::consts::TAU, ops::Deref, sync:
 use eframe::{
     egui::{
         panel::{self, PanelState},
-        FontSelection, Grid, Id, InnerResponse, Key, Label, Margin, PointerButton, Response, Sense,
-        SidePanel, TextStyle, Ui, Widget, WidgetText,
+        FontSelection, Grid, Id, InnerResponse, Key, Label, Margin, PointerButton, Response,
+        Sense, SidePanel, TextStyle, Ui, Widget, WidgetInfo, WidgetText,
+        WidgetType,
     },
     epaint::{Color32, PathShape, Rounding, Stroke, TextShape},
 };
 use emath::{pos2, vec2, Rect, Rot2, Vec2};
 
 use crate::{
+    app::SelectedItemId,
     circuits::props::{CircuitProperty, CircuitPropertyImpl, CircuitPropertyStore},
-    DynStaticStr, PaintContext, RwLock, app::SelectedItemId,
+    DynStaticStr, PaintContext, RwLock,
 };
 
 pub enum InventoryItemGroup {
@@ -78,7 +80,6 @@ impl Inventory<'_> {
         current_index: Option<usize>,
         current_sub_index: Option<usize>,
     ) -> (Option<usize>, Option<usize>) {
-
         if ui.ctx().wants_keyboard_input() {
             return (current_index, current_sub_index);
         }
@@ -451,7 +452,6 @@ impl PropertyEditor {
 
                 let equal = props.windows(2).all(|w| w[0].1.imp().equals(w[1].1.imp()));
 
-                
                 ui.label(id.name.deref());
 
                 if let Some(old) = props[0].1.imp_mut().ui(ui, !equal) {
@@ -681,8 +681,13 @@ impl CollapsibleSidePanel {
 
             let clip = ui.clip_rect();
             let full_rect = match side {
-                panel::Side::Left => Rect::from_min_size(pos2(0.0, 0.0), vec2(rect.right(), clip.height())),
-                panel::Side::Right => Rect::from_min_size(pos2(rect.left(), 0.0), vec2(clip.width() - rect.left(), clip.height())),
+                panel::Side::Left => {
+                    Rect::from_min_size(pos2(0.0, 0.0), vec2(rect.right(), clip.height()))
+                }
+                panel::Side::Right => Rect::from_min_size(
+                    pos2(rect.left(), 0.0),
+                    vec2(clip.width() - rect.left(), clip.height()),
+                ),
             };
 
             let panel = if animation > 0.0 {
@@ -712,5 +717,101 @@ impl CollapsibleSidePanel {
             }
         })
         .inner
+    }
+}
+
+#[must_use = "You should put this widget in an ui with `ui.add(widget);`"]
+pub struct DoubleSelectableLabel {
+    selected: bool,
+    outline: bool,
+    text: WidgetText,
+    hover_color: Color32,
+    fill_color: Option<Color32>,
+    outline_stroke: Stroke,
+}
+
+impl DoubleSelectableLabel {
+    pub fn new(
+        selected: bool,
+        outline: bool,
+        text: impl Into<WidgetText>,
+        hover_color: Color32,
+        fill_color: Option<Color32>,
+        outline_stroke: Stroke,
+    ) -> Self {
+        Self {
+            selected,
+            outline,
+            text: text.into(),
+            hover_color,
+            fill_color,
+            outline_stroke,
+        }
+    }
+}
+
+impl Widget for DoubleSelectableLabel {
+    fn ui(self, ui: &mut Ui) -> Response {
+        let Self {
+            selected,
+            text,
+            outline,
+            hover_color,
+            fill_color,
+            outline_stroke,
+        } = self;
+
+        let button_padding = ui.spacing().button_padding;
+        let total_extra = button_padding + button_padding;
+
+        let wrap_width = ui.available_width() - total_extra.x;
+        let text = text.into_galley(ui, None, wrap_width, TextStyle::Button);
+
+        let mut desired_size = total_extra + text.size();
+        desired_size.y = desired_size.y.max(ui.spacing().interact_size.y);
+        let (rect, response) = ui.allocate_at_least(desired_size, Sense::click());
+        response.widget_info(|| {
+            WidgetInfo::selected(WidgetType::SelectableLabel, selected, text.text())
+        });
+
+        if ui.is_rect_visible(response.rect) {
+            let text_pos = ui
+                .layout()
+                .align_size_within_rect(text.size(), rect.shrink2(button_padding))
+                .min;
+
+            let visuals = ui.style().interact_selectable(&response, selected);
+
+            let hover = response.hovered() || response.highlighted() || response.has_focus();
+
+            let fill = if selected {
+                fill_color.unwrap_or(visuals.weak_bg_fill)
+            } else if hover {
+                hover_color
+            } else {
+                Color32::TRANSPARENT
+            };
+
+            let stroke = if outline {
+                outline_stroke
+            } else {
+                Stroke::NONE
+            };
+
+            if fill != Color32::default() || stroke != Stroke::default() {
+                let rect = rect.expand(visuals.expansion);
+
+                ui.painter().rect(
+                    rect,
+                    visuals.rounding,
+                    fill,
+                    stroke,
+                );
+            }
+
+            text.paint_with_visuals(ui.painter(), text_pos, &visuals);
+        }
+
+        response
     }
 }

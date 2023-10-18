@@ -379,7 +379,7 @@ impl Circuit {
     pub fn read_imp<T: CircuitImpl, R>(&self, reader: impl FnOnce(&T) -> R) -> Option<R> {
         let imp = self.imp.read();
         let imp = imp.deref();
-        if TypeId::of::<T>() != imp.type_id() {
+        if TypeId::of::<T>() != imp.deref().type_id() {
             None
         } else {
             let imp = unsafe { &*(imp.deref() as *const dyn CircuitImpl as *const T) };
@@ -390,7 +390,7 @@ impl Circuit {
 
     pub fn write_imp<T: CircuitImpl, R>(&self, writer: impl FnOnce(&mut T) -> R) -> Option<R> {
         let mut imp = self.imp.write();
-        let ty = imp.deref().type_id();
+        let ty = imp.deref().deref().type_id();
         if TypeId::of::<T>() != ty {
             None
         } else {
@@ -482,7 +482,7 @@ pub trait CircuitImpl: Any + Send + Sync {
     fn init_state(&self, state_ctx: &CircuitStateContext) {}
 
     /// Called once when placed or loaded
-    fn postload(&mut self, state: &CircuitStateContext, boards: &BoardStorage) {}
+    fn postload(&mut self, state: &CircuitStateContext, boards: &BoardStorage, just_placed: bool) {}
 
     /// Called after `Self::update` to determine next update timestamp
     fn update_interval(&self, state_ctx: &CircuitStateContext) -> Option<Duration> {
@@ -593,7 +593,7 @@ impl CircuitPreview {
         }
     }
 
-    pub fn prop_changed(&self) {
+    pub fn redescribe(&self) {
         *self.description.write() = self.imp.describe(&self.props);
     }
 

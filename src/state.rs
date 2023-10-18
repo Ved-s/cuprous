@@ -593,7 +593,7 @@ impl State {
         let state_ctx = CircuitStateContext::new(self, circuit);
         let mut imp = circuit.imp.write();
         imp.init_state(&state_ctx);
-        imp.postload(&state_ctx, boards);
+        imp.postload(&state_ctx, boards, true);
     }
 
     fn update_wire_now(&self, wire: &Wire, skip_state_ckeck: bool) {

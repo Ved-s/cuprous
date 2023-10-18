@@ -12,7 +12,7 @@ use std::{
 
 use bimap::BiMap;
 use eframe::{
-    egui::{self, FontSelection, Sense, TextStyle, WidgetText, Painter},
+    egui::{self, FontSelection, Painter, Sense, TextStyle, WidgetText},
     epaint::{Color32, FontId, Rounding, Stroke, TextShape},
 };
 use emath::{pos2, vec2, Align2, Pos2, Rect, Vec2};
@@ -21,24 +21,39 @@ use serde::{Deserialize, Serialize};
 use crate::{
     circuits::{
         props::{CircuitPropertyImpl, CircuitPropertyStore},
-        Circuit, CircuitNode, CircuitPin, CircuitPinId, CircuitPreview, CircuitStateContext, InternalPinDirection,
+        Circuit, CircuitNode, CircuitPin, CircuitPinId, CircuitPreview, CircuitStateContext,
+        InternalPinDirection,
     },
     containers::{Chunks2D, ChunksLookaround, FixedVec},
     state::{State, StateCollection, WireState},
     unwrap_option_or_continue, unwrap_option_or_return,
     vector::{IsZero, Vec2f, Vec2i, Vec2isize, Vec2u},
     wires::{FoundWireNode, TileWires, Wire, WireNode, WirePart, WirePoint},
-    ArcString, Direction2, Direction4, PaintContext, PastePreview, RwLock, Screen, DynStaticStr,
+    ArcString, Direction2, Direction4, DynStaticStr, PaintContext, PastePreview, RwLock, Screen,
 };
 
 use self::selection::{SelectedWorldObject, Selection};
 
 pub mod selection;
 
-pub type BoardStorage = HashMap<u128, Arc<RwLock<CircuitBoard>>>;
+pub struct StoredCircuitBoard {
+    pub board: Arc<RwLock<CircuitBoard>>,
+    pub preview: Option<Arc<CircuitPreview>>,
+}
+
+impl StoredCircuitBoard {
+    pub fn new(board: Arc<RwLock<CircuitBoard>>) -> Self {
+        Self {
+            board,
+            preview: None,
+        }
+    }
+}
+
+pub type BoardStorage = HashMap<u128, StoredCircuitBoard>;
 
 pub struct CircuitBoard {
-    pub name: String,
+    pub name: ArcString,
     pub uid: u128,
 
     pub wires: FixedVec<Wire>,
@@ -46,13 +61,11 @@ pub struct CircuitBoard {
     pub states: StateCollection,
 
     pub designs: CircuitDesignStorage,
-    pub pins: BiMap<Arc<str>, usize>,
+    pub pins: RwLock<BiMap<Arc<str>, usize>>,
 
     // RwLock for blocking simulation while modifying board
     pub sim_lock: Arc<RwLock<()>>,
     ordered_queue: bool,
-
-    pub main_preview: Option<crate::circuits::board::Preview>
 }
 
 impl CircuitBoard {
@@ -67,7 +80,6 @@ impl CircuitBoard {
             ordered_queue: false,
             designs: CircuitDesignStorage::new(CircuitDesign::default_board_design()),
             pins: Default::default(),
-            main_preview: None
         }
     }
 
@@ -181,7 +193,7 @@ impl CircuitBoard {
     pub fn save(&self, sim_lock: bool) -> crate::io::CircuitBoardData {
         let sim_lock = sim_lock.then(|| self.sim_lock.write());
         let data = crate::io::CircuitBoardData {
-            name: self.name.clone(),
+            name: self.name.get_str().deref().into(),
             uid: self.uid,
             wires: self
                 .wires
@@ -254,7 +266,7 @@ impl CircuitBoard {
         let designs = CircuitDesignStorage::load(&data.designs);
 
         let board = CircuitBoard {
-            name: data.name.clone(),
+            name: data.name.as_str().into(),
             uid: data.uid,
             wires,
             circuits,
@@ -263,7 +275,6 @@ impl CircuitBoard {
             ordered_queue: data.ordered,
             designs,
             pins: Default::default(),
-            main_preview: None,
         };
         let board = Arc::new(RwLock::new(board));
 
@@ -298,6 +309,89 @@ impl CircuitBoard {
     #[cfg(not(feature = "single_thread"))]
     pub fn activate(&self) {
         self.states.activate();
+    }
+
+    pub fn regenerate_temp_design(&mut self) {
+        type Pin = crate::circuits::pin::Circuit;
+
+        let design = self.designs.current_mut();
+
+        let mut top_pins = 0;
+        let mut left_pins = 0;
+        let mut right_pins = 0;
+        let mut bottom_pins = 0;
+
+        design.pins.clear();
+
+        for (id_str, id) in self.pins.read().iter() {
+            if let Some(circuit) = self.circuits.get(*id) {
+                circuit.read_imp(|p: &Pin| {
+                    let pos = match p.dir {
+                        Direction4::Up => {
+                            bottom_pins += 1;
+                            [bottom_pins, u32::MAX]
+                        }
+                        Direction4::Left => {
+                            right_pins += 1;
+                            [u32::MAX, right_pins]
+                        }
+                        Direction4::Down => {
+                            top_pins += 1;
+                            [top_pins, 0]
+                        }
+                        Direction4::Right => {
+                            left_pins += 1;
+                            [0, left_pins]
+                        }
+                    };
+
+                    let dir = match p.ty {
+                        crate::circuits::pin::PinType::Pico => InternalPinDirection::Inside,
+                        crate::circuits::pin::PinType::Cipo => InternalPinDirection::Outside,
+                        crate::circuits::pin::PinType::Controlled => {
+                            InternalPinDirection::StateDependent {
+                                default: crate::circuits::PinDirection::Inside,
+                            }
+                        }
+                    };
+
+                    design.pins.push(CircuitDesignPin {
+                        id: id_str.clone().into(),
+                        pos: pos.into(),
+                        dir,
+                        display_dir: Some(p.dir.inverted()),
+                        display_name: circuit
+                            .props
+                            .read("name", |s: &ArcString| s.get_arc().into())
+                            .unwrap_or("".into()),
+                    })
+                });
+            }
+        }
+
+        if design.pins.is_empty() {
+            *design = CircuitDesign::default_board_design();
+        } else {
+            let size = [top_pins.max(bottom_pins) + 2, left_pins.max(right_pins) + 2].into();
+            design.size = size;
+
+            for p in design.pins.iter_mut() {
+                if p.pos.x() == u32::MAX {
+                    *p.pos.x_mut() = size.x() - 1;
+                }
+                if p.pos.y() == u32::MAX {
+                    *p.pos.y_mut() = size.y() - 1;
+                }
+            }
+
+            design.decorations.clear();
+            design.decorations.push(Decoration::Rect {
+                rect: Rect::from_min_size(pos2(0.5, 0.5), size.convert(|v| v as f32 - 1.0).into()),
+                rounding: Rounding::none(),
+                fill: Color32::from_gray(100),
+                stroke: Stroke::new(0.1, Color32::BLACK),
+            })
+        }
     }
 }
 
@@ -2506,10 +2600,16 @@ pub enum Decoration {
 impl Decoration {
     pub fn draw(&self, painter: &Painter, base_pos: Pos2, scale: Vec2) {
         match self {
-            Decoration::Rect { rect, rounding, fill, stroke } => {
-                let rect = Rect::from_min_size(rect.left_top() + base_pos.to_vec2(), rect.size() * scale);
+            Decoration::Rect {
+                rect,
+                rounding,
+                fill,
+                stroke,
+            } => {
+                let rect =
+                    Rect::from_min_size((rect.left_top().to_vec2() * scale + base_pos.to_vec2()).to_pos2(), rect.size() * scale);
                 painter.rect(rect, *rounding, *fill, *stroke);
-            },
+            }
         }
     }
 }
@@ -2520,7 +2620,7 @@ pub struct CircuitDesignPin {
     pub pos: Vec2u,
     pub dir: InternalPinDirection,
     pub display_dir: Option<Direction4>,
-    pub display_name: DynStaticStr
+    pub display_name: DynStaticStr,
 }
 
 #[derive(Clone, Default)]

@@ -11,12 +11,14 @@ use eframe::{
 use emath::{pos2, vec2, Pos2, Rect, Vec2};
 
 use crate::{
-    board::{ActiveCircuitBoard, CircuitBoard, SelectedItem, BoardStorage},
-    circuits::{self, props::CircuitPropertyImpl, CircuitPreview, CircuitPreviewImpl, CircuitStateContext},
+    board::{ActiveCircuitBoard, BoardStorage, CircuitBoard, SelectedItem, StoredCircuitBoard},
+    circuits::{
+        self, props::{CircuitPropertyImpl, CircuitPropertyStore}, CircuitPreview, CircuitPreviewImpl, CircuitStateContext,
+    },
     time::Instant,
     ui::{
-        CollapsibleSidePanel, Inventory, InventoryItem, InventoryItemGroup, PropertyEditor,
-        PropertyStoreItem,
+        CollapsibleSidePanel, DoubleSelectableLabel, Inventory, InventoryItem, InventoryItemGroup,
+        PropertyEditor, PropertyStoreItem,
     },
     vector::{Vec2f, Vector},
     BasicLoadingContext, Direction4, DynStaticStr, PaintContext, PanAndZoom, PastePreview, RwLock,
@@ -30,6 +32,7 @@ pub enum SelectedItemId {
     Selection,
     Paste,
     Circuit(DynStaticStr),
+    Board(u128),
 }
 
 pub struct App {
@@ -112,7 +115,7 @@ impl eframe::App for App {
                 &BasicLoadingContext {
                     previews: &self.circuit_previews,
                 },
-                &self.boards
+                &self.boards,
             )));
             self.selected_id = SelectedItemId::Paste;
         }
@@ -124,6 +127,14 @@ impl eframe::App for App {
                 let board = self.board.board.clone();
                 let state = self.board.state.clone();
                 self.board = ActiveCircuitBoard::new(board, state);
+
+            } else if ctx.input(|input| input.key_pressed(Key::F7)) {
+                self.board.board.write().regenerate_temp_design();
+                if let Some(board) = self.boards.get(&self.board.board.read().uid) {
+                    if let Some(preview) = &board.preview {
+                        preview.redescribe();
+                    }
+                }
             } else if ctx.input(|input| input.key_pressed(Key::F4)) {
                 let state = &self.board.state;
                 state.reset();
@@ -136,6 +147,16 @@ impl eframe::App for App {
             .show(ctx, |ui| {
                 self.main_update(ui, ctx);
 
+                if let SelectedItemId::Board(board_id) = self.selected_id {
+                    if let Some(board) = self.boards.get_mut(&board_id) {
+                        if board.preview.is_none() {
+                            let preview = crate::circuits::board::Preview::new_from_board(board.board.clone());
+                            let preview = CircuitPreview::new(Box::new(preview), CircuitPropertyStore::default());
+                            board.preview = Some(Arc::new(preview));
+                        }
+                    }
+                } 
+
                 let left_panel_rect = self.components_ui(ui);
 
                 if let SelectedItem::Circuit(p) = self.selected_item() {
@@ -143,7 +164,7 @@ impl eframe::App for App {
                     let changed = App::properties_ui(&mut self.props_ui, ui, Some(props))
                         .is_some_and(|v| !v.is_empty());
                     if changed {
-                        p.prop_changed();
+                        p.redescribe();
                     }
                 } else {
                     let selection = self.board.selection.borrow();
@@ -278,6 +299,7 @@ impl eframe::App for App {
                         "Paint time: {paint_time:.02}ms\n\
                          [F9] Debug: {debug}\n\
                          [F8] Board reload\n\
+                         [F7] Regenerate design\n\
                          [F4] State reset\n\
                          [R]  Rotate\n\
                          [F]  Flip\n\
@@ -292,7 +314,7 @@ impl eframe::App for App {
     }
 
     fn save(&mut self, _storage: &mut dyn eframe::Storage) {
-        let guards: Vec<_> = self.boards.values().map(|b| b.read()).collect();
+        let guards: Vec<_> = self.boards.values().map(|b| b.board.read()).collect();
         let locks: Vec<_> = guards.iter().map(|g| g.sim_lock.write()).collect();
         let data: Vec<_> = guards.iter().map(|g| g.save(false)).collect();
 
@@ -389,7 +411,7 @@ impl App {
                     if let Ok(data) = ron::from_str::<crate::io::CircuitBoardData>(&main_board) {
                         let board = CircuitBoard::load(&data, &ctx);
                         let mut board_guard = board.write();
-                        if board_guard.name.is_empty() {
+                        if board_guard.name.get_str().is_empty() {
                             board_guard.name = "main".into();
                         }
                         drop(board_guard);
@@ -403,14 +425,18 @@ impl App {
             }
         };
 
-        let boards = HashMap::from_iter(boards.into_iter().map(|b| (b.read().uid, b.clone())));
+        let boards = HashMap::from_iter(
+            boards
+                .into_iter()
+                .map(|b| (b.read().uid, StoredCircuitBoard::new(b.clone()))),
+        );
 
         for board in boards.values() {
-            let board = board.read();
+            let board = board.board.read();
             for state in board.states.states().read().iter() {
                 for circuit in board.circuits.iter() {
                     let csc = CircuitStateContext::new(state, circuit);
-                    circuit.imp.write().postload(&csc, &boards);
+                    circuit.imp.write().postload(&csc, &boards, false);
                 }
             }
         }
@@ -425,13 +451,16 @@ impl App {
         if boards.is_empty() {
             let mut board = CircuitBoard::new();
             board.name = "main".into();
-            boards.insert(board.uid, Arc::new(RwLock::new(board)));
+            boards.insert(
+                board.uid,
+                StoredCircuitBoard::new(Arc::new(RwLock::new(board))),
+            );
         }
 
         #[cfg(not(feature = "single_thread"))]
         {
             for board in boards.values() {
-                board.read().activate();
+                board.board.read().activate();
             }
         }
 
@@ -454,7 +483,12 @@ impl App {
             #[cfg(not(feature = "wasm"))]
             last_win_size: Default::default(),
             board: ActiveCircuitBoard::new_main(
-                boards.values().next().expect("Board list cannot be empty").clone(),
+                boards
+                    .values()
+                    .next()
+                    .expect("Board list cannot be empty")
+                    .board
+                    .clone(),
             ),
             debug: false,
 
@@ -649,7 +683,8 @@ impl App {
             }
         }
 
-        self.board.update(&ctx, selected_item, self.debug, &self.boards);
+        self.board
+            .update(&ctx, selected_item, self.debug, &self.boards);
     }
 
     fn change_selected_props<T: CircuitPropertyImpl>(
@@ -660,7 +695,7 @@ impl App {
     ) {
         if let SelectedItem::Circuit(pre) = selected_item {
             pre.props.write(id, f);
-            pre.prop_changed();
+            pre.redescribe();
         } else {
             let selected_circuits: Vec<_> = self
                 .board
@@ -708,6 +743,13 @@ impl App {
                 Some(p) => SelectedItem::Circuit(p.clone()),
                 None => SelectedItem::None,
             },
+            SelectedItemId::Board(id) => {
+                let o = self.boards.get(id).and_then(|b| b.preview.clone());
+                match o {
+                    Some(p) => SelectedItem::Circuit(p),
+                    None => SelectedItem::None,
+                }
+            }
         }
     }
 
@@ -826,13 +868,13 @@ impl App {
                         let mut drawn_renamer = false;
                         let no_delete = self.boards.len() <= 1;
                         for board in self.boards.values() {
-                            let board_guard = board.read();
+                            let board_guard = board.board.read();
 
                             if Some(board_guard.uid) == rename && !drawn_renamer {
                                 drop(board_guard);
-                                let mut board_guard = board.write();
+                                let mut board_guard = board.board.write();
 
-                                let res = TextEdit::singleline(&mut board_guard.name)
+                                let res = TextEdit::singleline(board_guard.name.get_mut())
                                     .id(renamer_id)
                                     .show(ui);
                                 drawn_renamer = true;
@@ -843,11 +885,25 @@ impl App {
                                     });
                                 }
                             } else {
-                                // TODO: two-state selectable label, when board is active and when board is selected as placeable circuit
-                                let selected = board_guard.uid == self.board.board.read().uid;
-                                let resp = ui.selectable_label(selected, &board_guard.name);
+                                let selected =
+                                    self.selected_id == SelectedItemId::Board(board_guard.uid);
+                                let active = board_guard.uid == self.board.board.read().uid;
+
+                                let resp = ui.add(DoubleSelectableLabel::new(
+                                    selected,
+                                    active,
+                                    board_guard.name.get_str().deref(),
+                                    Color32::WHITE.gamma_multiply(0.3),
+                                    None,
+                                    Stroke::new(1.0, Color32::LIGHT_GREEN),
+                                ));
+
                                 if resp.clicked_by(egui::PointerButton::Primary) && !selected {
-                                    self.board = ActiveCircuitBoard::new_main(board.clone());
+                                    self.selected_id = SelectedItemId::Board(board_guard.uid);
+                                }
+
+                                if resp.double_clicked_by(egui::PointerButton::Primary) && !active {
+                                    self.board = ActiveCircuitBoard::new_main(board.board.clone());
                                 }
 
                                 resp.context_menu(|ui| {
@@ -891,7 +947,8 @@ impl App {
                             let uid = board.uid;
                             board.name = "New board".into();
                             let board = Arc::new(RwLock::new(board));
-                            self.boards.insert(uid, board.clone());
+                            self.boards
+                                .insert(uid, StoredCircuitBoard::new(board.clone()));
                             self.board = ActiveCircuitBoard::new_main(board);
 
                             // HACK: widget must exist before `request_focus` can be called on its id, panics otherwise
@@ -908,13 +965,9 @@ impl App {
                         if let Some(uid) = queued_deletion {
                             self.boards.remove(&uid);
                             if self.board.board.read().uid == uid {
-                                let board = self
-                                    .boards
-                                    .values()
-                                    .next()
-                                    .expect("Boards must exist!")
-                                    .clone();
-                                self.board = ActiveCircuitBoard::new_main(board);
+                                let board =
+                                    self.boards.values().next().expect("Boards must exist!");
+                                self.board = ActiveCircuitBoard::new_main(board.board.clone());
                             }
                         }
                     });

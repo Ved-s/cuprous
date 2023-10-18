@@ -12,14 +12,14 @@ use crate::{circuits::*, describe_directional_circuit, unwrap_option_or_break};
 use super::props::CircuitPropertyImpl;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ControlPinPosition {
+pub enum ControlPinPosition {
     Left,
     Behind,
     Right,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PinType {
+pub enum PinType {
     Pico, // Parent Input, Child Output
     Cipo, // Child Input, Parent Output
     Controlled,
@@ -51,17 +51,17 @@ impl InternalCircuitState for State {
     }
 }
 
-struct Circuit {
-    dir: Direction4,
-    ty: PinType,
-    cpos: ControlPinPosition,
+pub struct Circuit {
+    pub dir: Direction4,
+    pub ty: PinType,
+    pub cpos: ControlPinPosition,
 
     pin: CircuitPinInfo,
     ctl: Option<CircuitPinInfo>,
 }
 
 impl Circuit {
-    const DEFAULT_DIR: Direction4 = Direction4::Right;
+    pub const DEFAULT_DIR: Direction4 = Direction4::Right;
 
     fn new() -> Self {
         let description =
@@ -399,14 +399,14 @@ impl CircuitImpl for Circuit {
             .map(|s| Box::new(s) as Box<dyn InternalCircuitState>)
     }
 
-    fn postload(&mut self, state: &CircuitStateContext, _: &BoardStorage) {
+    fn postload(&mut self, state: &CircuitStateContext, _: &BoardStorage, _: bool) {
         let pos = state.circuit.pos;
         let hex_x = format!("{:x}", pos.x());
         let hex_y = format!("{:x}", pos.x());
         let uid = format!("{:x}:{:x}:{}{}", hex_x.len(), hex_y.len(), hex_x, hex_y);
 
-        let mut board = state.global_state.board.write();
-        board.pins.insert(uid.into(), state.circuit.id);
+        let board = state.global_state.board.read();
+        board.pins.write().insert(uid.into(), state.circuit.id);
     }
 }
 

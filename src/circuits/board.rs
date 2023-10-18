@@ -43,7 +43,7 @@ struct UnresolvedCircuitData {
 impl UnresolvedCircuitData {
     fn resolve_into(&self, resolved: &mut ResolvedCircuitData, boards: &BoardStorage) {
         if resolved.board.is_none() {
-            resolved.board = boards.get(&self.board).cloned();
+            resolved.board = boards.get(&self.board).map(|b| b.board.clone());
         }
 
         if let Some(board) = &resolved.board {
@@ -149,7 +149,7 @@ impl Circuit {
                 draw_error("Invalid state");
                 return;
             }
-            None => None
+            None => None,
         };
 
         let design = match &data.design {
@@ -207,7 +207,8 @@ impl Circuit {
 
         fn resolve(data: &ResolvedCircuitData, inner: usize) -> Option<usize> {
             let board = data.board.as_ref()?.read();
-            let str_id = board.pins.get_by_right(&inner)?;
+            let pins = board.pins.read();
+            let str_id = pins.get_by_right(&inner)?;
             let id = data
                 .design
                 .as_ref()?
@@ -242,7 +243,8 @@ impl Circuit {
         fn resolve(data: &ResolvedCircuitData, outer: usize) -> Option<usize> {
             let str_id = data.design.as_ref()?.pins.get(outer)?.id.deref();
             let board = data.board.as_ref()?.read();
-            let id = board.pins.get_by_left(str_id)?;
+            let pins = board.pins.read();
+            let id = pins.get_by_left(str_id)?;
             Some(*id)
         }
 
@@ -260,7 +262,7 @@ impl Circuit {
 }
 
 impl CircuitImpl for Circuit {
-    fn draw(&self, state_ctx: &CircuitStateContext, paint_ctx: &PaintContext) {
+    fn draw(&self, _: &CircuitStateContext, paint_ctx: &PaintContext) {
         Circuit::draw(&self.resolved, false, self.parent_error, paint_ctx, false);
     }
 
@@ -338,7 +340,7 @@ impl CircuitImpl for Circuit {
         self.resolved.design.as_ref().map_or(2.into(), |d| d.size)
     }
 
-    fn postload(&mut self, state: &CircuitStateContext, boards: &BoardStorage) {
+    fn postload(&mut self, state: &CircuitStateContext, boards: &BoardStorage, _: bool) {
         if let Some(unresolved) = &self.unresolved {
             unresolved.resolve_into(&mut self.resolved, boards);
         }
@@ -351,8 +353,7 @@ impl CircuitImpl for Circuit {
                     state: state.global_state.get_self_arc(),
                     circuit: state.circuit.id,
                 })
-            }
-            else {
+            } else {
                 self.parent_error = true;
             }
         }
@@ -403,12 +404,11 @@ pub struct Preview {
 
 impl Preview {
     fn resolve_data(&self, create_state: bool) -> ResolvedCircuitData {
-        match (&self.unresolved, &self.resolved.board) {
+        match &self.resolved.board {
             // Try selecting current circuit design
-            (Some(unresolved), Some(board)) =>
-            {
+            Some(board) => {
                 let mut resolved = self.resolved.clone();
-                if unresolved.design.is_none() && self.resolved.design.is_none() {
+                if !self.unresolved.as_ref().is_some_and(|u| u.design.is_some()) && self.resolved.design.is_none() {
                     resolved.design = Some(board.read().designs.current());
                 }
                 if create_state {
@@ -418,6 +418,17 @@ impl Preview {
                 resolved
             }
             _ => self.resolved.clone(),
+        }
+    }
+
+    pub fn new_from_board(board: Arc<RwLock<CircuitBoard>>) -> Self {
+        Self {
+            unresolved: None,
+            resolved: ResolvedCircuitData {
+                board: Some(board),
+                state: None,
+                design: None,
+            },
         }
     }
 }
@@ -464,14 +475,14 @@ impl CircuitPreviewImpl for Preview {
     }
 
     fn default_props(&self) -> CircuitPropertyStore {
-        todo!()
+        CircuitPropertyStore::default()
     }
 
     fn display_name(&self) -> DynStaticStr {
-        todo!()
+        self.resolved.board.as_ref().map(|b| b.read().name.get_arc().into()).unwrap_or("Circuit board".into())
     }
 
     fn describe(&self, props: &CircuitPropertyStore) -> DynCircuitDescription {
-        Circuit::describe_props(&self.resolved, props)
+        Circuit::describe_props(&self.resolve_data(false), props)
     }
 }
