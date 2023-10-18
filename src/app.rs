@@ -2,8 +2,8 @@ use std::{collections::HashMap, fmt::Write, ops::Deref, sync::Arc};
 
 use eframe::{
     egui::{
-        self, CollapsingHeader, Context, FontSelection, Frame, Key, Margin, Sense, SidePanel,
-        TextStyle, Ui, WidgetText,
+        self, CollapsingHeader, Context, FontSelection, Frame, Key, Margin, PointerButton, Sense,
+        SidePanel, TextStyle, Ui, WidgetText,
     },
     epaint::{Color32, Rounding, Stroke, TextShape},
     CreationContext,
@@ -171,8 +171,14 @@ impl eframe::App for App {
                     let mut ui = ui.child_ui(rect, *ui.layout());
 
                     let mut selected = self.selected_id.take();
-                    if ui.input(|input| input.key_pressed(Key::Escape)) {
+                    if ui.input(|input| input.key_pressed(Key::Escape))
+                        || ui.input(|input| {
+                            input.pointer.button_released(PointerButton::Secondary)
+                                && !input.pointer.is_decidedly_dragging()
+                        })
+                    {
                         selected = None;
+                        self.board.selection.borrow_mut().clear_selection();
                     }
 
                     let inv_resp = ui.add(Inventory {
