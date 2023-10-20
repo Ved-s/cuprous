@@ -4,17 +4,13 @@ use serde::{Deserialize, Serialize};
 use serde_intermediate::Intermediate;
 
 use crate::{
-    circuits::{PinDirection, CircuitPreview},
+    circuits::PinDirection,
     state::{UpdateTask, WireState},
-    vector::{Vec2i, Vec2u}, DynStaticStr, Direction2, board::{Decoration, CircuitDesignPin},
+    vector::{Vec2i, Vec2u}, DynStaticStr, Direction2, board::{Decoration, CircuitDesignPin, CircuitDesignStorage, CircuitDesign}, random_u128,
 };
 
 #[cfg(all(not(web_sys_unstable_apis), feature = "wasm"))]
 pub static GLOBAL_CLIPBOARD: crate::Mutex<Option<crate::io::CopyPasteData>> = crate::Mutex::new(None); 
-
-pub trait LoadingContext {
-    fn get_circuit_preview<'a>(&'a self, ty: &str) -> Option<&'a CircuitPreview>;
-}
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct NamedCircuitPinIdData {
@@ -91,12 +87,19 @@ pub struct CircuitBoardData {
     #[serde(default)]
     pub name: String,
 
-    #[serde(default = "rand::random")]
+    #[serde(default = "random_u128")]
     pub uid: u128,
 
+    #[serde(default)]
     pub wires: Vec<Option<WireData>>,
+
+    #[serde(default)]
     pub circuits: Vec<Option<CircuitData>>,
+
+    #[serde(default)]
     pub states: Vec<Option<StateData>>,
+
+    #[serde(default = "default_design")]
     pub designs: CircuitDesignStoreData,
 
     #[serde(default)]
@@ -156,4 +159,8 @@ fn is_unit(v: &Intermediate) -> bool {
 
 fn is_false(v: &bool) -> bool {
     !v
+}
+
+fn default_design() -> CircuitDesignStoreData {
+    CircuitDesignStorage::new(CircuitDesign::default_board_design()).save()
 }

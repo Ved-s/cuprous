@@ -158,7 +158,7 @@ impl CircuitPreviewImpl for Preview {
     fn load_impl_data(
         &self,
         _: &serde_intermediate::Intermediate,
-        _: &BoardStorage
+        _: &Arc<SimulationContext>
     ) -> Option<Box<dyn CircuitPreviewImpl>> {
         Some(Box::new(Preview {}))
     }

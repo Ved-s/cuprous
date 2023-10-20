@@ -1,0 +1,27 @@
+App                                               | Main egui application
+ └arc SimulationContext                           | 
+   ├[arc CircuitPreview]                          | Map for circuit previews, type id -> preview
+   └rwlock [StoredCircuitBoard]                   | 
+     ├arc rwlock CircuitBoard                     | 
+     │ ├[Wire]                                    | 
+     │ ├[arc Circuit]                             | 
+     │ │ ├arc rwlock CircuitInfo                  | 
+     │ │ │ └[CircuitPinInfo]                      | 
+     │ │ │                                        | 
+     │ │ ├arc rwlock dyn CircuitImpl              | Dynamic circuit implementation
+     │ │ └CircuitPropertyStore                    | 
+     │ │                                          | 
+     │ ├arc StateCollection                       | 
+     │ │ └rwlock [arc State]                      | 
+     │ │   ├rwlock [rwlock WireState]             | 
+     │ │   └rwlock [rwlock CircuitState]          | 
+     │ │     ├[WireState]                         | 
+     │ │     ├[PinDirection]                      | 
+     │ │     └option dyn InternalCircuitState     | 
+     │ │                                          | 
+     │ └CircuitDesignStorage                      | 
+     │   └[arc CircuitDesign]                     | 
+     │     ├[CircuitDesignPin]                    | 
+     │     └[Decoration]                          | 
+     │                                            | 
+     └option arc CircuitPreview                   | Preview for board circuit

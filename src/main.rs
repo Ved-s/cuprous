@@ -6,7 +6,7 @@
 
 use std::{
     borrow::Borrow,
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     f32::consts::{PI, TAU},
     hash::Hash,
     num::NonZeroU32,
@@ -17,8 +17,8 @@ use std::{
     },
 };
 
-use app::SelectedItemId;
-use board::{selection::Selection, ActiveCircuitBoard, BoardStorage};
+use app::{SelectedItemId, SimulationContext};
+use board::{selection::Selection, ActiveCircuitBoard};
 use cache::GLOBAL_STR_CACHE;
 use eframe::{
     egui::{self, Context, Sense, Ui},
@@ -26,7 +26,7 @@ use eframe::{
 };
 use emath::{pos2, vec2, Pos2, Rect};
 
-use serde::{Deserialize, Serialize, Serializer, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 #[cfg(feature = "wasm")]
 use wasm_bindgen::{prelude::*, JsValue};
 
@@ -73,16 +73,6 @@ type Mutex<T> = debug::DebugMutex<T>;
 type RwLock<T> = parking_lot::RwLock<T>;
 #[cfg(any(not(feature = "deadlock_detection"), feature = "single_thread"))]
 type Mutex<T> = parking_lot::Mutex<T>;
-
-struct BasicLoadingContext<'a, K: Borrow<str> + Eq + Hash> {
-    previews: &'a HashMap<K, Arc<CircuitPreview>>,
-}
-
-impl<K: Borrow<str> + Eq + Hash> io::LoadingContext for BasicLoadingContext<'_, K> {
-    fn get_circuit_preview<'a>(&'a self, ty: &str) -> Option<&'a CircuitPreview> {
-        self.previews.get(ty).map(|b| b.deref())
-    }
-}
 
 fn main() {
     #[cfg(all(feature = "deadlock_detection", not(feature = "single_thread")))]
@@ -555,11 +545,12 @@ macro_rules! impl_optional_int {
                 }
             }
         }
-    
+
         impl<T: Serialize + Integer> Serialize for $name<T> {
             fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
             where
-                S: Serializer {
+                S: Serializer,
+            {
                 self.0.serialize(serializer)
             }
         }
@@ -567,7 +558,8 @@ macro_rules! impl_optional_int {
         impl<'de, T: Deserialize<'de> + Integer> Deserialize<'de> for $name<T> {
             fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
             where
-                D: Deserializer<'de> {
+                D: Deserializer<'de>,
+            {
                 Ok(Self(T::deserialize(deserializer)?))
             }
         }
@@ -970,14 +962,17 @@ pub struct PastePreview {
 }
 
 impl PastePreview {
-    pub fn new(data: crate::io::CopyPasteData, ctx: &impl io::LoadingContext, boards: &BoardStorage) -> Self {
+    pub fn new(
+        data: crate::io::CopyPasteData,
+        ctx: &Arc<SimulationContext>
+    ) -> Self {
         let wires = data.wires;
         let circuits: Vec<_> = data
             .circuits
             .into_iter()
             .filter_map(|d| {
-                ctx.get_circuit_preview(&d.ty)
-                    .and_then(|p| p.load_new(&d.imp, &d.props, boards).map(|b| (d, b)))
+                ctx.previews.get(&d.ty)
+                    .and_then(|p| p.load_new(&d.imp, &d.props, ctx).map(|b| (d, b)))
             })
             .collect();
 
@@ -1040,7 +1035,7 @@ impl PastePreview {
         }
     }
 
-    fn place(&self, board: &mut ActiveCircuitBoard, pos: Vec2i, boards: &BoardStorage) {
+    fn place(&self, board: &mut ActiveCircuitBoard, pos: Vec2i) {
         if self.circuits.iter().any(|(c, p)| {
             !board.can_place_circuit_at(p.describe().size, pos + c.pos.convert(|v| v as i32), None)
         }) {
@@ -1077,11 +1072,10 @@ impl PastePreview {
                             serde_intermediate::Intermediate::Unit
                         ) {
                             for state in board.states.states().read().iter() {
-                                let state = state.get_circuit(id);
-                                let mut state = state.write();
-
-                                state.internal =
-                                    circuit.imp.write().load_internal(&circuit_data.internal);
+                                state.write_circuit(id, |state| {
+                                    state.internal =
+                                        circuit.imp.write().load_internal(&circuit_data.internal);
+                                });
                             }
                         }
 
@@ -1089,20 +1083,19 @@ impl PastePreview {
                             circuit.imp.write().load(&circuit_data.imp)
                         }
                     }
-                },
-                boards
+                }
             );
             if let (Some(id), Some(dur)) = (id, circuit_data.update) {
                 let board = board.board.read();
                 for state in board.states.states().read().iter() {
-                    state.set_circuit_update_interval(id, Some(dur))
+                    state.set_circuit_update_interval(id, dur)
                 }
             }
         }
 
-        let states = board.board.read().states.clone();
+        let board = board.board.read();
         for wire in wire_ids {
-            states.update_wire(wire, true);
+            board.states.update_wire(wire, true);
         }
         drop(sim_lock)
     }
@@ -1117,11 +1110,9 @@ pub struct ArcString {
 
 impl Clone for ArcString {
     fn clone(&self) -> Self {
-
         if self.string.is_none() && self.arc.read().is_none() {
             return Default::default();
         }
-
 
         Self {
             string: None,
@@ -1177,17 +1168,21 @@ impl ArcString {
 
     pub fn get_mut(&mut self) -> &mut String {
         self.check_str.store(true, Ordering::Relaxed);
-        self.string.get_or_insert_with(|| self.arc.read().as_ref().map(|a| a.deref().into()).unwrap_or_default())
+        self.string.get_or_insert_with(|| {
+            self.arc
+                .read()
+                .as_ref()
+                .map(|a| a.deref().into())
+                .unwrap_or_default()
+        })
     }
 
     pub fn get_str(&self) -> ArcBorrowStr<'_> {
         if let Some(string) = &self.string {
             ArcBorrowStr::Borrow(string)
-        }
-        else if let Some(arc) = self.arc.read().as_ref() {
+        } else if let Some(arc) = self.arc.read().as_ref() {
             ArcBorrowStr::Arc(arc.clone())
-        }
-        else {
+        } else {
             ArcBorrowStr::Borrow("")
         }
     }
@@ -1205,7 +1200,7 @@ impl From<&str> for ArcString {
 
 pub enum ArcBorrowStr<'a> {
     Arc(Arc<str>),
-    Borrow(&'a str)
+    Borrow(&'a str),
 }
 
 impl<'a> Deref for ArcBorrowStr<'a> {
@@ -1221,7 +1216,7 @@ impl<'a> Deref for ArcBorrowStr<'a> {
 
 enum MaybeResolvedType<I, T> {
     Unresolved(I),
-    Resolved(T)
+    Resolved(T),
 }
 
 pub struct MaybeResolved<I, T: Clone>(RwLock<MaybeResolvedType<I, T>>);
@@ -1250,4 +1245,10 @@ impl<I, T: Clone> MaybeResolved<I, T> {
         *ty = MaybeResolvedType::Resolved(value.clone());
         value
     }
+}
+
+pub fn random_u128() -> u128 {
+    let mut buf = [0u8; 16];
+    getrandom::getrandom(&mut buf).unwrap();
+    u128::from_le_bytes(buf)
 }

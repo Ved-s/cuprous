@@ -41,9 +41,9 @@ struct UnresolvedCircuitData {
     design: OptionalInt<usize>,
 }
 impl UnresolvedCircuitData {
-    fn resolve_into(&self, resolved: &mut ResolvedCircuitData, boards: &BoardStorage) {
+    fn resolve_into(&self, resolved: &mut ResolvedCircuitData, ctx: &Arc<SimulationContext>) {
         if resolved.board.is_none() {
-            resolved.board = boards.get(&self.board).map(|b| b.board.clone());
+            resolved.board = ctx.boards.read().get(&self.board).map(|b| b.board.clone());
         }
 
         if let Some(board) = &resolved.board {
@@ -288,7 +288,7 @@ impl CircuitImpl for Circuit {
         fn handle_pin(
             this: &Circuit,
             inner_board: &CircuitBoard,
-            inner_state: &State,
+            inner_state: &Arc<State>,
             id: usize,
             info: &CircuitPinInfo,
             state_ctx: &CircuitStateContext,
@@ -307,7 +307,7 @@ impl CircuitImpl for Circuit {
                     .read()
                     .pins
                     .first()
-                    .map(|p| (p.clone(), CircuitStateContext::new(inner_state, i)))
+                    .map(|p| (p.clone(), CircuitStateContext::new(inner_state.clone(), i.clone())))
             });
 
             match (dir, inner) {
@@ -340,9 +340,9 @@ impl CircuitImpl for Circuit {
         self.resolved.design.as_ref().map_or(2.into(), |d| d.size)
     }
 
-    fn postload(&mut self, state: &CircuitStateContext, boards: &BoardStorage, _: bool) {
+    fn postload(&mut self, state: &CircuitStateContext, _: bool) {
         if let Some(unresolved) = &self.unresolved {
-            unresolved.resolve_into(&mut self.resolved, boards);
+            unresolved.resolve_into(&mut self.resolved, &state.global_state.board.read().ctx);
         }
 
         if let Some(inner_state) = &self.resolved.state {
@@ -459,14 +459,14 @@ impl CircuitPreviewImpl for Preview {
     fn load_impl_data(
         &self,
         data: &serde_intermediate::Intermediate,
-        boards: &BoardStorage,
+        ctx: &Arc<SimulationContext>,
     ) -> Option<Box<dyn CircuitPreviewImpl>> {
         let model = serde_intermediate::from_intermediate::<CircuitDataModel>(data).ok();
         let model = unwrap_option_or_return!(model, None);
 
         let unresolved = model.into_unresolved();
         let mut resolved = ResolvedCircuitData::default();
-        unresolved.resolve_into(&mut resolved, boards);
+        unresolved.resolve_into(&mut resolved, ctx);
 
         Some(Box::new(Preview {
             unresolved: Some(unresolved),

@@ -25,7 +25,7 @@ pub struct Wire {
 
 impl Wire {
     pub fn color(&self, state: &State) -> Color32 {
-        state.read_wire(self.id).color()
+        state.get_wire(self.id).color()
     }
 
     pub fn set_point(
@@ -87,7 +87,7 @@ impl Wire {
         }
     }
 
-    pub fn load(data: &crate::io::WireData, id: usize, circuits: &FixedVec<Circuit>) -> Self {
+    pub fn load(data: &crate::io::WireData, id: usize, circuits: &FixedVec<Arc<Circuit>>) -> Self {
         Self {
             id,
             points: data
@@ -135,7 +135,7 @@ impl WirePoint {
         }
     }
 
-    fn load(data: &crate::io::WirePointData, circuits: &FixedVec<Circuit>) -> Self {
+    fn load(data: &crate::io::WirePointData, circuits: &FixedVec<Arc<Circuit>>) -> Self {
         let pin = data.pin.as_ref().and_then(|data| {
             circuits
                 .get(data.circuit)

@@ -1,14 +1,17 @@
+use std::sync::Arc;
+
 use eframe::epaint::{Color32, PathShape, Stroke};
-use emath::{vec2, Pos2, pos2};
+use emath::{pos2, vec2, Pos2};
 
 use crate::{
     circuits::{
-        CircuitImpl, CircuitPinInfo, CircuitPreviewImpl, CircuitPropertyStore, CircuitStateContext,
-        InternalPinDirection, props::CircuitProperty, CircuitDescription,
+        props::CircuitProperty, CircuitDescription, CircuitImpl, CircuitPinInfo,
+        CircuitPreviewImpl, CircuitPropertyStore, CircuitStateContext, InternalPinDirection,
     },
+    describe_directional_circuit,
     state::WireState,
-    vector::{Vec2u, Vec2f},
-    Direction4, DynStaticStr, PaintContext, describe_directional_circuit, board::BoardStorage,
+    vector::{Vec2f, Vec2u},
+    Direction4, DynStaticStr, PaintContext, app::SimulationContext,
 };
 
 struct Circuit {
@@ -141,15 +144,13 @@ impl CircuitPreviewImpl for Preview {
     fn load_impl_data(
         &self,
         _: &serde_intermediate::Intermediate,
-        _: &BoardStorage
+        _: &Arc<SimulationContext>,
     ) -> Option<Box<dyn CircuitPreviewImpl>> {
         Some(Box::new(Preview {}))
     }
 
     fn default_props(&self) -> CircuitPropertyStore {
-        CircuitPropertyStore::new([
-            CircuitProperty::new("dir", "Direction", Direction4::Right)
-        ])
+        CircuitPropertyStore::new([CircuitProperty::new("dir", "Direction", Direction4::Right)])
     }
 
     fn display_name(&self) -> DynStaticStr {

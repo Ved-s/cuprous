@@ -11,7 +11,7 @@ use crate::{
     r#const::*,
     unwrap_option_or_continue,
     vector::{Vec2isize, Vec2usize, Vector},
-    Intersect,
+    Intersect, RwLock,
 };
 
 #[derive(Debug, Clone)]
@@ -286,6 +286,21 @@ impl<T> FixedVec<T> {
             start,
             len,
             pos: 0,
+        }
+    }
+
+    pub fn read_or_create_locked<R>(lock: &RwLock<Self>, pos: usize, creator: impl FnOnce() -> T, reader: impl FnOnce(&T) -> R) -> R {
+        if let Some(value) = lock.read().get(pos) {
+            return reader(value);
+        }
+
+        let mut lock = lock.write();
+        if let Some(value) = lock.get(pos) {
+            reader(value)
+        }
+        else {
+            let r = lock.set(creator(), pos).value_ref;
+            reader(r)
         }
     }
 }

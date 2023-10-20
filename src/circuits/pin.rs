@@ -232,7 +232,7 @@ impl CircuitImpl for Circuit {
                 let outer = circuit.read_imp::<super::board::Circuit, _>(|board| {
                     board.resolve_inner_to_outer(state_ctx.circuit.id)
                 })??;
-                let outer_state = CircuitStateContext::new(&p.state, circuit);
+                let outer_state = CircuitStateContext::new(p.state.clone(), circuit.clone());
                 let state = circuit.info.read().pins.get(outer)?.get_state(&outer_state);
                 Some(state)
             })
@@ -342,7 +342,7 @@ impl CircuitImpl for Circuit {
                         board.resolve_inner_to_outer(state_ctx.circuit.id)
                     }).flatten();
                     let outer = unwrap_option_or_break!(outer, 'm);
-                    let outer_state = CircuitStateContext::new(&parent.state, circuit);
+                    let outer_state = CircuitStateContext::new(parent.state.clone(), circuit.clone());
                     let info = circuit.info.read();
                     let outer_pin = info.pins.get(outer);
                     let outer_pin = unwrap_option_or_break!(outer_pin, 'm);
@@ -399,7 +399,7 @@ impl CircuitImpl for Circuit {
             .map(|s| Box::new(s) as Box<dyn InternalCircuitState>)
     }
 
-    fn postload(&mut self, state: &CircuitStateContext, _: &BoardStorage, _: bool) {
+    fn postload(&mut self, state: &CircuitStateContext, _: bool) {
         let pos = state.circuit.pos;
         let hex_x = format!("{:x}", pos.x());
         let hex_y = format!("{:x}", pos.x());
@@ -444,7 +444,7 @@ impl CircuitPreviewImpl for Preview {
     fn load_impl_data(
         &self,
         _: &serde_intermediate::Intermediate,
-        _: &BoardStorage,
+        _: &Arc<SimulationContext>,
     ) -> Option<Box<dyn CircuitPreviewImpl>> {
         Some(Box::new(Preview {}))
     }
