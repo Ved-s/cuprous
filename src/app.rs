@@ -19,6 +19,7 @@ pub struct SimulationContext {
 
 pub struct App {
     editor: crate::ui::editor::CircuitBoardEditor,
+    designer: Option<crate::ui::designer::Designer>,
 
     pub sim: Arc<SimulationContext>,
 }
@@ -41,8 +42,24 @@ impl eframe::App for App {
         egui::CentralPanel::default()
             .frame(egui::Frame::central_panel(ctx.style().as_ref()).inner_margin(Margin::same(0.0)))
             .show(ctx, |ui| {
-                self.editor.draw_background(ui);
-                self.editor.draw_ui(ui);
+                let close_designer = match &mut self.designer {
+                    Some(designer) => {
+                        let result = designer.update(ui);
+                        result.close
+                    },
+                    None => {
+                        let result = self.editor.update(ui);
+
+                        if let Some(designer) = result.designer_request {
+                            self.designer = Some(designer);
+                        }
+                        false
+                    },
+                };
+
+                if close_designer {
+                    self.designer = None;
+                }
             });
     }
 
@@ -206,6 +223,7 @@ impl App {
 
         Self {
             editor,
+            designer: None,
             sim: ctx,
         }
     }

@@ -25,18 +25,18 @@ use crate::{
     containers::{Chunks2D, ChunksLookaround, FixedVec},
     random_u128,
     state::{State, StateCollection, WireState},
-    ui::editor::TileDrawBounds,
+    ui::{
+        designer::DesignProvider,
+        editor::TileDrawBounds,
+        selection::{
+            selection_border_color, selection_fill_color, Selection, SelectionImpl, SelectionMode,
+        },
+    },
     unwrap_option_or_continue, unwrap_option_or_return,
     vector::{IsZero, Vec2f, Vec2i, Vec2isize, Vec2u},
     wires::{FoundWireNode, TileWires, Wire, WireNode, WirePart, WirePoint},
     ArcString, Direction2, Direction4, DynStaticStr, PaintContext, PastePreview, RwLock, Screen,
 };
-
-use self::selection::{
-    selection_border_color, selection_fill_color, Selection, SelectionImpl, SelectionMode,
-};
-
-pub mod selection;
 
 pub struct StoredCircuitBoard {
     pub board: Arc<RwLock<CircuitBoard>>,
@@ -60,7 +60,7 @@ pub struct CircuitBoard {
     pub circuits: FixedVec<Arc<Circuit>>,
     pub states: Arc<StateCollection>,
 
-    pub designs: CircuitDesignStorage,
+    pub designs: Arc<RwLock<CircuitDesignStorage>>,
     pub pins: RwLock<BiMap<Arc<str>, usize>>,
     pub ctx: Arc<SimulationContext>,
 
@@ -79,7 +79,9 @@ impl CircuitBoard {
             states: Arc::new(StateCollection::new()),
             sim_lock: Default::default(),
             ordered_queue: false,
-            designs: CircuitDesignStorage::new(CircuitDesign::default_board_design()),
+            designs: Arc::new(RwLock::new(CircuitDesignStorage::new(
+                CircuitDesign::default_board_design(),
+            ))),
             pins: Default::default(),
             ctx,
         }
@@ -218,7 +220,7 @@ impl CircuitBoard {
                 .map(|s| s.as_ref().map(|s| s.save()))
                 .collect(),
             ordered: self.ordered_queue,
-            designs: self.designs.save(),
+            designs: self.designs.read().save(),
         };
         drop(sim_lock);
         data
@@ -265,7 +267,7 @@ impl CircuitBoard {
                 .collect(),
         );
 
-        let designs = CircuitDesignStorage::load(&data.designs);
+        let designs = Arc::new(RwLock::new(CircuitDesignStorage::load(&data.designs)));
 
         let board = CircuitBoard {
             name: data.name.as_str().into(),
@@ -317,7 +319,8 @@ impl CircuitBoard {
     pub fn regenerate_temp_design(&mut self) {
         type Pin = crate::circuits::pin::Circuit;
 
-        let design = self.designs.current_mut();
+        let mut designs = self.designs.write();
+        let design = designs.current_mut();
 
         let mut top_pins = 0;
         let mut left_pins = 0;
@@ -2699,9 +2702,15 @@ impl SelectionImpl<SelectedBoardObject, ActiveCircuitBoard> for BoardObjectSelec
         &mut self,
         pass: &ActiveCircuitBoard,
         changes: &mut HashSet<SelectedBoardObject>,
-        pos: Vec2i,
-        size: Vec2u,
+        rect: Rect,
     ) {
+
+        let min_tile = Vec2f::from(rect.min).convert(|v| v.floor() as i32);
+        let max_tile = Vec2f::from(rect.max).convert(|v| v.ceil() as i32);
+
+        let pos = min_tile;
+        let size = (max_tile - min_tile).convert(|v| v as u32);
+
         for (pos, node) in pass
             .wire_nodes
             .iter_area(pos.convert(|v| v as isize), size.convert(|v| v as usize))
@@ -2774,12 +2783,10 @@ impl SelectionImpl<SelectedBoardObject, ActiveCircuitBoard> for BoardObjectSelec
 
                                 match mode {
                                     SelectionMode::Include => {
-                                        selected.contains(&part)
-                                            || change.contains(&part)
+                                        selected.contains(&part) || change.contains(&part)
                                     }
                                     SelectionMode::Exclude => {
-                                        selected.contains(&part)
-                                            && !change.contains(&part)
+                                        selected.contains(&part) && !change.contains(&part)
                                     }
                                 }
                             }
@@ -2796,5 +2803,38 @@ impl SelectionImpl<SelectedBoardObject, ActiveCircuitBoard> for BoardObjectSelec
             }
         }
         self.possible_points.clear();
+    }
+}
+
+pub struct BoardDesignProvider {
+    board: Arc<RwLock<CircuitBoard>>,
+}
+
+impl BoardDesignProvider {
+    pub fn new(board: Arc<RwLock<CircuitBoard>>) -> Self {
+        Self { board }
+    }
+}
+
+impl DesignProvider for BoardDesignProvider {
+    fn get_storage(&self) -> Arc<RwLock<CircuitDesignStorage>> {
+        self.board.read().designs.clone()
+    }
+
+    fn get_pin_ids(&self) -> Vec<DynStaticStr> {
+        self.board
+            .read()
+            .pins
+            .read()
+            .left_values()
+            .map(|a| DynStaticStr::Dynamic(a.clone()))
+            .collect()
+    }
+
+    fn get_pin(&self, id: DynStaticStr) -> Option<crate::ui::designer::CircuitDesignPinInfo> {
+        let board = self.board.read();
+        let pin_id = *board.pins.read().get_by_left(id.deref())?;
+        let circuit = board.circuits.get(pin_id)?;
+        circuit.read_imp(|p: &crate::circuits::pin::Circuit| p.get_designer_info(&circuit.props))
     }
 }

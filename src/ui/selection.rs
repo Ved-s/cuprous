@@ -2,14 +2,16 @@ use std::{collections::HashSet, hash::Hash, marker::PhantomData};
 
 use eframe::{
     egui::{self, Sense},
-    epaint::{Color32, Rounding, Stroke},
+    epaint::{Color32, Rounding, Stroke, Shape},
 };
 use emath::Rect;
 
 use crate::{
-    vector::{Vec2f, Vec2i, Vec2u},
+    vector::Vec2f,
     PaintContext,
 };
+
+use super::InventoryItem;
 
 #[derive(Clone, Copy)]
 pub enum SelectionMode {
@@ -18,7 +20,7 @@ pub enum SelectionMode {
 }
 
 pub trait SelectionImpl<O, P> {
-    fn collect_changes(&mut self, pass: &P, changes: &mut HashSet<O>, pos: Vec2i, size: Vec2u);
+    fn collect_changes(&mut self, pass: &P, changes: &mut HashSet<O>, rect: Rect);
 
     fn draw_object_selection(&mut self, pass: &P, object: &O, ctx: &PaintContext);
     fn post_draw_selection(&mut self, pass: &P, ctx: &PaintContext, mode: SelectionMode, selected: &HashSet<O>, change: &HashSet<O>) {
@@ -83,9 +85,6 @@ where
                     let min = Vec2f::from([start.x().min(end.x()), start.y().min(end.y())]);
                     let max = Vec2f::from([start.x().max(end.x()), start.y().max(end.y())]);
 
-                    let min_tile = min.convert(|v| v.floor() as i32);
-                    let max_tile = max.convert(|v| v.ceil() as i32);
-
                     let rect_min = ctx.screen.world_to_screen(min);
                     let rect_max = ctx.screen.world_to_screen(max);
                     let rect = Rect::from_min_max(rect_min.into(), rect_max.into());
@@ -101,8 +100,7 @@ where
                     self.imp.collect_changes(
                         pass,
                         &mut self.change,
-                        min_tile,
-                        (max_tile - min_tile).convert(|v| v as u32),
+                        rect,
                     );
                 } else {
                     self.rect = None;
@@ -183,5 +181,45 @@ where
 {
     fn default() -> Self {
         Self::new(I::default())
+    }
+}
+
+pub struct SelectionInventoryItem<I: Clone> {
+    id: I
+}
+
+impl<I: Clone> SelectionInventoryItem<I> {
+    pub fn new(id: I) -> Self { Self { id } }
+}
+
+impl<I: Clone> InventoryItem<I> for SelectionInventoryItem<I> {
+    fn id(&self) -> I {
+        self.id.clone()
+    }
+
+    fn draw(&self, ctx: &PaintContext) {
+        let rect = ctx.rect.shrink2(ctx.rect.size() / 5.0);
+        ctx.paint
+            .rect_filled(rect, Rounding::none(), selection_fill_color());
+        let rect_corners = [
+            rect.left_top(),
+            rect.right_top(),
+            rect.right_bottom(),
+            rect.left_bottom(),
+            rect.left_top(),
+        ];
+
+        let mut shapes = vec![];
+        Shape::dashed_line_many(
+            &rect_corners,
+            Stroke::new(1.0, selection_border_color()),
+            3.0,
+            2.0,
+            &mut shapes,
+        );
+
+        shapes.into_iter().for_each(|s| {
+            ctx.paint.add(s);
+        });
     }
 }

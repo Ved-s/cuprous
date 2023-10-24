@@ -53,8 +53,8 @@ impl UnresolvedCircuitData {
 
             if resolved.design.is_none() {
                 resolved.design = match self.design.get() {
-                    Some(id) => board.read().designs.get(id),
-                    None => Some(board.read().designs.current()),
+                    Some(id) => board.read().designs.read().get(id),
+                    None => Some(board.read().designs.read().current()),
                 };
             }
         }
@@ -409,7 +409,7 @@ impl Preview {
             Some(board) => {
                 let mut resolved = self.resolved.clone();
                 if !self.unresolved.as_ref().is_some_and(|u| u.design.is_some()) && self.resolved.design.is_none() {
-                    resolved.design = Some(board.read().designs.current());
+                    resolved.design = Some(board.read().designs.read().current());
                 }
                 if create_state {
                     resolved.state = Some(board.read().states.create_state(board.clone()));

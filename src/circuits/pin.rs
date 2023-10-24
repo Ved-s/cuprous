@@ -7,7 +7,7 @@ use emath::{pos2, vec2, Pos2, Rect};
 use crate::circuits::props::CircuitProperty;
 use crate::state::SafeWireState;
 use crate::vector::Vec2f;
-use crate::{circuits::*, describe_directional_circuit, unwrap_option_or_break};
+use crate::{circuits::*, describe_directional_circuit, unwrap_option_or_break, ArcString};
 
 use super::props::CircuitPropertyImpl;
 
@@ -216,6 +216,19 @@ impl Circuit {
     fn is_pico(&self, state_ctx: &CircuitStateContext) -> bool {
         // parent pin Inside -> child pin Outside
         matches!(self.pin.get_direction(state_ctx), PinDirection::Outside)
+    }
+
+    pub fn get_designer_info(&self, props: &CircuitPropertyStore) -> crate::ui::designer::CircuitDesignPinInfo {
+        let dir = match self.ty {
+            PinType::Pico => InternalPinDirection::Inside,
+            PinType::Cipo => InternalPinDirection::Outside,
+            PinType::Controlled => InternalPinDirection::StateDependent { default: PinDirection::Inside },
+        };
+        crate::ui::designer::CircuitDesignPinInfo {
+            dir,
+            display_dir: Some(self.dir.inverted()),
+            display_name: props.read("name", |s: &ArcString| DynStaticStr::Dynamic(s.get_arc())).unwrap_or(DynStaticStr::Static("")),
+        }
     }
 }
 

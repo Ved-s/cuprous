@@ -19,7 +19,7 @@ App                                               | Main egui application
      │ │     ├[PinDirection]                      | 
      │ │     └option dyn InternalCircuitState     | 
      │ │                                          | 
-     │ └CircuitDesignStorage                      | 
+     │ └arc rwlock CircuitDesignStorage           | 
      │   └[arc CircuitDesign]                     | 
      │     ├[CircuitDesignPin]                    | 
      │     └[Decoration]                          | 

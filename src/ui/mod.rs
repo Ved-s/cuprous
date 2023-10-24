@@ -3,15 +3,17 @@ use std::{any::TypeId, collections::HashSet, f32::consts::TAU, hash::Hash, ops::
 use eframe::{
     egui::{
         panel::{self, PanelState},
-        FontSelection, Grid, Id, InnerResponse, Key, Label, Margin, PointerButton, Response, Sense,
-        SidePanel, TextStyle, Ui, Widget, WidgetInfo, WidgetText, WidgetType,
+        CursorIcon, FontSelection, Grid, Id, InnerResponse, Key, Label, Margin, PointerButton,
+        Response, Sense, SidePanel, TextStyle, Ui, Widget, WidgetInfo, WidgetText, WidgetType,
     },
     epaint::{Color32, PathShape, Rounding, Stroke, TextShape},
 };
 use emath::{pos2, vec2, Rect, Rot2, Vec2};
 
+pub mod designer;
 pub mod drawing;
 pub mod editor;
+pub mod selection;
 
 use crate::{
     circuits::props::{CircuitProperty, CircuitPropertyImpl, CircuitPropertyStore},
@@ -32,11 +34,11 @@ pub struct Inventory<'a, I>
 where
     I: Eq + Clone + Hash + Send + Sync + 'static,
 {
-    pub selected: &'a mut Option<I>,
-    pub groups: &'a [InventoryItemGroup<I>],
-    pub item_size: Vec2,
-    pub item_margin: Margin,
-    pub margin: Margin,
+    selected: &'a mut Option<I>,
+    groups: &'a [InventoryItemGroup<I>],
+    item_size: Vec2,
+    item_margin: Margin,
+    margin: Margin,
 }
 
 #[derive(Clone)]
@@ -57,10 +59,20 @@ const NUMBER_KEYS: [Key; 10] = [
     Key::Num9,
 ];
 
-impl<I> Inventory<'_, I>
+impl<'a, I> Inventory<'a, I>
 where
     I: Eq + Clone + Hash + Send + Sync + 'static,
 {
+    pub fn new(selected: &'a mut Option<I>, groups: &'a [InventoryItemGroup<I>]) -> Self {
+        Self {
+            selected,
+            groups,
+            item_size: vec2(28.0, 28.0),
+            item_margin: Margin::same(6.0),
+            margin: Margin::default(),
+        }
+    }
+
     fn get_group_icon_item_id(
         group: &[Box<dyn InventoryItem<I>>],
         ui: &Ui,
@@ -152,13 +164,12 @@ where
         }
         (current_index, current_sub_index)
     }
-}
 
-impl<I> Widget for Inventory<'_, I>
-where
-    I: Eq + Clone + Hash + Send + Sync + 'static,
-{
-    fn ui(mut self, ui: &mut eframe::egui::Ui) -> eframe::egui::Response {
+    fn ui(
+        mut self,
+        ui: &mut eframe::egui::Ui,
+        name_resolver: impl Fn(&I) -> Option<DynStaticStr>,
+    ) -> eframe::egui::Response {
         let (selected_item, selected_sub_item) = match &self.selected {
             None => (None, None),
             Some(selected) => self
@@ -366,6 +377,48 @@ where
                         last_group_items.insert(selected.clone());
                     });
                 }
+            }
+        }
+
+        if let Some(selected) = &self.selected {
+            let name = name_resolver(selected);
+
+            if let Some(name) = name {
+                let galley = WidgetText::from(name.deref())
+                    .fallback_text_style(TextStyle::Monospace)
+                    .into_galley(
+                        ui,
+                        Some(true),
+                        rect.width(),
+                        FontSelection::Style(TextStyle::Monospace),
+                    )
+                    .galley;
+
+                let size = galley.rect.size() + vec2(12.0, 6.0);
+                let offset = vec2(20.0f32.min(rect.width() - 5.0 - size.x).max(0.0), -2.5);
+
+                let resp = ui.allocate_response(size + offset, Sense::hover());
+                let rect = Rect::from_min_size(resp.rect.min + offset, size);
+                let paint = ui.painter();
+                paint.rect(
+                    rect,
+                    Rounding {
+                        nw: 0.0,
+                        ne: 0.0,
+                        sw: 3.0,
+                        se: 3.0,
+                    },
+                    ui.style().visuals.panel_fill,
+                    ui.style().visuals.window_stroke,
+                );
+
+                paint.add(TextShape {
+                    pos: rect.min + vec2(6.0, 3.0),
+                    galley,
+                    underline: Stroke::NONE,
+                    override_text_color: Some(ui.style().visuals.text_color()),
+                    angle: 0.0,
+                });
             }
         }
 
@@ -842,5 +895,184 @@ impl Widget for DoubleSelectableLabel {
         }
 
         response
+    }
+}
+
+#[derive(Default, Debug, Clone, Copy)]
+pub struct Sides {
+    pub top: bool,
+    pub left: bool,
+    pub right: bool,
+    pub bottom: bool,
+}
+
+impl Sides {
+    pub fn any(self) -> bool {
+        self.top || self.left || self.right || self.bottom
+    }
+}
+
+pub fn rect_resizer(
+    rect: &mut Rect,
+    sides: Sides,
+    ui: &Ui,
+    id: Id,
+    constrain: impl FnOnce(Sides, &mut Rect),
+    fill: Color32,
+    stroke: Stroke,
+) -> Sides {
+    let resizing = ui.memory(|mem| mem.is_being_dragged(id));
+    let grab = ui.style().interaction.resize_grab_radius_side;
+
+    let hover = if resizing {
+        ui.memory(|mem| mem.data.get_temp(id).unwrap_or_default())
+    } else if let Some(pointer) = ui.ctx().pointer_latest_pos() {
+        let on_top = ui
+            .ctx()
+            .layer_id_at(pointer)
+            .map_or(true, |top_layer_id| top_layer_id == ui.layer_id());
+
+        let draggable = rect.expand(grab).contains(pointer);
+
+        if draggable {
+            let right = sides.right
+                && on_top
+                && rect.right() - grab <= pointer.x;
+            let bottom = sides.bottom
+                && on_top
+                && rect.bottom() - grab <= pointer.y;
+
+            let top = !bottom
+                && sides.top
+                && on_top
+                && pointer.y <= rect.top() + grab;
+            let left = !right
+                && sides.left
+                && on_top
+                && pointer.x <= rect.left() + grab;
+
+            Sides {
+                top,
+                left,
+                right,
+                bottom,
+            }
+        } else {
+            Sides::default()
+        }
+    } else {
+        Sides::default()
+    };
+
+    if ui.input(|i| i.pointer.any_pressed() && i.pointer.any_down()) && hover.any() {
+        ui.memory_mut(|mem| {
+            mem.set_dragged_id(id);
+            mem.data.insert_temp(id, hover)
+        });
+    }
+
+    if hover.top && hover.left {
+        ui.ctx().set_cursor_icon(CursorIcon::ResizeNorthWest);
+    } else if hover.top && hover.right {
+        ui.ctx().set_cursor_icon(CursorIcon::ResizeNorthEast);
+    } else if hover.bottom && hover.left {
+        ui.ctx().set_cursor_icon(CursorIcon::ResizeSouthWest);
+    } else if hover.bottom && hover.right {
+        ui.ctx().set_cursor_icon(CursorIcon::ResizeSouthEast);
+    } else if hover.top {
+        ui.ctx().set_cursor_icon(CursorIcon::ResizeNorth);
+    } else if hover.left {
+        ui.ctx().set_cursor_icon(CursorIcon::ResizeWest);
+    } else if hover.right {
+        ui.ctx().set_cursor_icon(CursorIcon::ResizeEast);
+    } else if hover.bottom {
+        ui.ctx().set_cursor_icon(CursorIcon::ResizeSouth);
+    }
+
+    if resizing {
+        if let Some(pointer) = ui.ctx().pointer_latest_pos() {
+            if hover.top {
+                rect.min.y = pointer.y.min(rect.max.y);
+            }
+            if hover.left {
+                rect.min.x = pointer.x.min(rect.max.x);
+            }
+            if hover.right {
+                rect.max.x = pointer.x.max(rect.min.x);
+            }
+            if hover.bottom {
+                rect.max.y = pointer.y.max(rect.min.y);
+            }
+
+            constrain(hover, rect);
+        }
+    }
+
+    let paint = ui.painter();
+
+    paint.rect(*rect, Rounding::none(), fill, stroke);
+
+    let hover_rounding = Rounding::same(grab / 2.0);
+    let hover_color = Color32::WHITE.linear_multiply(0.3);
+
+    let top = ui.ctx().animate_bool(id.with("__hover_top"), hover.top);
+    if top > 0.0 {
+        paint.rect(
+            Rect::from_min_size(
+                rect.left_top() - vec2(grab, grab),
+                vec2(rect.width() + grab * 2.0, grab * 2.0),
+            ),
+            hover_rounding,
+            hover_color.linear_multiply(top),
+            Stroke::NONE,
+        )
+    }
+
+    let left = ui.ctx().animate_bool(id.with("__hover_left"), hover.left);
+    if left > 0.0 {
+        paint.rect(
+            Rect::from_min_size(
+                rect.left_top() - vec2(grab, grab),
+                vec2(grab * 2.0, rect.height() + grab * 2.0),
+            ),
+            hover_rounding,
+            hover_color.linear_multiply(left),
+            Stroke::NONE,
+        )
+    }
+
+    let bottom = ui
+        .ctx()
+        .animate_bool(id.with("__hover_bottom"), hover.bottom);
+    if bottom > 0.0 {
+        paint.rect(
+            Rect::from_min_size(
+                rect.left_bottom() - vec2(grab, grab),
+                vec2(rect.width() + grab * 2.0, grab * 2.0),
+            ),
+            hover_rounding,
+            hover_color.linear_multiply(bottom),
+            Stroke::NONE,
+        )
+    }
+
+    let right = ui.ctx().animate_bool(id.with("__hover_right"), hover.right);
+    if right > 0.0 {
+        paint.rect(
+            Rect::from_min_size(
+                rect.right_top() - vec2(grab, grab),
+                vec2(grab * 2.0, rect.height() + grab * 2.0),
+            ),
+            hover_rounding,
+            hover_color.linear_multiply(right),
+            Stroke::NONE,
+        )
+    }
+
+    Sides {
+        top: hover.top && resizing,
+        left: hover.left && resizing,
+        right: hover.right && resizing,
+        bottom: hover.bottom && resizing,
     }
 }

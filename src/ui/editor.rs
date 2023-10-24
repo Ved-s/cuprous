@@ -1,32 +1,35 @@
-use std::{f32::consts::PI, fmt::Write, ops::Deref, sync::Arc};
+use std::{f32::consts::PI, ops::Deref, sync::Arc};
 
 use eframe::{
     egui::{
-        self, CollapsingHeader, FontSelection, Frame, Key, Margin, Sense, SidePanel, TextEdit,
-        TextStyle, Ui, WidgetText,
+        self, CollapsingHeader, Frame, Key, Margin, Sense, SidePanel, TextEdit,
+        TextStyle, Ui,
     },
-    epaint::{Color32, PathShape, Rounding, Shape, Stroke, TextShape},
+    epaint::{Color32, PathShape, Rounding, Shape, Stroke},
 };
 use emath::{pos2, vec2, Pos2, Rect};
 
 use crate::{
     app::SimulationContext,
     board::{
-        selection::{selection_fill_color, selection_border_color}, ActiveCircuitBoard, CircuitBoard, SelectedItem, StoredCircuitBoard, SelectedBoardObject,
+        ActiveCircuitBoard, BoardDesignProvider, CircuitBoard, SelectedBoardObject, SelectedItem,
+        StoredCircuitBoard,
     },
     circuits::{
         props::{CircuitPropertyImpl, CircuitPropertyStore},
         CircuitPreview,
     },
     state::WireState,
-    time::Instant,
     vector::{Vec2f, Vec2i},
     Direction4, DynStaticStr, PaintContext, PanAndZoom, PastePreview, RwLock, Screen,
 };
 
 use super::{
-    drawing, CollapsibleSidePanel, DoubleSelectableLabel, Inventory, InventoryItem,
-    InventoryItemGroup, PropertyEditor, PropertyStoreItem,
+    designer::Designer,
+    drawing,
+    selection::SelectionInventoryItem,
+    CollapsibleSidePanel, DoubleSelectableLabel, Inventory, InventoryItem, InventoryItemGroup,
+    PropertyEditor, PropertyStoreItem,
 };
 
 #[derive(Debug, PartialEq, Eq, Clone, Hash)]
@@ -62,6 +65,15 @@ impl TileDrawBounds {
     };
 }
 
+pub struct EditorResponse {
+    pub designer_request: Option<Designer>,
+}
+
+struct ComponentsUiResponse {
+    rect: Rect,
+    designer_request: Option<Designer>,
+}
+
 pub struct CircuitBoardEditor {
     pan_zoom: PanAndZoom,
     board: ActiveCircuitBoard,
@@ -69,7 +81,7 @@ pub struct CircuitBoardEditor {
     debug: bool,
 
     paste: Option<Arc<PastePreview>>,
-    inventory_items: Arc<[InventoryItemGroup<SelectedItemId>]>,
+    inventory: Arc<[InventoryItemGroup<SelectedItemId>]>,
     selected_id: Option<SelectedItemId>,
 
     props_ui: PropertyEditor,
@@ -92,39 +104,6 @@ static COMPONENT_BUILTIN_ORDER: &[&str] = &[
     "pullup",
     "freq_meter",
 ];
-
-struct SelectionInventoryItem {}
-impl InventoryItem<SelectedItemId> for SelectionInventoryItem {
-    fn id(&self) -> SelectedItemId {
-        SelectedItemId::Selection
-    }
-
-    fn draw(&self, ctx: &PaintContext) {
-        let rect = ctx.rect.shrink2(ctx.rect.size() / 5.0);
-        ctx.paint
-            .rect_filled(rect, Rounding::none(), selection_fill_color());
-        let rect_corners = [
-            rect.left_top(),
-            rect.right_top(),
-            rect.right_bottom(),
-            rect.left_bottom(),
-            rect.left_top(),
-        ];
-
-        let mut shapes = vec![];
-        Shape::dashed_line_many(
-            &rect_corners,
-            Stroke::new(1.0, selection_border_color()),
-            3.0,
-            2.0,
-            &mut shapes,
-        );
-
-        shapes.into_iter().for_each(|s| {
-            ctx.paint.add(s);
-        });
-    }
-}
 
 struct WireInventoryItem {}
 impl InventoryItem<SelectedItemId> for WireInventoryItem {
@@ -231,8 +210,10 @@ impl CircuitBoardEditor {
             board,
             debug: false,
             paste: None,
-            inventory_items: vec![
-                InventoryItemGroup::SingleItem(Box::new(SelectionInventoryItem {})),
+            inventory: vec![
+                InventoryItemGroup::SingleItem(Box::new(SelectionInventoryItem::new(
+                    SelectedItemId::Selection,
+                ))),
                 InventoryItemGroup::SingleItem(Box::new(WireInventoryItem {})),
                 InventoryItemGroup::Group(inventory_group),
             ]
@@ -243,7 +224,7 @@ impl CircuitBoardEditor {
         }
     }
 
-    pub fn draw_background(&mut self, ui: &mut Ui) {
+    pub fn update(&mut self, ui: &mut Ui) -> EditorResponse {
         let rect = ui.max_rect();
         self.pan_zoom.update(ui, rect, self.selected_id.is_none());
 
@@ -333,10 +314,6 @@ impl CircuitBoardEditor {
 
         self.board
             .update(&ctx, tile_bounds, selected_item, self.debug);
-    }
-
-    pub fn draw_ui(&mut self, ui: &mut Ui) {
-        let start_time = Instant::now();
 
         if let Some(SelectedItemId::Board(board_id)) = self.selected_id {
             if let Some(board) = self.sim.boards.write().get_mut(&board_id) {
@@ -350,7 +327,7 @@ impl CircuitBoardEditor {
             }
         }
 
-        let left_panel_rect = self.components_ui(ui);
+        let left_panel_response = self.components_ui(ui);
 
         if let Some(SelectedItem::Circuit(p)) = self.selected_item() {
             let props = [((), &p.props).into()];
@@ -396,21 +373,27 @@ impl CircuitBoardEditor {
         }
         {
             let mut rect = ui.clip_rect();
-            rect.min.x += left_panel_rect.width();
+            rect.min.x += left_panel_response.rect.width();
             rect = rect.shrink(10.0);
             let mut ui = ui.child_ui(rect, *ui.layout());
 
-            //let mut selected = self.selected_id.clone();
             if ui.input(|input| input.key_pressed(Key::Escape)) {
                 self.selected_id = None;
             }
 
-            let inv_resp = ui.add(Inventory {
-                selected: &mut self.selected_id,
-                groups: &self.inventory_items,
-                item_size: [28.0, 28.0].into(),
-                item_margin: Margin::same(6.0),
-                margin: Margin::default(),
+            Inventory::new(&mut self.selected_id, &self.inventory).ui(&mut ui, |id| match id {
+                SelectedItemId::Wires => Some("Wires".into()),
+                SelectedItemId::Selection => Some("Selection".into()),
+                SelectedItemId::Paste => Some("Paste".into()),
+                SelectedItemId::Circuit(cid) => {
+                    self.sim.previews.get(cid).map(|p| p.imp.display_name())
+                }
+                SelectedItemId::Board(id) => self
+                    .sim
+                    .boards
+                    .read()
+                    .get(id)
+                    .map(|b| b.board.read().name.get_arc().into()),
             });
 
             match (
@@ -423,70 +406,11 @@ impl CircuitBoardEditor {
                 _ => (),
             }
 
-            let selected_name = self.selected_item().map(|sel| match sel {
-                SelectedItem::Selection => "Selection".into(),
-                SelectedItem::Wire => "Wire".into(),
-                SelectedItem::Paste(_) => "Pasted objects".into(),
-                SelectedItem::Circuit(c) => c.imp.display_name(),
-            });
-
-            if let Some(selected_name) = selected_name {
-                let galley = WidgetText::from(selected_name.deref())
-                    .fallback_text_style(TextStyle::Monospace)
-                    .into_galley(
-                        &ui,
-                        Some(true),
-                        inv_resp.rect.width(),
-                        FontSelection::Style(TextStyle::Monospace),
-                    )
-                    .galley;
-
-                let size = galley.rect.size() + vec2(12.0, 6.0);
-                let offset = vec2(
-                    20.0f32.min(inv_resp.rect.width() - 5.0 - size.x).max(0.0),
-                    -2.5,
-                );
-
-                let resp = ui.allocate_response(size + offset, Sense::hover());
-                let rect = Rect::from_min_size(resp.rect.min + offset, size);
-                let paint = ui.painter();
-                paint.rect(
-                    rect,
-                    Rounding {
-                        nw: 0.0,
-                        ne: 0.0,
-                        sw: 3.0,
-                        se: 3.0,
-                    },
-                    ui.style().visuals.panel_fill,
-                    ui.style().visuals.window_stroke,
-                );
-
-                paint.add(TextShape {
-                    pos: rect.min + vec2(6.0, 3.0),
-                    galley,
-                    underline: Stroke::NONE,
-                    override_text_color: Some(ui.style().visuals.text_color()),
-                    angle: 0.0,
-                });
-            }
-
-            let mut text = String::new();
-
-            #[cfg(feature = "single_thread")]
-            {
-                let sim_time = sim_time.as_secs_f32() * 1000.0;
-                text.write_fmt(format_args!("Simulation time: {sim_time:.02}ms\n"))
-                    .unwrap();
-            }
-
-            let paint_time = (Instant::now() - start_time).as_secs_f32() * 1000.0;
             let debug = self.debug;
             let ordered_queue = self.board.board.read().is_ordered_queue();
 
-            text.write_fmt(format_args!(
-                "Paint time: {paint_time:.02}ms\n\
-                 [F9] Debug: {debug}\n\
+            let text = format!(
+                "[F9] Debug: {debug}\n\
                  [F8] Board reload\n\
                  [F7] Regenerate design\n\
                  [F4] State reset\n\
@@ -494,10 +418,13 @@ impl CircuitBoardEditor {
                  [F]  Flip\n\
                  [Q]  Ordered queue: {ordered_queue}\n\
                 "
-            ))
-            .unwrap();
+            );
 
             ui.monospace(text);
+        }
+
+        EditorResponse {
+            designer_request: left_panel_response.designer_request,
         }
     }
 
@@ -613,9 +540,9 @@ impl CircuitBoardEditor {
             .inner
     }
 
-    fn components_ui(&mut self, ui: &mut Ui) -> Rect {
+    fn components_ui(&mut self, ui: &mut Ui) -> ComponentsUiResponse {
         let style = ui.style().clone();
-        CollapsibleSidePanel::new("components-ui", "Components")
+        let resp = CollapsibleSidePanel::new("components-ui", "Components")
             .header_offset(20.0)
             .side(egui::panel::Side::Left)
             .panel_transformer(Some(Box::new(move |panel: SidePanel| {
@@ -695,6 +622,7 @@ impl CircuitBoardEditor {
 
                         let mut queued_deletion = None;
                         let mut drawn_renamer = false;
+                        let mut designer_request = None;
                         let no_delete = self.sim.boards.read().len() <= 1;
                         for board in self.sim.boards.read().values() {
                             let board_guard = board.board.read();
@@ -736,6 +664,14 @@ impl CircuitBoardEditor {
                                 }
 
                                 resp.context_menu(|ui| {
+                                    if ui.button("Design").clicked() {
+                                        let design_provider =
+                                            BoardDesignProvider::new(board.board.clone());
+                                        let designer = Designer::new(Box::new(design_provider));
+                                        designer_request = Some(designer);
+                                        ui.close_menu();
+                                    }
+
                                     if ui.button("Rename").clicked() {
                                         // same hack as below
                                         if !drawn_renamer {
@@ -801,8 +737,16 @@ impl CircuitBoardEditor {
                                 self.board = ActiveCircuitBoard::new_main(board.board.clone());
                             }
                         }
-                    });
-            })
-            .full_rect
+
+                        designer_request
+                    })
+                    .body_returned
+                    .flatten()
+            });
+
+        ComponentsUiResponse {
+            rect: resp.full_rect,
+            designer_request: resp.panel.and_then(|p| p.inner),
+        }
     }
 }
