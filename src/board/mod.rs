@@ -25,7 +25,7 @@ use crate::{
     containers::{Chunks2D, ChunksLookaround, FixedVec},
     random_u128,
     state::{State, StateCollection, WireState},
-    ui::views::TileDrawBounds,
+    ui::editor::TileDrawBounds,
     unwrap_option_or_continue, unwrap_option_or_return,
     vector::{IsZero, Vec2f, Vec2i, Vec2isize, Vec2u},
     wires::{FoundWireNode, TileWires, Wire, WireNode, WirePart, WirePoint},
@@ -398,32 +398,10 @@ impl CircuitBoard {
 
 #[derive(Clone)]
 pub enum SelectedItem {
-    None,
     Selection,
     Wire,
     Circuit(Arc<CircuitPreview>),
     Paste(Arc<PastePreview>),
-}
-
-impl SelectedItem {
-    pub fn none(&self) -> bool {
-        matches!(self, SelectedItem::None)
-    }
-
-    pub fn selection(&self) -> bool {
-        matches!(self, SelectedItem::Selection)
-    }
-
-    pub fn wire(&self) -> bool {
-        matches!(self, SelectedItem::Wire)
-    }
-
-    pub fn circuit(&self) -> Option<&CircuitPreview> {
-        match self {
-            SelectedItem::Circuit(c) => Some(c.as_ref()),
-            _ => None,
-        }
-    }
 }
 
 // TODO: Move all drawing to the editor
@@ -523,12 +501,14 @@ impl ActiveCircuitBoard {
         &mut self,
         ctx: &PaintContext,
         bounds: TileDrawBounds,
-        selected: SelectedItem,
+        selected: Option<SelectedItem>,
         debug: bool,
     ) {
-        self.selection
-            .borrow_mut()
-            .pre_update_selection(self, ctx, selected.selection());
+        self.selection.borrow_mut().pre_update_selection(
+            self,
+            ctx,
+            matches!(&selected, Some(SelectedItem::Selection)),
+        );
 
         let selected_something = !self.selection.borrow().selection.is_empty();
 
@@ -679,7 +659,7 @@ impl ActiveCircuitBoard {
             |node, pos, ctx, this, _| this.draw_circuit_node(bounds, node, pos, ctx),
         );
 
-        self.update_wires(ctx, selected.wire());
+        self.update_wires(ctx, matches!(&selected, Some(SelectedItem::Wire)));
 
         self.draw_hovered_circuit_pin_names(ctx);
 
@@ -1236,13 +1216,16 @@ impl ActiveCircuitBoard {
         }
     }
 
-    fn update_previews(&mut self, ctx: &PaintContext, selected: SelectedItem) {
+    fn update_previews(&mut self, ctx: &PaintContext, selected: Option<SelectedItem>) {
+        let selected = match selected {
+            Some(selected) => selected,
+            None => return,
+        };
+
         match selected {
-            SelectedItem::None => return,
-            SelectedItem::Selection => return,
-            SelectedItem::Wire => return,
             SelectedItem::Circuit(_) => (),
             SelectedItem::Paste(_) => (),
+            _ => return,
         };
 
         let mouse_tile_pos = ctx

@@ -1,27 +1,36 @@
-use std::{ops::Deref, sync::Arc, fmt::Write, f32::consts::PI};
+use std::{f32::consts::PI, fmt::Write, ops::Deref, sync::Arc};
 
 use eframe::{
-    egui::{self, CollapsingHeader, Frame, Key, Margin, Sense, SidePanel, TextEdit, TextStyle, Ui, WidgetText, FontSelection},
-    epaint::{Color32, Rounding, Stroke, TextShape, Shape, PathShape},
+    egui::{
+        self, CollapsingHeader, FontSelection, Frame, Key, Margin, Sense, SidePanel, TextEdit,
+        TextStyle, Ui, WidgetText,
+    },
+    epaint::{Color32, PathShape, Rounding, Shape, Stroke, TextShape},
 };
-use emath::{vec2, Rect, Pos2, pos2};
+use emath::{pos2, vec2, Pos2, Rect};
 
 use crate::{
     app::SimulationContext,
-    board::{ActiveCircuitBoard, CircuitBoard, SelectedItem, StoredCircuitBoard, selection::Selection},
-    circuits::{props::{CircuitPropertyImpl, CircuitPropertyStore}, CircuitPreview},
+    board::{
+        selection::Selection, ActiveCircuitBoard, CircuitBoard, SelectedItem, StoredCircuitBoard,
+    },
+    circuits::{
+        props::{CircuitPropertyImpl, CircuitPropertyStore},
+        CircuitPreview,
+    },
+    state::WireState,
+    time::Instant,
     vector::{Vec2f, Vec2i},
-    Direction4, DynStaticStr, PaintContext, PanAndZoom, PastePreview, RwLock, Screen, time::Instant, state::WireState,
+    Direction4, DynStaticStr, PaintContext, PanAndZoom, PastePreview, RwLock, Screen,
 };
 
 use super::{
-    drawing, CollapsibleSidePanel, DoubleSelectableLabel, InventoryItemGroup, PropertyEditor,
-    PropertyStoreItem, Inventory, InventoryItem,
+    drawing, CollapsibleSidePanel, DoubleSelectableLabel, Inventory, InventoryItem,
+    InventoryItemGroup, PropertyEditor, PropertyStoreItem,
 };
 
 #[derive(Debug, PartialEq, Eq, Clone, Hash)]
 pub enum SelectedItemId {
-    None,
     Wires,
     Selection,
     Paste,
@@ -60,8 +69,8 @@ pub struct CircuitBoardEditor {
     debug: bool,
 
     paste: Option<Arc<PastePreview>>,
-    inventory_items: Arc<[InventoryItemGroup]>,
-    selected_id: SelectedItemId,
+    inventory_items: Arc<[InventoryItemGroup<SelectedItemId>]>,
+    selected_id: Option<SelectedItemId>,
 
     props_ui: PropertyEditor,
     sim: Arc<SimulationContext>,
@@ -84,9 +93,8 @@ static COMPONENT_BUILTIN_ORDER: &[&str] = &[
     "freq_meter",
 ];
 
-
 struct SelectionInventoryItem {}
-impl InventoryItem for SelectionInventoryItem {
+impl InventoryItem<SelectedItemId> for SelectionInventoryItem {
     fn id(&self) -> SelectedItemId {
         SelectedItemId::Selection
     }
@@ -119,7 +127,7 @@ impl InventoryItem for SelectionInventoryItem {
 }
 
 struct WireInventoryItem {}
-impl InventoryItem for WireInventoryItem {
+impl InventoryItem<SelectedItemId> for WireInventoryItem {
     fn id(&self) -> SelectedItemId {
         SelectedItemId::Wires
     }
@@ -159,7 +167,7 @@ struct CircuitInventoryItem {
     preview: Arc<CircuitPreview>,
     id: DynStaticStr,
 }
-impl InventoryItem for CircuitInventoryItem {
+impl InventoryItem<SelectedItemId> for CircuitInventoryItem {
     fn id(&self) -> SelectedItemId {
         SelectedItemId::Circuit(self.id.clone())
     }
@@ -207,7 +215,6 @@ fn rotated_rect_shape(rect: Rect, angle: f32, origin: Pos2) -> Vec<Pos2> {
 
 impl CircuitBoardEditor {
     pub fn new(board: ActiveCircuitBoard, ctx: &Arc<SimulationContext>) -> Self {
-
         let inventory_group: Vec<_> = INVENTORY_CIRCUIT_ORDER
             .iter()
             .filter_map(|id| ctx.previews.get(*id))
@@ -215,7 +222,7 @@ impl CircuitBoardEditor {
                 Box::new(CircuitInventoryItem {
                     preview: preview.clone(),
                     id: preview.imp.type_name(),
-                }) as Box<dyn InventoryItem>
+                }) as Box<dyn InventoryItem<SelectedItemId>>
             })
             .collect();
 
@@ -228,17 +235,17 @@ impl CircuitBoardEditor {
                 InventoryItemGroup::SingleItem(Box::new(SelectionInventoryItem {})),
                 InventoryItemGroup::SingleItem(Box::new(WireInventoryItem {})),
                 InventoryItemGroup::Group(inventory_group),
-            ].into(),
-            selected_id: SelectedItemId::None,
+            ]
+            .into(),
+            selected_id: None,
             props_ui: PropertyEditor::new(),
-            sim: ctx.clone()
+            sim: ctx.clone(),
         }
     }
 
     pub fn draw_background(&mut self, ui: &mut Ui) {
         let rect = ui.max_rect();
-        self.pan_zoom
-            .update(ui, rect, self.selected_id == SelectedItemId::None);
+        self.pan_zoom.update(ui, rect, self.selected_id.is_none());
 
         cfg_if::cfg_if! {
             if #[cfg(all(not(web_sys_unstable_apis), feature = "wasm"))] {
@@ -262,7 +269,7 @@ impl CircuitBoardEditor {
 
         if let Some(paste) = paste {
             self.paste = Some(Arc::new(PastePreview::new(paste, &self.sim)));
-            self.selected_id = SelectedItemId::Paste;
+            self.selected_id = Some(SelectedItemId::Paste);
         }
 
         let selected_item = self.selected_item();
@@ -287,14 +294,16 @@ impl CircuitBoardEditor {
                 state.update_everything();
             }
 
-            if ui.input(|input| input.key_pressed(Key::R)) {
-                self.change_selected_props(&selected_item, "dir", |d: &mut Direction4| {
-                    *d = d.rotate_clockwise()
-                });
-            }
+            if let Some(selected) = &selected_item {
+                if ui.input(|input| input.key_pressed(Key::R)) {
+                    self.change_selected_props(selected, "dir", |d: &mut Direction4| {
+                        *d = d.rotate_clockwise()
+                    });
+                }
 
-            if ui.input(|input| input.key_pressed(Key::F)) {
-                self.change_selected_props(&selected_item, "flip", |f: &mut bool| *f = !*f);
+                if ui.input(|input| input.key_pressed(Key::F)) {
+                    self.change_selected_props(selected, "flip", |f: &mut bool| *f = !*f);
+                }
             }
 
             if ui.input(|input| input.key_pressed(Key::Q)) {
@@ -327,10 +336,9 @@ impl CircuitBoardEditor {
     }
 
     pub fn draw_ui(&mut self, ui: &mut Ui) {
-
         let start_time = Instant::now();
 
-        if let SelectedItemId::Board(board_id) = self.selected_id {
+        if let Some(SelectedItemId::Board(board_id)) = self.selected_id {
             if let Some(board) = self.sim.boards.write().get_mut(&board_id) {
                 if board.preview.is_none() {
                     let preview =
@@ -344,7 +352,7 @@ impl CircuitBoardEditor {
 
         let left_panel_rect = self.components_ui(ui);
 
-        if let SelectedItem::Circuit(p) = self.selected_item() {
+        if let Some(SelectedItem::Circuit(p)) = self.selected_item() {
             let props = [((), &p.props).into()];
             let changed = Self::properties_ui(&mut self.props_ui, ui, Some(props))
                 .is_some_and(|v| !v.is_empty());
@@ -394,7 +402,7 @@ impl CircuitBoardEditor {
 
             //let mut selected = self.selected_id.clone();
             if ui.input(|input| input.key_pressed(Key::Escape)) {
-                self.selected_id = SelectedItemId::None;
+                self.selected_id = None;
             }
 
             let inv_resp = ui.add(Inventory {
@@ -406,22 +414,21 @@ impl CircuitBoardEditor {
             });
 
             match (
-                self.selected_id == SelectedItemId::Paste,
+                self.selected_id == Some(SelectedItemId::Paste),
                 self.paste.is_some(),
             ) {
                 (true, true) => (),
-                (true, false) => self.selected_id = SelectedItemId::None,
+                (true, false) => self.selected_id = None,
                 (_, true) => self.paste = None,
                 _ => (),
             }
 
-            let selected_name = match self.selected_item() {
-                SelectedItem::None => None,
-                SelectedItem::Selection => Some("Selection".into()),
-                SelectedItem::Wire => Some("Wire".into()),
-                SelectedItem::Paste(_) => Some("Pasted objects".into()),
-                SelectedItem::Circuit(c) => Some(c.imp.display_name()),
-            };
+            let selected_name = self.selected_item().map(|sel| match sel {
+                SelectedItem::Selection => "Selection".into(),
+                SelectedItem::Wire => "Wire".into(),
+                SelectedItem::Paste(_) => "Pasted objects".into(),
+                SelectedItem::Circuit(c) => c.imp.display_name(),
+            });
 
             if let Some(selected_name) = selected_name {
                 let galley = WidgetText::from(selected_name.deref())
@@ -555,32 +562,24 @@ impl CircuitBoardEditor {
         }
     }
 
-    fn selected_item(&self) -> SelectedItem {
-        match &self.selected_id {
-            SelectedItemId::None => SelectedItem::None,
-            SelectedItemId::Paste => match &self.paste {
-                Some(p) => SelectedItem::Paste(p.clone()),
-                None => SelectedItem::None,
-            },
-            SelectedItemId::Selection => SelectedItem::Selection,
-            SelectedItemId::Wires => SelectedItem::Wire,
-            SelectedItemId::Circuit(circ) => match self.sim.previews.get(circ) {
-                Some(p) => SelectedItem::Circuit(p.clone()),
-                None => SelectedItem::None,
-            },
-            SelectedItemId::Board(id) => {
-                let o = self
-                    .sim
-                    .boards
-                    .read()
-                    .get(id)
-                    .and_then(|b| b.preview.clone());
-                match o {
-                    Some(p) => SelectedItem::Circuit(p),
-                    None => SelectedItem::None,
-                }
-            }
-        }
+    fn selected_item(&self) -> Option<SelectedItem> {
+        self.selected_id.as_ref().and_then(|sel| match sel {
+            SelectedItemId::Paste => self.paste.as_ref().map(|p| SelectedItem::Paste(p.clone())),
+            SelectedItemId::Selection => Some(SelectedItem::Selection),
+            SelectedItemId::Wires => Some(SelectedItem::Wire),
+            SelectedItemId::Circuit(circ) => self
+                .sim
+                .previews
+                .get(circ)
+                .map(|p| SelectedItem::Circuit(p.clone())),
+            SelectedItemId::Board(id) => self
+                .sim
+                .boards
+                .read()
+                .get(id)
+                .and_then(|b| b.preview.clone())
+                .map(SelectedItem::Circuit),
+        })
     }
 
     fn properties_ui<'a, T: Clone>(
@@ -660,7 +659,7 @@ impl CircuitBoardEditor {
                                     preview.draw(&paint_ctx, false);
 
                                     let selected = match &self.selected_id {
-                                        SelectedItemId::Circuit(id) => {
+                                        Some(SelectedItemId::Circuit(id)) => {
                                             *id == preview.imp.type_name()
                                         }
                                         _ => false,
@@ -674,10 +673,10 @@ impl CircuitBoardEditor {
                                         .clicked()
                                     {
                                         self.selected_id = match selected {
-                                            true => SelectedItemId::None,
-                                            false => {
-                                                SelectedItemId::Circuit(preview.imp.type_name())
-                                            }
+                                            true => None,
+                                            false => Some(SelectedItemId::Circuit(
+                                                preview.imp.type_name(),
+                                            )),
                                         };
                                     }
                                 });
@@ -715,8 +714,8 @@ impl CircuitBoardEditor {
                                     });
                                 }
                             } else {
-                                let selected =
-                                    self.selected_id == SelectedItemId::Board(board_guard.uid);
+                                let selected = self.selected_id
+                                    == Some(SelectedItemId::Board(board_guard.uid));
                                 let active = board_guard.uid == self.board.board.read().uid;
 
                                 let resp = ui.add(DoubleSelectableLabel::new(
@@ -729,7 +728,7 @@ impl CircuitBoardEditor {
                                 ));
 
                                 if resp.clicked_by(egui::PointerButton::Primary) && !selected {
-                                    self.selected_id = SelectedItemId::Board(board_guard.uid);
+                                    self.selected_id = Some(SelectedItemId::Board(board_guard.uid));
                                 }
 
                                 if resp.double_clicked_by(egui::PointerButton::Primary) && !active {

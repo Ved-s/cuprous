@@ -8,7 +8,7 @@ use eframe::{
 use crate::{
     board::{ActiveCircuitBoard, CircuitBoard, StoredCircuitBoard},
     circuits::{self, CircuitPreview, CircuitPreviewImpl, CircuitStateContext},
-    ui::views::CircuitBoardEditor,
+    ui::editor::CircuitBoardEditor,
     DynStaticStr, RwLock
 };
 
@@ -18,7 +18,7 @@ pub struct SimulationContext {
 }
 
 pub struct App {
-    editor: crate::ui::views::CircuitBoardEditor,
+    editor: crate::ui::editor::CircuitBoardEditor,
 
     pub sim: Arc<SimulationContext>,
 }

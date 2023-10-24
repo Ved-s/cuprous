@@ -187,7 +187,7 @@ impl Circuit {
                     })
                     .collect::<Vec<_>>()
             })
-            .unwrap_or_else(Vec::new);
+            .unwrap_or_default();
 
         let size = data.design.as_ref().map(|d| d.size).unwrap_or(2.into());
 

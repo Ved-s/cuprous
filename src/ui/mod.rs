@@ -1,47 +1,47 @@
-use std::{any::TypeId, collections::HashSet, f32::consts::TAU, ops::Deref, sync::Arc};
+use std::{any::TypeId, collections::HashSet, f32::consts::TAU, hash::Hash, ops::Deref, sync::Arc};
 
 use eframe::{
     egui::{
         panel::{self, PanelState},
-        FontSelection, Grid, Id, InnerResponse, Key, Label, Margin, PointerButton, Response,
-        Sense, SidePanel, TextStyle, Ui, Widget, WidgetInfo, WidgetText,
-        WidgetType,
+        FontSelection, Grid, Id, InnerResponse, Key, Label, Margin, PointerButton, Response, Sense,
+        SidePanel, TextStyle, Ui, Widget, WidgetInfo, WidgetText, WidgetType,
     },
     epaint::{Color32, PathShape, Rounding, Stroke, TextShape},
 };
 use emath::{pos2, vec2, Rect, Rot2, Vec2};
 
 pub mod drawing;
-pub mod views;
+pub mod editor;
 
 use crate::{
     circuits::props::{CircuitProperty, CircuitPropertyImpl, CircuitPropertyStore},
     DynStaticStr, PaintContext, RwLock,
 };
 
-use self::views::SelectedItemId;
-
-pub enum InventoryItemGroup {
-    SingleItem(Box<dyn InventoryItem>),
-    Group(Vec<Box<dyn InventoryItem>>),
+pub enum InventoryItemGroup<I> {
+    SingleItem(Box<dyn InventoryItem<I>>),
+    Group(Vec<Box<dyn InventoryItem<I>>>),
 }
 
-pub trait InventoryItem {
-    fn id(&self) -> SelectedItemId;
+pub trait InventoryItem<I> {
+    fn id(&self) -> I;
     fn draw(&self, ctx: &PaintContext);
 }
 
-pub struct Inventory<'a> {
-    pub selected: &'a mut SelectedItemId,
-    pub groups: &'a [InventoryItemGroup],
+pub struct Inventory<'a, I>
+where
+    I: Eq + Clone + Hash + Send + Sync + 'static,
+{
+    pub selected: &'a mut Option<I>,
+    pub groups: &'a [InventoryItemGroup<I>],
     pub item_size: Vec2,
     pub item_margin: Margin,
     pub margin: Margin,
 }
 
-#[derive(Clone, Default)]
-struct InventoryMemory {
-    last_group_items: Arc<RwLock<HashSet<SelectedItemId>>>,
+#[derive(Clone)]
+struct InventoryMemory<I> {
+    last_group_items: Arc<RwLock<HashSet<I>>>,
 }
 
 const NUMBER_KEYS: [Key; 10] = [
@@ -57,15 +57,18 @@ const NUMBER_KEYS: [Key; 10] = [
     Key::Num9,
 ];
 
-impl Inventory<'_> {
+impl<I> Inventory<'_, I>
+where
+    I: Eq + Clone + Hash + Send + Sync + 'static,
+{
     fn get_group_icon_item_id(
-        group: &[Box<dyn InventoryItem>],
+        group: &[Box<dyn InventoryItem<I>>],
         ui: &Ui,
         self_id: Id,
     ) -> Option<usize> {
         ui.memory(|mem| {
             mem.data
-                .get_temp::<InventoryMemory>(self_id)
+                .get_temp::<InventoryMemory<I>>(self_id)
                 .and_then(|mem| {
                     let last_group_items = mem.last_group_items.read();
                     for (i, item) in group.iter().enumerate() {
@@ -99,7 +102,7 @@ impl Inventory<'_> {
         let index = match digit_key {
             None => return (current_index, current_sub_index),
             Some(0) => {
-                *self.selected = SelectedItemId::None;
+                *self.selected = None;
                 return (None, None);
             }
             Some(digit) => digit - 1,
@@ -109,7 +112,7 @@ impl Inventory<'_> {
 
         if shift {
             if current_sub_index == Some(index) {
-                *self.selected = SelectedItemId::None;
+                *self.selected = None;
                 return (None, None);
             }
 
@@ -122,17 +125,17 @@ impl Inventory<'_> {
 
             if let Some(group) = selected_group {
                 if let Some(item) = group.get(index) {
-                    *self.selected = item.id();
+                    *self.selected = Some(item.id());
                     return (current_index, Some(index));
                 }
             }
         } else if current_index == Some(index) {
-            *self.selected = SelectedItemId::None;
+            *self.selected = None;
             return (None, None);
         } else if let Some(item) = self.groups.get(index) {
             match item {
                 InventoryItemGroup::SingleItem(item) => {
-                    *self.selected = item.id();
+                    *self.selected = Some(item.id());
                     return (Some(index), None);
                 }
                 InventoryItemGroup::Group(group) => {
@@ -141,7 +144,7 @@ impl Inventory<'_> {
                             .unwrap_or(0);
 
                     if let Some(item) = group.get(item_index) {
-                        *self.selected = item.id();
+                        *self.selected = Some(item.id());
                         return (Some(index), Some(item_index));
                     }
                 }
@@ -151,17 +154,20 @@ impl Inventory<'_> {
     }
 }
 
-impl Widget for Inventory<'_> {
+impl<I> Widget for Inventory<'_, I>
+where
+    I: Eq + Clone + Hash + Send + Sync + 'static,
+{
     fn ui(mut self, ui: &mut eframe::egui::Ui) -> eframe::egui::Response {
-        let (selected_item, selected_sub_item) = match self.selected.clone() {
-            SelectedItemId::None => (None, None),
-            selected => self
+        let (selected_item, selected_sub_item) = match &self.selected {
+            None => (None, None),
+            Some(selected) => self
                 .groups
                 .iter()
                 .enumerate()
                 .find_map(|(i, item)| match item {
                     InventoryItemGroup::SingleItem(item) => {
-                        if item.id() == selected {
+                        if item.id() == *selected {
                             Some((Some(i), None))
                         } else {
                             None
@@ -171,7 +177,7 @@ impl Widget for Inventory<'_> {
                         .iter()
                         .enumerate()
                         .find_map(|(ii, item)| {
-                            if item.id() == selected {
+                            if item.id() == *selected {
                                 Some(ii)
                             } else {
                                 None
@@ -248,11 +254,17 @@ impl Widget for Inventory<'_> {
 
                         if click_pos.is_some_and(|pos| rect.contains(pos)) {
                             let id = item.id();
-                            if *self.selected == id {
-                                *self.selected = SelectedItemId::None;
-                            } else {
-                                *self.selected = id;
-                            }
+
+                            *self.selected = match &self.selected {
+                                Some(sel) => {
+                                    if *sel == id {
+                                        None
+                                    } else {
+                                        Some(id)
+                                    }
+                                }
+                                None => Some(id),
+                            };
                             selected_changed = true;
                         }
                         let rect = apply_margin_to_rect(rect, self.item_margin);
@@ -286,11 +298,16 @@ impl Widget for Inventory<'_> {
                             }
                             if click_pos.is_some_and(|pos| rect.contains(pos)) {
                                 let id = item.id();
-                                if *self.selected == id {
-                                    *self.selected = SelectedItemId::None;
-                                } else {
-                                    *self.selected = id;
-                                }
+                                *self.selected = match &self.selected {
+                                    Some(sel) => {
+                                        if *sel == id {
+                                            None
+                                        } else {
+                                            Some(id)
+                                        }
+                                    }
+                                    None => Some(id),
+                                };
                                 selected_changed = true;
                             }
                             let rect = apply_margin_to_rect(rect, self.item_margin);
@@ -312,11 +329,16 @@ impl Widget for Inventory<'_> {
                     }
                     if click_pos.is_some_and(|pos| rect.contains(pos)) {
                         let id = item.id();
-                        if *self.selected == id {
-                            *self.selected = SelectedItemId::None;
-                        } else {
-                            *self.selected = id;
-                        }
+                        *self.selected = match &self.selected {
+                            Some(sel) => {
+                                if *sel == id {
+                                    None
+                                } else {
+                                    Some(id)
+                                }
+                            }
+                            None => Some(id),
+                        };
                     }
                     let rect = apply_margin_to_rect(rect, self.item_margin);
                     let item_ctx = paint_ctx.with_rect(rect);
@@ -326,16 +348,24 @@ impl Widget for Inventory<'_> {
             }
         }
 
-        if selected_changed && *self.selected != SelectedItemId::None {
-            if let Some(group) = selected_group {
-                ui.memory_mut(|mem| {
-                    let m = mem.data.get_temp_mut_or_default::<InventoryMemory>(id);
-                    let mut last_group_items = m.last_group_items.write();
-                    for item in group {
-                        last_group_items.remove(&item.id());
-                    }
-                    last_group_items.insert(self.selected.clone());
-                });
+        if selected_changed {
+            if let Some(selected) = &self.selected {
+                if let Some(group) = selected_group {
+                    ui.memory_mut(|mem| {
+                        let m =
+                            mem.data
+                                .get_temp_mut_or_insert_with::<InventoryMemory<I>>(id, || {
+                                    InventoryMemory {
+                                        last_group_items: Default::default(),
+                                    }
+                                });
+                        let mut last_group_items = m.last_group_items.write();
+                        for item in group {
+                            last_group_items.remove(&item.id());
+                        }
+                        last_group_items.insert(selected.clone());
+                    });
+                }
             }
         }
 
@@ -805,12 +835,7 @@ impl Widget for DoubleSelectableLabel {
             if fill != Color32::default() || stroke != Stroke::default() {
                 let rect = rect.expand(visuals.expansion);
 
-                ui.painter().rect(
-                    rect,
-                    visuals.rounding,
-                    fill,
-                    stroke,
-                );
+                ui.painter().rect(rect, visuals.rounding, fill, stroke);
             }
 
             text.paint_with_visuals(ui.painter(), text_pos, &visuals);

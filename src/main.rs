@@ -34,7 +34,7 @@ mod r#const;
 
 mod vector;
 
-use ui::views::TileDrawBounds;
+use ui::editor::TileDrawBounds;
 use vector::{Vec2f, Vec2i, Vec2u};
 use wires::WirePart;
 
