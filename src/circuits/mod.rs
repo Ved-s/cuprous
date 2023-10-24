@@ -470,7 +470,7 @@ pub trait CircuitImpl: Any + Send + Sync {
         None
     }
 
-    /// Whether to automatically draw pins as small circuits
+    /// Whether to automatically draw pins before call to `Self::draw`
     fn draw_pin_points(&self) -> bool {
         true
     }

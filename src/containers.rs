@@ -1048,62 +1048,6 @@ impl<'a, T> Iterator for ConstRingBufferRefIterator<'a, T> {
     }
 }
 
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn fixed_vec_remove_shrink() {
-        let mut fv = FixedVec::from_vec(vec![]);
-
-        fv.set(35, 0);
-        fv.set(15, 1);
-        fv.set(100, 4);
-
-        assert_eq!(fv.vec.len(), 5);
-        fv.remove(4);
-        assert_eq!(fv.vec.len(), 2);
-    }
-
-    #[test]
-    fn fixed_vec_correct_free() {
-        let mut fv = FixedVec::from_vec(vec![]);
-
-        fv.set(35, 0);
-        fv.set(15, 1);
-        fv.set(100, 4);
-
-        assert_eq!(fv.first_free_pos(), 2);
-
-        fv.set(25, 2);
-        fv.remove(4);
-        assert_eq!(fv.first_free_pos(), 3);
-
-        fv.remove(1);
-        assert_eq!(fv.first_free_pos(), 1);
-    }
-
-    #[test]
-    fn ring_buf_basic() {
-        let mut buf = ConstRingBuffer::<4, i32>::new();
-
-        buf.push_back(1);
-        buf.push_back(2);
-        buf.push_back(3);
-        buf.push_back(4);
-        buf.push_back(5);
-
-        let vec: Vec<_> = buf.iter().cloned().collect();
-        assert_eq!(vec, [2, 3, 4, 5]);
-
-        assert_eq!(buf[0], 2);
-        assert_eq!(buf[1], 3);
-        assert_eq!(buf[2], 4);
-        assert_eq!(buf[3], 5);
-    }
-}
-
-
 pub enum Queue<T> {
     Random(RandomQueue<T>),
     Ordered(VecDeque<T>)

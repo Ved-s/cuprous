@@ -11,11 +11,15 @@ use eframe::{
 };
 use emath::{pos2, vec2, Rect, Rot2, Vec2};
 
+pub mod drawing;
+pub mod views;
+
 use crate::{
-    app::SelectedItemId,
     circuits::props::{CircuitProperty, CircuitPropertyImpl, CircuitPropertyStore},
     DynStaticStr, PaintContext, RwLock,
 };
+
+use self::views::SelectedItemId;
 
 pub enum InventoryItemGroup {
     SingleItem(Box<dyn InventoryItem>),
@@ -29,7 +33,7 @@ pub trait InventoryItem {
 
 pub struct Inventory<'a> {
     pub selected: &'a mut SelectedItemId,
-    pub groups: &'a Vec<InventoryItemGroup>,
+    pub groups: &'a [InventoryItemGroup],
     pub item_size: Vec2,
     pub item_margin: Margin,
     pub margin: Margin,
@@ -423,7 +427,7 @@ impl PropertyEditor {
                             }),
                     );
                 for str in self.ids_cache_remove.iter() {
-                    self.ids_cache.remove(str.deref());
+                    self.ids_cache.remove(str);
                 }
             }
             stores.push(store);

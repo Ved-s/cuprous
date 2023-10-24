@@ -105,7 +105,7 @@ impl Selection {
             self.rect = None;
         } else {
             let mouse_tile_pos = ctx
-                .egui_ctx
+                .ui
                 .input(|input| input.pointer.interact_pos())
                 .map(|p| ctx.screen.screen_to_world(Vec2f::from(p)));
 
@@ -153,7 +153,7 @@ impl Selection {
                 self.change.clear();
 
                 let (shift, ctrl) = ctx
-                    .egui_ctx
+                    .ui
                     .input(|input| (input.modifiers.shift, input.modifiers.ctrl));
                 if !shift && !ctrl {
                     self.selection.clear();
@@ -199,7 +199,7 @@ impl Selection {
             }
         }
 
-        let shift = ctx.egui_ctx.input(|input| input.modifiers.shift);
+        let shift = ctx.ui.input(|input| input.modifiers.shift);
         for point in possible_points {
             if board.should_draw_wire_point(point, shift) {
                 let node =

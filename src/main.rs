@@ -7,7 +7,7 @@
 use std::{
     borrow::Borrow,
     collections::HashSet,
-    f32::consts::{PI, TAU},
+    f32::consts::TAU,
     hash::Hash,
     num::NonZeroU32,
     ops::{Deref, Range},
@@ -17,14 +17,14 @@ use std::{
     },
 };
 
-use app::{SelectedItemId, SimulationContext};
-use board::{selection::Selection, ActiveCircuitBoard};
+use app::SimulationContext;
+use board::ActiveCircuitBoard;
 use cache::GLOBAL_STR_CACHE;
 use eframe::{
-    egui::{self, Context, Sense, Ui},
-    epaint::{Color32, PathShape, Rounding, Shape, Stroke},
+    egui::{self, Sense, Ui},
+    epaint::{Color32, Rounding},
 };
-use emath::{pos2, vec2, Pos2, Rect};
+use emath::{vec2, Rect};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 #[cfg(feature = "wasm")]
@@ -34,7 +34,7 @@ mod r#const;
 
 mod vector;
 
-use ui::InventoryItem;
+use ui::views::TileDrawBounds;
 use vector::{Vec2f, Vec2i, Vec2u};
 use wires::WirePart;
 
@@ -47,7 +47,7 @@ use circuits::CircuitPreview;
 mod wires;
 
 mod state;
-use state::{State, WireState};
+use state::State;
 
 mod board;
 
@@ -101,53 +101,25 @@ pub async fn web_main(canvas_id: &str) -> Result<(), JsValue> {
         .await
 }
 
-#[allow(unused)]
-#[derive(Debug, Clone, Copy)]
-struct TileDrawBounds {
-    pub screen_tl: Vec2f,
-    pub screen_br: Vec2f,
-
-    pub tiles_tl: Vec2i,
-    pub tiles_br: Vec2i,
-
-    pub chunks_tl: Vec2i,
-    pub chunks_br: Vec2i,
-}
-
-impl TileDrawBounds {
-    pub const EVERYTHING: TileDrawBounds = TileDrawBounds {
-        screen_tl: Vec2f::single_value(f32::NEG_INFINITY),
-        screen_br: Vec2f::single_value(f32::INFINITY),
-        tiles_tl: Vec2i::single_value(i32::MIN),
-        tiles_br: Vec2i::single_value(i32::MAX),
-        chunks_tl: Vec2i::single_value(i32::MIN),
-        chunks_br: Vec2i::single_value(i32::MAX),
-    };
-}
-
 #[allow(clippy::redundant_allocation)]
 pub struct PaintContext<'a> {
     screen: Screen,
     paint: &'a egui::Painter,
     rect: Rect,
-    bounds: TileDrawBounds,
     ui: &'a Ui,
-    egui_ctx: &'a Context,
 }
 
 impl<'a> PaintContext<'a> {
     pub fn new_on_ui(ui: &'a Ui, rect: Rect, scale: f32) -> Self {
         Self {
             screen: Screen {
-                offset: rect.left_top().into(),
-                pos: 0.0.into(),
+                scr_rect: rect, 
+                wld_pos: 0.0.into(),
                 scale,
             },
             paint: ui.painter(),
             rect,
-            bounds: TileDrawBounds::EVERYTHING,
             ui,
-            egui_ctx: ui.ctx(),
         }
     }
 
@@ -161,6 +133,7 @@ impl<'a> PaintContext<'a> {
 
     fn draw_chunks<const CHUNK_SIZE: usize, T: Default, P>(
         &self,
+        bounds: TileDrawBounds,
         chunks: &Chunks2D<CHUNK_SIZE, T>,
         pass: &P,
         draw_tester: impl Fn(&T) -> bool,
@@ -173,7 +146,7 @@ impl<'a> PaintContext<'a> {
             tiles_br,
             chunks_tl,
             chunks_br,
-        } = self.bounds;
+        } = bounds;
 
         let screen = &self.screen;
 
@@ -236,7 +209,7 @@ impl<'a> PaintContext<'a> {
 
 #[derive(Debug, Clone, Copy)]
 pub struct PanAndZoom {
-    pos: Vec2f,
+    center_pos: Vec2f,
     scale: f32,
 }
 
@@ -263,7 +236,7 @@ impl PanAndZoom {
         if interaction.dragged_by(egui::PointerButton::Secondary)
             || (allow_primary_button_drag && interaction.dragged_by(egui::PointerButton::Primary))
         {
-            self.pos -= interaction.drag_delta() / self.scale;
+            self.center_pos -= interaction.drag_delta() / self.scale;
         }
 
         if zoom != 1.0 {
@@ -272,10 +245,13 @@ impl PanAndZoom {
                     .unwrap_or_else(|| rect.center())
                     - rect.left_top(),
             );
-            let world_before = self.pos + pointer_screen / self.scale;
+
+            let pointer_center = pointer_screen - (rect.size() / 2.0);
+
+            let world_before = self.center_pos + pointer_center / self.scale;
             self.scale *= zoom;
-            let world_after = self.pos + pointer_screen / self.scale;
-            self.pos -= world_after - world_before;
+            let world_after = self.center_pos + pointer_center / self.scale;
+            self.center_pos -= world_after - world_before;
         }
     }
 }
@@ -283,21 +259,22 @@ impl PanAndZoom {
 impl Default for PanAndZoom {
     fn default() -> Self {
         Self {
-            scale: 1.0,
-            pos: Default::default(),
+            scale: 16.0,
+            center_pos: Default::default(),
         }
     }
 }
 
 impl PanAndZoom {
-    pub fn new(pos: Vec2f, scale: f32) -> Self {
-        Self { pos, scale }
+    pub fn new(center_pos: Vec2f, scale: f32) -> Self {
+        Self { center_pos, scale }
     }
 
-    pub fn to_screen(self, offset: Vec2f) -> Screen {
+    pub fn to_screen(self, screen_rect: Rect) -> Screen {
+        let tl_pos = self.center_pos - (screen_rect.size() / 2.0 / self.scale);
         Screen {
-            offset,
-            pos: self.pos,
+            scr_rect: screen_rect,
+            wld_pos: tl_pos,
             scale: self.scale,
         }
     }
@@ -305,19 +282,18 @@ impl PanAndZoom {
 
 #[derive(Clone, Copy)]
 pub struct Screen {
-    offset: Vec2f,
-    pos: Vec2f,
+    scr_rect: Rect,
+    wld_pos: Vec2f,
     scale: f32,
 }
 
-#[allow(unused)]
 impl Screen {
     pub fn screen_to_world(&self, v: Vec2f) -> Vec2f {
-        self.pos + (v - self.offset) / self.scale
+        self.wld_pos + (v - self.scr_rect.left_top()) / self.scale
     }
 
     pub fn world_to_screen(&self, v: Vec2f) -> Vec2f {
-        (v - self.pos) * self.scale + self.offset
+        (v - self.wld_pos) * self.scale + self.scr_rect.left_top()
     }
 
     pub fn screen_to_world_tile(&self, v: Vec2f) -> Vec2i {
@@ -328,127 +304,6 @@ impl Screen {
         self.world_to_screen(v.convert(|v| v as f32))
     }
 }
-
-struct SelectionInventoryItem {}
-impl InventoryItem for SelectionInventoryItem {
-    fn id(&self) -> SelectedItemId {
-        SelectedItemId::Selection
-    }
-
-    fn draw(&self, ctx: &PaintContext) {
-        let rect = ctx.rect.shrink2(ctx.rect.size() / 5.0);
-        ctx.paint
-            .rect_filled(rect, Rounding::none(), Selection::fill_color());
-        let rect_corners = [
-            rect.left_top(),
-            rect.right_top(),
-            rect.right_bottom(),
-            rect.left_bottom(),
-            rect.left_top(),
-        ];
-
-        let mut shapes = vec![];
-        Shape::dashed_line_many(
-            &rect_corners,
-            Stroke::new(1.0, Selection::border_color()),
-            3.0,
-            2.0,
-            &mut shapes,
-        );
-
-        shapes.into_iter().for_each(|s| {
-            ctx.paint.add(s);
-        });
-    }
-}
-
-struct WireInventoryItem {}
-impl InventoryItem for WireInventoryItem {
-    fn id(&self) -> SelectedItemId {
-        SelectedItemId::Wires
-    }
-
-    fn draw(&self, ctx: &PaintContext) {
-        let color = WireState::False.color();
-
-        let rect1 = Rect::from_center_size(
-            ctx.rect.lerp_inside([0.2, 0.2].into()),
-            ctx.rect.size() * 0.2,
-        );
-        let rect2 = Rect::from_center_size(
-            ctx.rect.lerp_inside([0.8, 0.8].into()),
-            ctx.rect.size() * 0.2,
-        );
-
-        ctx.paint
-            .line_segment([rect1.center(), rect2.center()], Stroke::new(2.5, color));
-
-        ctx.paint.add(Shape::Path(PathShape {
-            points: rotated_rect_shape(rect1, PI * 0.25, rect1.center()),
-            closed: true,
-            fill: color,
-            stroke: Stroke::NONE,
-        }));
-
-        ctx.paint.add(Shape::Path(PathShape {
-            points: rotated_rect_shape(rect2, PI * 0.25, rect2.center()),
-            closed: true,
-            fill: color,
-            stroke: Stroke::NONE,
-        }));
-    }
-}
-
-struct CircuitInventoryItem {
-    preview: Arc<CircuitPreview>,
-    id: DynStaticStr,
-}
-impl InventoryItem for CircuitInventoryItem {
-    fn id(&self) -> SelectedItemId {
-        SelectedItemId::Circuit(self.id.clone())
-    }
-
-    fn draw(&self, ctx: &PaintContext) {
-        let size = self.preview.describe().size.convert(|v| v as f32);
-        let scale = Vec2f::from(ctx.rect.size()) / size;
-        let scale = scale.x().min(scale.y());
-        let size = size * scale;
-        let rect = Rect::from_center_size(ctx.rect.center(), size.into());
-
-        let circ_ctx = PaintContext {
-            screen: Screen {
-                scale,
-                ..ctx.screen
-            },
-            rect,
-            ..*ctx
-        };
-        self.preview.draw(&circ_ctx, false);
-    }
-}
-
-fn rotated_rect_shape(rect: Rect, angle: f32, origin: Pos2) -> Vec<Pos2> {
-    let mut points = vec![
-        rect.left_top(),
-        rect.right_top(),
-        rect.right_bottom(),
-        rect.left_bottom(),
-    ];
-
-    let cos = angle.cos();
-    let sin = angle.sin();
-
-    for p in points.iter_mut() {
-        let pl = *p - origin;
-
-        let x = cos * pl.x - sin * pl.y;
-        let y = sin * pl.x + cos * pl.y;
-        *p = pos2(x, y) + origin.to_vec2();
-    }
-
-    points
-}
-
 trait Intersect {
     fn intersect(&self, other: &Self) -> Self;
 }

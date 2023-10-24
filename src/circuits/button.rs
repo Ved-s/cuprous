@@ -81,7 +81,7 @@ impl CircuitImpl for Circuit {
             paint_ctx.ui.auto_id_with(state_ctx.circuit.pos),
             Sense::drag(),
         );
-        let shift = paint_ctx.egui_ctx.input(|input| input.modifiers.shift);
+        let shift = paint_ctx.ui.input(|input| input.modifiers.shift);
         if interaction.drag_started_by(PointerButton::Primary)
             || !shift && interaction.drag_released_by(PointerButton::Primary)
         {

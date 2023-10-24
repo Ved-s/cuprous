@@ -4,10 +4,7 @@ use std::{
     f32::consts::TAU,
     num::NonZeroU32,
     ops::Deref,
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
-    },
+    sync::Arc,
 };
 
 use bimap::BiMap;
@@ -26,11 +23,13 @@ use crate::{
         InternalPinDirection,
     },
     containers::{Chunks2D, ChunksLookaround, FixedVec},
+    random_u128,
     state::{State, StateCollection, WireState},
+    ui::views::TileDrawBounds,
     unwrap_option_or_continue, unwrap_option_or_return,
     vector::{IsZero, Vec2f, Vec2i, Vec2isize, Vec2u},
     wires::{FoundWireNode, TileWires, Wire, WireNode, WirePart, WirePoint},
-    ArcString, Direction2, Direction4, DynStaticStr, PaintContext, PastePreview, RwLock, Screen, random_u128,
+    ArcString, Direction2, Direction4, DynStaticStr, PaintContext, PastePreview, RwLock, Screen,
 };
 
 use self::selection::{SelectedWorldObject, Selection};
@@ -426,6 +425,8 @@ impl SelectedItem {
         }
     }
 }
+
+// TODO: Move all drawing to the editor
 pub struct ActiveCircuitBoard {
     pub board: Arc<RwLock<CircuitBoard>>,
     pub state: Arc<State>,
@@ -435,8 +436,6 @@ pub struct ActiveCircuitBoard {
 
     wire_drag_pos: Option<Vec2i>,
     pub selection: RefCell<Selection>,
-
-    pub wires_drawn: AtomicUsize,
 }
 
 impl ActiveCircuitBoard {
@@ -517,33 +516,31 @@ impl ActiveCircuitBoard {
             state,
             wire_drag_pos: None,
             selection: RefCell::new(Selection::new()),
-
-            wires_drawn: AtomicUsize::new(0),
         }
     }
 
     pub fn update(
         &mut self,
         ctx: &PaintContext,
+        bounds: TileDrawBounds,
         selected: SelectedItem,
-        debug: bool
+        debug: bool,
     ) {
-        self.wires_drawn.store(0, Ordering::Relaxed);
         self.selection
             .borrow_mut()
             .pre_update_selection(self, ctx, selected.selection());
 
         let selected_something = !self.selection.borrow().selection.is_empty();
 
-        if selected_something && !ctx.egui_ctx.wants_keyboard_input() {
+        if selected_something && !ctx.ui.ctx().wants_keyboard_input() {
             cfg_if::cfg_if! {
                 if #[cfg(all(not(web_sys_unstable_apis), feature = "wasm"))] {
-                    let copy_request = ctx.egui_ctx.input(|input| {
+                    let copy_request = ctx.ui.input(|input| {
                         input.modifiers.ctrl
                             && (input.key_pressed(egui::Key::C) || input.key_pressed(egui::Key::X))
                     });
                 } else {
-                    let copy_request = ctx.egui_ctx.input(|input| {
+                    let copy_request = ctx.ui.input(|input| {
                         input
                             .events
                             .iter()
@@ -617,16 +614,12 @@ impl ActiveCircuitBoard {
                         .input(|input| input.modifiers.ctrl && input.key_pressed(egui::Key::X)) ;
                 } else {
                     let delete_request = ctx
-                        .egui_ctx
+                        .ui
                         .input(|input| input.events.iter().any(|e| matches!(e, egui::Event::Cut)));
                 }
             }
 
-            if delete_request
-                || ctx
-                    .egui_ctx
-                    .input(|input| input.key_pressed(egui::Key::Delete))
-            {
+            if delete_request || ctx.ui.input(|input| input.key_pressed(egui::Key::Delete)) {
                 let mut affected_wires = HashSet::new();
                 let drain = {
                     let mut selection = self.selection.borrow_mut();
@@ -657,16 +650,18 @@ impl ActiveCircuitBoard {
         }
 
         ctx.draw_chunks(
+            bounds,
             &self.wire_nodes,
             &self,
             |node| !node.is_empty(),
             |node, pos, ctx, this, lookaround| {
-                this.draw_wire_node(ctx, node, pos, lookaround, debug);
+                this.draw_wire_node(bounds, ctx, node, pos, lookaround, debug);
             },
         );
 
         if debug {
             ctx.draw_chunks(
+                bounds,
                 &self.wire_nodes,
                 &self,
                 |node| !node.is_empty(),
@@ -677,10 +672,11 @@ impl ActiveCircuitBoard {
         }
 
         ctx.draw_chunks(
+            bounds,
             &self.circuit_nodes,
             &*self,
             |n| n.circuit.is_some(),
-            |node, pos, ctx, this, _| this.draw_circuit_node(node, pos, ctx),
+            |node, pos, ctx, this, _| this.draw_circuit_node(bounds, node, pos, ctx),
         );
 
         self.update_wires(ctx, selected.wire());
@@ -693,7 +689,7 @@ impl ActiveCircuitBoard {
 
     fn draw_hovered_circuit_pin_names(&self, ctx: &PaintContext) {
         let mouse_tile_pos = ctx
-            .egui_ctx
+            .ui
             .input(|input| input.pointer.interact_pos())
             .map(|p| ctx.screen.screen_to_world(Vec2f::from(p)));
 
@@ -861,6 +857,7 @@ impl ActiveCircuitBoard {
 
     fn draw_wire_node(
         &self,
+        bounds: TileDrawBounds,
         ctx: &PaintContext<'_>,
         node: &WireNode,
         pos: Vec2i,
@@ -876,14 +873,19 @@ impl ActiveCircuitBoard {
             color: Color32,
         }
 
-        fn draw_wire(info: WireDrawInfo, this: &ActiveCircuitBoard, ctx: &PaintContext) {
+        fn draw_wire(
+            bounds: TileDrawBounds,
+            info: WireDrawInfo,
+            this: &ActiveCircuitBoard,
+            ctx: &PaintContext,
+        ) {
             if info.dist.is_none() && info.wire.is_none() {
                 return;
             }
 
             let edge = match info.dir {
-                Direction2::Up => info.pos.y() == ctx.bounds.tiles_br.y(),
-                Direction2::Left => info.pos.x() == ctx.bounds.tiles_br.x(),
+                Direction2::Up => info.pos.y() == bounds.tiles_br.y(),
+                Direction2::Left => info.pos.x() == bounds.tiles_br.x(),
             };
 
             if (info.wire.is_none() || info.dist.is_none()) && !edge {
@@ -946,11 +948,11 @@ impl ActiveCircuitBoard {
                 color: wire_color,
             };
 
-            draw_wire(draw, self, ctx);
+            draw_wire(bounds, draw, self, ctx);
         }
 
         if let Some(wire) = node.wire.get() {
-            let possible_intersection = if ctx.egui_ctx.input(|input| input.modifiers.shift) {
+            let possible_intersection = if ctx.ui.input(|input| input.modifiers.shift) {
                 true
             } else {
                 Direction4::iter_all().all(|dir| node.get_dir(dir).is_some())
@@ -1095,10 +1097,16 @@ impl ActiveCircuitBoard {
         }
     }
 
-    fn draw_circuit_node(&self, node: &CircuitNode, pos: Vec2i, ctx: &PaintContext) {
+    fn draw_circuit_node(
+        &self,
+        bounds: TileDrawBounds,
+        node: &CircuitNode,
+        pos: Vec2i,
+        ctx: &PaintContext,
+    ) {
         if !node.origin_dist.is_zero()
-            && pos.x() != ctx.bounds.tiles_tl.x()
-            && pos.y() != ctx.bounds.tiles_tl.y()
+            && pos.x() != bounds.tiles_tl.x()
+            && pos.y() != bounds.tiles_tl.y()
         {
             return;
         }
@@ -1192,7 +1200,7 @@ impl ActiveCircuitBoard {
         }
 
         let mouse_tile_pos = ctx
-            .egui_ctx
+            .ui
             .input(|input| input.pointer.interact_pos())
             .map(|p| ctx.screen.screen_to_world(Vec2f::from(p)));
 
@@ -1228,11 +1236,7 @@ impl ActiveCircuitBoard {
         }
     }
 
-    fn update_previews(
-        &mut self,
-        ctx: &PaintContext,
-        selected: SelectedItem
-    ) {
+    fn update_previews(&mut self, ctx: &PaintContext, selected: SelectedItem) {
         match selected {
             SelectedItem::None => return,
             SelectedItem::Selection => return,
@@ -1242,7 +1246,7 @@ impl ActiveCircuitBoard {
         };
 
         let mouse_tile_pos = ctx
-            .egui_ctx
+            .ui
             .input(|input| input.pointer.interact_pos())
             .map(|p| ctx.screen.screen_to_world(Vec2f::from(p)));
         let mouse_tile_pos_i = match mouse_tile_pos {
@@ -1319,8 +1323,6 @@ impl ActiveCircuitBoard {
         let screen = &ctx.screen;
         let rect = Self::calc_wire_part_rect(screen, part);
         ctx.paint.rect_filled(rect, Rounding::none(), color);
-
-        self.wires_drawn.fetch_add(1, Ordering::Relaxed);
     }
 
     fn calc_wire_point_rect(screen: &Screen, pos: Vec2i) -> Rect {
