@@ -159,7 +159,7 @@ impl Designer {
 
         // paint.rect(
         //     size_rect,
-        //     Rounding::none(),
+        //     Rounding::ZERO,
         //     color.linear_multiply(0.3),
         //     Stroke::new(2.0, color),
         // );

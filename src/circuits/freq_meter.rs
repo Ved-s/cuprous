@@ -43,7 +43,7 @@ impl Circuit {
         );
         ctx.paint.rect(
             rect,
-            Rounding::none(),
+            Rounding::ZERO,
             fill_color,
             Stroke::new(0.15 * ctx.screen.scale, border_color),
         );

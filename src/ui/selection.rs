@@ -92,7 +92,7 @@ where
 
                     ctx.paint.rect_filled(
                         rect,
-                        Rounding::none(),
+                        Rounding::ZERO,
                         Color32::from_rgba_unmultiplied(200, 200, 255, 10),
                     );
 
@@ -169,7 +169,7 @@ where
     pub fn update_selection(&mut self, ctx: &PaintContext) {
         if let Some(rect) = self.rect {
             ctx.paint
-                .rect_stroke(rect, Rounding::none(), Stroke::new(1.0, Color32::WHITE));
+                .rect_stroke(rect, Rounding::ZERO, Stroke::new(1.0, Color32::WHITE));
         }
     }
 }
@@ -200,7 +200,7 @@ impl<I: Clone> InventoryItem<I> for SelectionInventoryItem<I> {
     fn draw(&self, ctx: &PaintContext) {
         let rect = ctx.rect.shrink2(ctx.rect.size() / 5.0);
         ctx.paint
-            .rect_filled(rect, Rounding::none(), selection_fill_color());
+            .rect_filled(rect, Rounding::ZERO, selection_fill_color());
         let rect_corners = [
             rect.left_top(),
             rect.right_top(),

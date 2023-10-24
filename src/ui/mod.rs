@@ -1010,7 +1010,7 @@ pub fn rect_resizer(
 
     let paint = ui.painter();
 
-    paint.rect(*rect, Rounding::none(), fill, stroke);
+    paint.rect(*rect, Rounding::ZERO, fill, stroke);
 
     let hover_rounding = Rounding::same(grab / 2.0);
     let hover_color = Color32::WHITE.linear_multiply(0.3);

@@ -393,7 +393,7 @@ impl CircuitBoard {
             design.decorations.clear();
             design.decorations.push(Decoration::Rect {
                 rect: Rect::from_min_size(pos2(0.5, 0.5), size.convert(|v| v as f32 - 1.0).into()),
-                rounding: Rounding::none(),
+                rounding: Rounding::ZERO,
                 fill: Color32::from_gray(100),
                 stroke: Stroke::new(0.1, Color32::BLACK),
             })
@@ -980,7 +980,7 @@ impl ActiveCircuitBoard {
                         let rect = Rect::from_min_size(pos.into(), size.into());
                         ctx.paint.rect_stroke(
                             rect,
-                            Rounding::none(),
+                            Rounding::ZERO,
                             Stroke::new(2.0, Color32::RED),
                         );
                     }
@@ -1310,7 +1310,7 @@ impl ActiveCircuitBoard {
     pub fn draw_wire_part(&self, ctx: &PaintContext, part: &WirePart, color: Color32) {
         let screen = &ctx.screen;
         let rect = Self::calc_wire_part_rect(screen, part);
-        ctx.paint.rect_filled(rect, Rounding::none(), color);
+        ctx.paint.rect_filled(rect, Rounding::ZERO, color);
     }
 
     pub fn calc_wire_point_rect(screen: &Screen, pos: Vec2i) -> Rect {
@@ -1342,12 +1342,12 @@ impl ActiveCircuitBoard {
         let screen = &ctx.screen;
 
         let rect = Self::calc_wire_point_rect(screen, pos);
-        ctx.paint.rect_filled(rect, Rounding::none(), color);
+        ctx.paint.rect_filled(rect, Rounding::ZERO, color);
 
         // DEBUG: visuals
         if pin_debug {
             ctx.paint
-                .rect_stroke(rect, Rounding::none(), Stroke::new(1.0, Color32::RED));
+                .rect_stroke(rect, Rounding::ZERO, Stroke::new(1.0, Color32::RED));
         }
     }
 
@@ -2630,7 +2630,7 @@ impl CircuitDesign {
             pins: vec![],
             decorations: vec![Decoration::Rect {
                 rect: Rect::from_min_size(pos2(0.0, 0.0), vec2(2.0, 2.0)),
-                rounding: Rounding::none(),
+                rounding: Rounding::ZERO,
                 fill: Color32::from_gray(100),
                 stroke: Stroke::new(0.1, Color32::BLACK),
             }],
@@ -2675,7 +2675,7 @@ impl SelectionImpl<SelectedBoardObject, ActiveCircuitBoard> for BoardObjectSelec
                     let rect = ActiveCircuitBoard::calc_wire_part_rect(&ctx.screen, &part);
                     let rect = rect.expand(2.0);
                     ctx.paint
-                        .rect_filled(rect, Rounding::none(), Color32::WHITE);
+                        .rect_filled(rect, Rounding::ZERO, Color32::WHITE);
 
                     self.possible_points.insert(*pos);
                     self.possible_points.insert(w.pos);
@@ -2689,7 +2689,7 @@ impl SelectionImpl<SelectedBoardObject, ActiveCircuitBoard> for BoardObjectSelec
                     let rect = rect.expand(2.0);
                     ctx.paint.rect(
                         rect,
-                        Rounding::none(),
+                        Rounding::ZERO,
                         selection_fill_color(),
                         Stroke::new(2.0, selection_border_color()),
                     );
@@ -2798,7 +2798,7 @@ impl SelectionImpl<SelectedBoardObject, ActiveCircuitBoard> for BoardObjectSelec
                     let rect = ActiveCircuitBoard::calc_wire_point_rect(&ctx.screen, point);
                     let rect = rect.expand(2.0);
                     ctx.paint
-                        .rect_filled(rect, Rounding::none(), Color32::WHITE);
+                        .rect_filled(rect, Rounding::ZERO, Color32::WHITE);
                 }
             }
         }

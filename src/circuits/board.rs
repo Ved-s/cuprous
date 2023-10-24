@@ -106,7 +106,7 @@ impl Circuit {
         let draw_error = |s: &str| {
             ctx.paint.rect(
                 ctx.rect,
-                Rounding::none(),
+                Rounding::ZERO,
                 Color32::RED.gamma_multiply(0.8 * trans),
                 Stroke::new(2.0, Color32::BLACK.gamma_multiply(trans)),
             );

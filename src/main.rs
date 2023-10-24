@@ -861,7 +861,7 @@ impl PastePreview {
         );
         ctx.paint.rect_filled(
             rect,
-            Rounding::none(),
+            Rounding::ZERO,
             Color32::from_rgba_unmultiplied(0, 120, 120, 120),
         );
 

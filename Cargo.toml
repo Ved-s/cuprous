@@ -7,8 +7,8 @@ edition = "2021"
 bezier-nd = "0.5.0"
 bimap = "0.6.3"
 cfg-if = "1.0.0"
-eframe = { version = "0.22.0", features = ["persistence"] }
-emath = "0.22.0"
+eframe = { version = "0.23.0", features = ["persistence"] }
+emath = "0.23.0"
 geo-nd = "0.5.0"
 parking_lot = { version = "0.12.1", features = ["serde"] }
 paste = "1.0.12"
