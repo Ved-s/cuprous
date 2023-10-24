@@ -12,7 +12,7 @@ use emath::{pos2, vec2, Pos2, Rect};
 use crate::{
     app::SimulationContext,
     board::{
-        selection::Selection, ActiveCircuitBoard, CircuitBoard, SelectedItem, StoredCircuitBoard,
+        selection::{selection_fill_color, selection_border_color}, ActiveCircuitBoard, CircuitBoard, SelectedItem, StoredCircuitBoard, SelectedBoardObject,
     },
     circuits::{
         props::{CircuitPropertyImpl, CircuitPropertyStore},
@@ -102,7 +102,7 @@ impl InventoryItem<SelectedItemId> for SelectionInventoryItem {
     fn draw(&self, ctx: &PaintContext) {
         let rect = ctx.rect.shrink2(ctx.rect.size() / 5.0);
         ctx.paint
-            .rect_filled(rect, Rounding::none(), Selection::fill_color());
+            .rect_filled(rect, Rounding::none(), selection_fill_color());
         let rect_corners = [
             rect.left_top(),
             rect.right_top(),
@@ -114,7 +114,7 @@ impl InventoryItem<SelectedItemId> for SelectionInventoryItem {
         let mut shapes = vec![];
         Shape::dashed_line_many(
             &rect_corners,
-            Stroke::new(1.0, Selection::border_color()),
+            Stroke::new(1.0, selection_border_color()),
             3.0,
             2.0,
             &mut shapes,
@@ -363,7 +363,7 @@ impl CircuitBoardEditor {
             let selection = self.board.selection.borrow();
             if !selection.selection.is_empty() {
                 let selected_circuit_props = selection.selection.iter().filter_map(|o| match o {
-                    crate::board::selection::SelectedWorldObject::Circuit { id } => Some(*id),
+                    SelectedBoardObject::Circuit { id } => Some(*id),
                     _ => None,
                 });
                 let board = self.board.board.read();
@@ -536,7 +536,7 @@ impl CircuitBoardEditor {
                 .selection
                 .iter()
                 .filter_map(|o| match o {
-                    crate::board::selection::SelectedWorldObject::Circuit { id } => Some(*id),
+                    SelectedBoardObject::Circuit { id } => Some(*id),
                     _ => None,
                 })
                 .collect();

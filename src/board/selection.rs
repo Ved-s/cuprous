@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, hash::Hash, marker::PhantomData};
 
 use eframe::{
     egui::{self, Sense},
@@ -7,99 +7,65 @@ use eframe::{
 use emath::Rect;
 
 use crate::{
-    unwrap_option_or_continue,
     vector::{Vec2f, Vec2i, Vec2u},
-    wires::WirePart,
-    Direction2, Direction4, PaintContext,
+    PaintContext,
 };
 
-use super::ActiveCircuitBoard;
-
-#[derive(Hash, PartialEq, Eq)]
-pub enum SelectedWorldObject {
-    WirePart { pos: Vec2i, dir: Direction2 },
-    Circuit { id: usize },
-}
-
-enum SelectionMode {
+#[derive(Clone, Copy)]
+pub enum SelectionMode {
     Include,
     Exclude,
 }
 
-pub struct Selection {
-    start_pos: Option<Vec2f>,
-    rect: Option<Rect>,
-    change: HashSet<SelectedWorldObject>,
-    mode: SelectionMode,
-    pub selection: HashSet<SelectedWorldObject>,
+pub trait SelectionImpl<O, P> {
+    fn collect_changes(&mut self, pass: &P, changes: &mut HashSet<O>, pos: Vec2i, size: Vec2u);
+
+    fn draw_object_selection(&mut self, pass: &P, object: &O, ctx: &PaintContext);
+    fn post_draw_selection(&mut self, pass: &P, ctx: &PaintContext, mode: SelectionMode, selected: &HashSet<O>, change: &HashSet<O>) {
+        let _ = (pass, ctx, mode, selected, change);
+    }
 }
 
-impl Selection {
-    pub fn fill_color() -> Color32 {
-        Color32::from_rgba_unmultiplied(200, 200, 255, 10)
-    }
+pub struct Selection<I, O, P>
+where
+    I: SelectionImpl<O, P>,
+    O: Hash + Eq,
+{
+    start_pos: Option<Vec2f>,
+    rect: Option<Rect>,
+    change: HashSet<O>,
+    mode: SelectionMode,
+    pub selection: HashSet<O>,
+    imp: I,
+    phantom: PhantomData<P>,
+}
 
-    pub fn border_color() -> Color32 {
-        Color32::WHITE
-    }
+pub fn selection_fill_color() -> Color32 {
+    Color32::from_rgba_unmultiplied(200, 200, 255, 10)
+}
 
-    pub fn new() -> Self {
+pub fn selection_border_color() -> Color32 {
+    Color32::WHITE
+}
+
+impl<I, O, P> Selection<I, O, P>
+where
+    I: SelectionImpl<O, P>,
+    O: Hash + Eq,
+{
+    pub fn new(imp: I) -> Self {
         Self {
             start_pos: None,
             rect: None,
             selection: HashSet::new(),
             change: HashSet::new(),
             mode: SelectionMode::Include,
+            imp,
+            phantom: PhantomData,
         }
     }
 
-    pub fn pre_update_selection(
-        &mut self,
-        board: &ActiveCircuitBoard,
-        ctx: &PaintContext,
-        selected: bool,
-    ) {
-        fn draw_selection(
-            this: &ActiveCircuitBoard,
-            item: &SelectedWorldObject,
-            ctx: &PaintContext,
-            possible_points: &mut HashSet<Vec2i>,
-        ) {
-            match item {
-                SelectedWorldObject::WirePart { pos, dir } => {
-                    if let Some(w) = this.find_wire_node(*pos, (*dir).into()) {
-                        let part = WirePart {
-                            pos: *pos,
-                            dir: *dir,
-                            length: w.distance,
-                        };
-                        let rect = ActiveCircuitBoard::calc_wire_part_rect(&ctx.screen, &part);
-                        let rect = rect.expand(2.0);
-                        ctx.paint
-                            .rect_filled(rect, Rounding::none(), Color32::WHITE);
-
-                        possible_points.insert(*pos);
-                        possible_points.insert(w.pos);
-                    }
-                }
-                SelectedWorldObject::Circuit { id } => {
-                    if let Some(circ) = this.board.read().circuits.get(*id) {
-                        let rect_pos = ctx.screen.world_to_screen_tile(circ.pos);
-                        let rect_size =
-                            circ.info.read().size.convert(|v| v as f32) * ctx.screen.scale;
-                        let rect = Rect::from_min_size(rect_pos.into(), rect_size.into());
-                        let rect = rect.expand(2.0);
-                        ctx.paint.rect(
-                            rect,
-                            Rounding::none(),
-                            Selection::fill_color(),
-                            Stroke::new(2.0, Selection::border_color()),
-                        );
-                    }
-                }
-            }
-        }
-
+    pub fn pre_update_selection(&mut self, pass: &P, ctx: &PaintContext, selected: bool) {
         if !selected {
             self.start_pos = None;
             self.rect = None;
@@ -131,8 +97,10 @@ impl Selection {
                         Color32::from_rgba_unmultiplied(200, 200, 255, 10),
                     );
 
-                    self.selection_update_changes(
-                        board,
+                    self.change.clear();
+                    self.imp.collect_changes(
+                        pass,
+                        &mut self.change,
                         min_tile,
                         (max_tile - min_tile).convert(|v| v as u32),
                     );
@@ -182,71 +150,22 @@ impl Selection {
             }
         }
 
-        let mut possible_points = HashSet::new();
-
-        for item in self.selection.iter() {
-            if matches!(self.mode, SelectionMode::Exclude) && self.change.contains(item) {
+        for object in self.selection.iter() {
+            if matches!(self.mode, SelectionMode::Exclude) && self.change.contains(object) {
                 continue;
             }
-            draw_selection(board, item, ctx, &mut possible_points);
+            self.imp.draw_object_selection(pass, object, ctx);
         }
         if matches!(self.mode, SelectionMode::Include) {
-            for item in self.change.iter() {
-                if self.selection.contains(item) {
+            for object in self.change.iter() {
+                if self.selection.contains(object) {
                     continue;
                 }
-                draw_selection(board, item, ctx, &mut possible_points);
+                self.imp.draw_object_selection(pass, object, ctx);
             }
         }
 
-        let shift = ctx.ui.input(|input| input.modifiers.shift);
-        for point in possible_points {
-            if board.should_draw_wire_point(point, shift) {
-                let node =
-                    unwrap_option_or_continue!(board.wire_nodes.get(point.convert(|v| v as isize)));
-                let all_connections_selected = Direction4::iter_all().all(|dir| {
-                    node.get_dir(dir).is_none_or(|_| {
-                        let (part_dir, forward) = dir.into_dir2();
-
-                        let part_pos = if forward {
-                            Some(point)
-                        } else {
-                            board
-                                .find_wire_node_from_node(node, point, dir)
-                                .map(|f| f.pos)
-                        };
-
-                        match part_pos {
-                            None => false,
-                            Some(part_pos) => {
-                                let part = SelectedWorldObject::WirePart {
-                                    pos: part_pos,
-                                    dir: part_dir,
-                                };
-
-                                match self.mode {
-                                    SelectionMode::Include => {
-                                        self.selection.contains(&part)
-                                            || self.change.contains(&part)
-                                    }
-                                    SelectionMode::Exclude => {
-                                        self.selection.contains(&part)
-                                            && !self.change.contains(&part)
-                                    }
-                                }
-                            }
-                        }
-                    })
-                });
-
-                if all_connections_selected {
-                    let rect = ActiveCircuitBoard::calc_wire_point_rect(&ctx.screen, point);
-                    let rect = rect.expand(2.0);
-                    ctx.paint
-                        .rect_filled(rect, Rounding::none(), Color32::WHITE);
-                }
-            }
-        }
+        self.imp.post_draw_selection(pass, ctx, self.mode, &self.selection, &self.change);
     }
 
     pub fn update_selection(&mut self, ctx: &PaintContext) {
@@ -255,56 +174,14 @@ impl Selection {
                 .rect_stroke(rect, Rounding::none(), Stroke::new(1.0, Color32::WHITE));
         }
     }
-
-    fn selection_update_changes(&mut self, board: &ActiveCircuitBoard, pos: Vec2i, size: Vec2u) {
-        self.change.clear();
-
-        for (pos, node) in board
-            .wire_nodes
-            .iter_area(pos.convert(|v| v as isize), size.convert(|v| v as usize))
-        {
-            let pos = pos.convert(|v| v as i32);
-
-            //if let Some(wire) = node.wire.get() {
-            //    self.selection_change
-            //        .insert(SelectedWorldObject::WirePoint { id: wire, pos });
-            //}
-            if node.wire.is_some() {
-                for dir in Direction4::iter_all() {
-                    let node = board.find_wire_node_from_node(node, pos, dir);
-                    let node = unwrap_option_or_continue!(node);
-                    let (dir, forward) = dir.into_dir2();
-
-                    self.change.insert(SelectedWorldObject::WirePart {
-                        pos: if forward { pos } else { node.pos },
-                        dir,
-                    });
-                }
-            } else {
-                for dir in [Direction4::Right, Direction4::Down] {
-                    let node = board.find_wire_node_from_node(node, pos, dir);
-                    let node = unwrap_option_or_continue!(node);
-                    self.change.insert(SelectedWorldObject::WirePart {
-                        pos: node.pos,
-                        dir: dir.into_dir2().0,
-                    });
-                }
-            }
-        }
-        for (_, node) in board
-            .circuit_nodes
-            .iter_area(pos.convert(|v| v as isize), size.convert(|v| v as usize))
-        {
-            let circuit = unwrap_option_or_continue!(node.circuit.get());
-
-            self.change
-                .insert(SelectedWorldObject::Circuit { id: circuit });
-        }
-    }
 }
 
-impl Default for Selection {
+impl<I, O, P> Default for Selection<I, O, P>
+where
+    I: SelectionImpl<O, P> + Default,
+    O: Hash + Eq,
+{
     fn default() -> Self {
-        Self::new()
+        Self::new(I::default())
     }
 }

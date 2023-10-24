@@ -32,7 +32,9 @@ use crate::{
     ArcString, Direction2, Direction4, DynStaticStr, PaintContext, PastePreview, RwLock, Screen,
 };
 
-use self::selection::{SelectedWorldObject, Selection};
+use self::selection::{
+    selection_border_color, selection_fill_color, Selection, SelectionImpl, SelectionMode,
+};
 
 pub mod selection;
 
@@ -413,7 +415,7 @@ pub struct ActiveCircuitBoard {
     pub circuit_nodes: Chunks2D<16, CircuitNode>,
 
     wire_drag_pos: Option<Vec2i>,
-    pub selection: RefCell<Selection>,
+    pub selection: RefCell<Selection<BoardObjectSelectionImpl, SelectedBoardObject, Self>>,
 }
 
 impl ActiveCircuitBoard {
@@ -493,7 +495,7 @@ impl ActiveCircuitBoard {
             circuit_nodes: circuits,
             state,
             wire_drag_pos: None,
-            selection: RefCell::new(Selection::new()),
+            selection: RefCell::new(Selection::default()),
         }
     }
 
@@ -537,12 +539,12 @@ impl ActiveCircuitBoard {
                     let mut min_pos = None;
                     for obj in selection.selection.iter() {
                         let pos = match obj {
-                            SelectedWorldObject::WirePart { pos, dir } => {
+                            SelectedBoardObject::WirePart { pos, dir } => {
                                 let node = self.find_wire_node(*pos, (*dir).into());
                                 let node = unwrap_option_or_continue!(node);
                                 node.pos
                             }
-                            SelectedWorldObject::Circuit { id } => {
+                            SelectedBoardObject::Circuit { id } => {
                                 let circuit = board.circuits.get(*id);
                                 let circuit = unwrap_option_or_continue!(circuit);
                                 circuit.pos
@@ -559,7 +561,7 @@ impl ActiveCircuitBoard {
                     let mut copy = crate::io::CopyPasteData::default();
                     for obj in selection.selection.iter() {
                         match obj {
-                            SelectedWorldObject::WirePart { pos, dir } => {
+                            SelectedBoardObject::WirePart { pos, dir } => {
                                 if let Some(w) = self.find_wire_node(*pos, (*dir).into()) {
                                     copy.wires.push(crate::io::WirePartCopyData {
                                         pos: (*pos - min_pos).convert(|v| v as u32),
@@ -568,7 +570,7 @@ impl ActiveCircuitBoard {
                                     })
                                 }
                             }
-                            SelectedWorldObject::Circuit { id } => {
+                            SelectedBoardObject::Circuit { id } => {
                                 if let Some(circuit) = board.circuits.get(*id) {
                                     let pos = (circuit.pos - min_pos).convert(|v| v as u32);
                                     copy.circuits.push(circuit.copy(pos, self.state.as_ref()))
@@ -609,10 +611,10 @@ impl ActiveCircuitBoard {
                 let sim_lock = sim_lock.write();
                 for obj in drain {
                     match obj {
-                        SelectedWorldObject::Circuit { id } => {
+                        SelectedBoardObject::Circuit { id } => {
                             self.remove_circuit(id, &mut affected_wires);
                         }
-                        SelectedWorldObject::WirePart { pos, dir } => {
+                        SelectedBoardObject::WirePart { pos, dir } => {
                             if let Some(wire) = self.remove_wire_part(pos, dir.into(), true, false)
                             {
                                 affected_wires.insert(wire);
@@ -1308,7 +1310,7 @@ impl ActiveCircuitBoard {
         ctx.paint.rect_filled(rect, Rounding::none(), color);
     }
 
-    fn calc_wire_point_rect(screen: &Screen, pos: Vec2i) -> Rect {
+    pub fn calc_wire_point_rect(screen: &Screen, pos: Vec2i) -> Rect {
         let thickness = screen.scale * Self::WIRE_POINT_THICKNESS;
 
         let rect_pos = screen.world_to_screen_tile(pos) + ((screen.scale - thickness) * 0.5);
@@ -1316,7 +1318,7 @@ impl ActiveCircuitBoard {
         Rect::from_min_size(rect_pos.into(), vec2(thickness, thickness))
     }
 
-    fn calc_wire_part_rect(screen: &Screen, part: &WirePart) -> Rect {
+    pub fn calc_wire_part_rect(screen: &Screen, part: &WirePart) -> Rect {
         let thickness = screen.scale * Self::WIRE_THICKNESS;
 
         let topleft = part
@@ -2004,12 +2006,12 @@ impl ActiveCircuitBoard {
         }
     }
 
-    fn find_wire_node(&self, pos: Vec2i, dir: Direction4) -> Option<FoundWireNode> {
+    pub fn find_wire_node(&self, pos: Vec2i, dir: Direction4) -> Option<FoundWireNode> {
         let node = self.wire_nodes.get(pos.convert(|v| v as isize))?;
         self.find_wire_node_from_node(node, pos, dir)
     }
 
-    fn find_wire_node_from_node(
+    pub fn find_wire_node_from_node(
         &self,
         node: &WireNode,
         pos: Vec2i,
@@ -2101,7 +2103,7 @@ impl ActiveCircuitBoard {
         }
     }
 
-    fn should_draw_wire_point(&self, pos: Vec2i, shift: bool) -> bool {
+    pub fn should_draw_wire_point(&self, pos: Vec2i, shift: bool) -> bool {
         let node =
             unwrap_option_or_return!(self.wire_nodes.get(pos.convert(|v| v as isize)), false);
 
@@ -2638,5 +2640,161 @@ impl CircuitDesign {
         for decoration in self.decorations.iter() {
             decoration.draw(painter, base_pos, scale);
         }
+    }
+}
+
+#[derive(Hash, PartialEq, Eq)]
+pub enum SelectedBoardObject {
+    WirePart { pos: Vec2i, dir: Direction2 },
+    Circuit { id: usize },
+}
+
+#[derive(Default)]
+pub struct BoardObjectSelectionImpl {
+    possible_points: HashSet<Vec2i>,
+}
+
+impl SelectionImpl<SelectedBoardObject, ActiveCircuitBoard> for BoardObjectSelectionImpl {
+    fn draw_object_selection(
+        &mut self,
+        pass: &ActiveCircuitBoard,
+        object: &SelectedBoardObject,
+        ctx: &PaintContext,
+    ) {
+        match object {
+            SelectedBoardObject::WirePart { pos, dir } => {
+                if let Some(w) = pass.find_wire_node(*pos, (*dir).into()) {
+                    let part = WirePart {
+                        pos: *pos,
+                        dir: *dir,
+                        length: w.distance,
+                    };
+                    let rect = ActiveCircuitBoard::calc_wire_part_rect(&ctx.screen, &part);
+                    let rect = rect.expand(2.0);
+                    ctx.paint
+                        .rect_filled(rect, Rounding::none(), Color32::WHITE);
+
+                    self.possible_points.insert(*pos);
+                    self.possible_points.insert(w.pos);
+                }
+            }
+            SelectedBoardObject::Circuit { id } => {
+                if let Some(circ) = pass.board.read().circuits.get(*id) {
+                    let rect_pos = ctx.screen.world_to_screen_tile(circ.pos);
+                    let rect_size = circ.info.read().size.convert(|v| v as f32) * ctx.screen.scale;
+                    let rect = Rect::from_min_size(rect_pos.into(), rect_size.into());
+                    let rect = rect.expand(2.0);
+                    ctx.paint.rect(
+                        rect,
+                        Rounding::none(),
+                        selection_fill_color(),
+                        Stroke::new(2.0, selection_border_color()),
+                    );
+                }
+            }
+        }
+    }
+
+    fn collect_changes(
+        &mut self,
+        pass: &ActiveCircuitBoard,
+        changes: &mut HashSet<SelectedBoardObject>,
+        pos: Vec2i,
+        size: Vec2u,
+    ) {
+        for (pos, node) in pass
+            .wire_nodes
+            .iter_area(pos.convert(|v| v as isize), size.convert(|v| v as usize))
+        {
+            let pos = pos.convert(|v| v as i32);
+
+            if node.wire.is_some() {
+                for dir in Direction4::iter_all() {
+                    let node = pass.find_wire_node_from_node(node, pos, dir);
+                    let node = unwrap_option_or_continue!(node);
+                    let (dir, forward) = dir.into_dir2();
+
+                    changes.insert(SelectedBoardObject::WirePart {
+                        pos: if forward { pos } else { node.pos },
+                        dir,
+                    });
+                }
+            } else {
+                for dir in [Direction4::Right, Direction4::Down] {
+                    let node = pass.find_wire_node_from_node(node, pos, dir);
+                    let node = unwrap_option_or_continue!(node);
+                    changes.insert(SelectedBoardObject::WirePart {
+                        pos: node.pos,
+                        dir: dir.into_dir2().0,
+                    });
+                }
+            }
+        }
+        for (_, node) in pass
+            .circuit_nodes
+            .iter_area(pos.convert(|v| v as isize), size.convert(|v| v as usize))
+        {
+            let circuit = unwrap_option_or_continue!(node.circuit.get());
+
+            changes.insert(SelectedBoardObject::Circuit { id: circuit });
+        }
+    }
+
+    fn post_draw_selection(
+        &mut self,
+        pass: &ActiveCircuitBoard,
+        ctx: &PaintContext,
+        mode: SelectionMode,
+        selected: &HashSet<SelectedBoardObject>,
+        change: &HashSet<SelectedBoardObject>,
+    ) {
+        let shift = ctx.ui.input(|input| input.modifiers.shift);
+        for point in self.possible_points.iter().copied() {
+            if pass.should_draw_wire_point(point, shift) {
+                let node =
+                    unwrap_option_or_continue!(pass.wire_nodes.get(point.convert(|v| v as isize)));
+                let all_connections_selected = Direction4::iter_all().all(|dir| {
+                    node.get_dir(dir).is_none_or(|_| {
+                        let (part_dir, forward) = dir.into_dir2();
+
+                        let part_pos = if forward {
+                            Some(point)
+                        } else {
+                            pass.find_wire_node_from_node(node, point, dir)
+                                .map(|f| f.pos)
+                        };
+
+                        match part_pos {
+                            None => false,
+                            Some(part_pos) => {
+                                let part = SelectedBoardObject::WirePart {
+                                    pos: part_pos,
+                                    dir: part_dir,
+                                };
+
+                                match mode {
+                                    SelectionMode::Include => {
+                                        selected.contains(&part)
+                                            || change.contains(&part)
+                                    }
+                                    SelectionMode::Exclude => {
+                                        selected.contains(&part)
+                                            && !change.contains(&part)
+                                    }
+                                }
+                            }
+                        }
+                    })
+                });
+
+                if all_connections_selected {
+                    let rect = ActiveCircuitBoard::calc_wire_point_rect(&ctx.screen, point);
+                    let rect = rect.expand(2.0);
+                    ctx.paint
+                        .rect_filled(rect, Rounding::none(), Color32::WHITE);
+                }
+            }
+        }
+        self.possible_points.clear();
     }
 }
