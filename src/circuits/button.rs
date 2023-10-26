@@ -8,11 +8,11 @@ use crate::{Direction4, describe_directional_circuit};
 
 use super::{*, props::CircuitProperty};
 
-struct Circuit {
+struct Button {
     out_pin: CircuitPinInfo,
 }
 
-impl Circuit {
+impl Button {
     fn new() -> Self {
         let description = Self::describe(Direction4::Right);
         Self {
@@ -30,7 +30,7 @@ impl Circuit {
 
         let state = state
             .map(|s| {
-                s.read_circuit_internal_state::<State, _>(|state| state.state)
+                s.read_circuit_internal_state::<ButtonState, _>(|state| state.state)
                     .unwrap_or_default()
             })
             .unwrap_or_default();
@@ -70,7 +70,7 @@ impl Circuit {
     }
 }
 
-impl CircuitImpl for Circuit {
+impl CircuitImpl for Button {
     fn draw(&self, state_ctx: &CircuitStateContext, paint_ctx: &PaintContext) {
         Self::draw(Some(state_ctx), paint_ctx, false);
 
@@ -85,7 +85,7 @@ impl CircuitImpl for Circuit {
         if interaction.drag_started_by(PointerButton::Primary)
             || !shift && interaction.drag_released_by(PointerButton::Primary)
         {
-            let new_state = state_ctx.write_circuit_internal_state::<State, _>(|s| {
+            let new_state = state_ctx.write_circuit_internal_state::<ButtonState, _>(|s| {
                 s.state = !s.state;
                 s.state
             });
@@ -99,9 +99,8 @@ impl CircuitImpl for Circuit {
         }
     }
 
-    fn create_pins(&mut self, props: &CircuitPropertyStore) -> Box<[CircuitPinInfo]> {
-
-        let description = Self::describe_props(props);
+    fn create_pins(&mut self, circ: &Arc<Circuit>) -> Box<[CircuitPinInfo]> {
+        let description = Self::describe_props(&circ.props);
         self.out_pin = description.pins[0].to_info();
 
         vec![self.out_pin.clone()].into_boxed_slice()
@@ -109,46 +108,47 @@ impl CircuitImpl for Circuit {
 
     fn update_signals(&self, state_ctx: &CircuitStateContext, _: Option<usize>) {
         let state = state_ctx
-            .read_circuit_internal_state::<State, _>(|state| state.state)
+            .read_circuit_internal_state::<ButtonState, _>(|state| state.state)
             .unwrap_or_default();
         self.out_pin.set_state(state_ctx, state.into());
     }
 
     fn load_internal(
         &self,
+        _: &CircuitStateContext,
         data: &serde_intermediate::Intermediate,
     ) -> Option<Box<dyn InternalCircuitState>> {
-        serde_intermediate::de::intermediate::deserialize::<State>(data)
+        serde_intermediate::de::intermediate::deserialize::<ButtonState>(data)
             .ok()
             .map(|s| Box::new(s) as Box<dyn InternalCircuitState>)
     }
 
-    fn size(&self, props: &CircuitPropertyStore) -> Vec2u {
-        Self::describe_props(props).size
+    fn size(&self, circ: &Arc<Circuit>) -> Vec2u {
+        Self::describe_props(&circ.props).size
     }
 }
 
 #[derive(Default, Serialize, Deserialize)]
-struct State {
+struct ButtonState {
     state: bool,
 }
 
-impl InternalCircuitState for State {
+impl InternalCircuitState for ButtonState {
     fn serialize(&self) -> serde_intermediate::Intermediate {
         serde_intermediate::to_intermediate(self).unwrap()
     }
 }
 
 #[derive(Debug)]
-pub struct Preview {}
+pub struct ButtonPreview {}
 
-impl CircuitPreviewImpl for Preview {
+impl CircuitPreviewImpl for ButtonPreview {
     fn draw_preview(&self, _: &CircuitPropertyStore, ctx: &PaintContext, in_world: bool) {
-        Circuit::draw(None, ctx, in_world);
+        Button::draw(None, ctx, in_world);
     }
 
     fn create_impl(&self) -> Box<dyn CircuitImpl> {
-        Box::new(Circuit::new())
+        Box::new(Button::new())
     }
 
     fn type_name(&self) -> DynStaticStr {
@@ -160,7 +160,7 @@ impl CircuitPreviewImpl for Preview {
         _: &serde_intermediate::Intermediate,
         _: &Arc<SimulationContext>
     ) -> Option<Box<dyn CircuitPreviewImpl>> {
-        Some(Box::new(Preview {}))
+        Some(Box::new(ButtonPreview {}))
     }
 
     fn default_props(&self) -> CircuitPropertyStore {
@@ -174,6 +174,6 @@ impl CircuitPreviewImpl for Preview {
     }
 
     fn describe(&self, props: &CircuitPropertyStore) -> DynCircuitDescription {
-        Circuit::describe_props(props).to_dyn()
+        Button::describe_props(props).to_dyn()
     }
 }

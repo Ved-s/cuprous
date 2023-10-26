@@ -4,7 +4,7 @@ use eframe::{
 };
 use emath::vec2;
 
-use crate::{circuits::*, vector::Vec2f, Direction4, describe_directional_custom_circuit};
+use crate::{circuits::*, describe_directional_custom_circuit, vector::Vec2f, Direction4};
 
 use super::props::{CircuitProperty, CircuitPropertyImpl};
 
@@ -16,7 +16,7 @@ enum Type {
     PNP,
 }
 
-struct Circuit {
+struct Transistor {
     collector: CircuitPinInfo,
     base: CircuitPinInfo,
     emitter: CircuitPinInfo,
@@ -25,7 +25,7 @@ struct Circuit {
     flip: bool,
 }
 
-impl Circuit {
+impl Transistor {
     fn new() -> Self {
         let description = Self::describe(Direction4::Left, false);
         Self {
@@ -135,7 +135,7 @@ impl Circuit {
     }
 }
 
-impl CircuitImpl for Circuit {
+impl CircuitImpl for Transistor {
     fn draw(&self, state_ctx: &CircuitStateContext, paint_ctx: &PaintContext) {
         let collector = self.collector.get_state(state_ctx);
         let base = self.base.get_state(state_ctx);
@@ -155,8 +155,8 @@ impl CircuitImpl for Circuit {
         );
     }
 
-    fn create_pins(&mut self, props: &CircuitPropertyStore) -> Box<[CircuitPinInfo]> {
-        let dscription = Self::describe_props(props);
+    fn create_pins(&mut self, circ: &Arc<Circuit>) -> Box<[CircuitPinInfo]> {
+        let dscription = Self::describe_props(&circ.props);
 
         self.collector = dscription.pins[0].to_info();
         self.base = dscription.pins[1].to_info();
@@ -187,19 +187,19 @@ impl CircuitImpl for Circuit {
         self.emitter.set_state(state_ctx, output);
     }
 
-    fn size(&self, props: &CircuitPropertyStore) -> Vec2u {
-        Self::describe_props(props).size
+    fn size(&self, circ: &Arc<Circuit>) -> Vec2u {
+        Self::describe_props(&circ.props).size
     }
 
-    fn apply_props(&mut self, props: &CircuitPropertyStore, changed: Option<&str>) {
+    fn apply_props(&mut self, circ: &Arc<Circuit>, changed: Option<&str>) {
         if matches!(changed, None | Some("dir")) {
-            self.dir = props.read_clone("dir").unwrap_or(Direction4::Left);
+            self.dir = circ.props.read_clone("dir").unwrap_or(Direction4::Left);
         }
         if matches!(changed, None | Some("flip")) {
-            self.flip = props.read_clone("flip").unwrap_or(false);
+            self.flip = circ.props.read_clone("flip").unwrap_or(false);
         }
         if matches!(changed, None | Some("ty")) {
-            self.ty = props.read_clone("ty").unwrap_or(Type::NPN);
+            self.ty = circ.props.read_clone("ty").unwrap_or(Type::NPN);
         }
     }
 
@@ -213,9 +213,9 @@ impl CircuitImpl for Circuit {
 }
 
 #[derive(Debug)]
-pub struct Preview {}
+pub struct TransistorPreview {}
 
-impl CircuitPreviewImpl for Preview {
+impl CircuitPreviewImpl for TransistorPreview {
     fn type_name(&self) -> DynStaticStr {
         "transistor".into()
     }
@@ -228,19 +228,19 @@ impl CircuitPreviewImpl for Preview {
             .angle_to_left();
         let flip = props.read_clone("flip").unwrap_or(false);
         let ty = props.read_clone("ty").unwrap_or(Type::NPN);
-        Circuit::draw(ty, None, ctx, angle, flip);
+        Transistor::draw(ty, None, ctx, angle, flip);
     }
 
     fn create_impl(&self) -> Box<dyn CircuitImpl> {
-        Box::new(Circuit::new())
+        Box::new(Transistor::new())
     }
 
     fn load_impl_data(
         &self,
         _: &serde_intermediate::Intermediate,
-        _: &Arc<SimulationContext>
+        _: &Arc<SimulationContext>,
     ) -> Option<Box<dyn CircuitPreviewImpl>> {
-        Some(Box::new(Preview {}))
+        Some(Box::new(TransistorPreview {}))
     }
 
     fn default_props(&self) -> CircuitPropertyStore {
@@ -256,7 +256,7 @@ impl CircuitPreviewImpl for Preview {
     }
 
     fn describe(&self, props: &CircuitPropertyStore) -> DynCircuitDescription {
-        Circuit::describe_props(props).to_dyn()
+        Transistor::describe_props(props).to_dyn()
     }
 }
 
@@ -279,7 +279,7 @@ impl CircuitPropertyImpl for Type {
             })
             .show_ui(ui, |ui| {
                 for ty in [Type::NPN, Type::PNP] {
-                    let name =  match ty {
+                    let name = match ty {
                         Type::NPN => "NPN",
                         Type::PNP => "PNP",
                     };
@@ -316,7 +316,8 @@ impl CircuitPropertyImpl for Type {
 impl<'de> Deserialize<'de> for Type {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
-        D: serde::Deserializer<'de> {
+        D: serde::Deserializer<'de>,
+    {
         Ok(match char::deserialize(deserializer)? {
             'n' => Type::PNP,
             _ => Type::NPN,
@@ -327,7 +328,8 @@ impl<'de> Deserialize<'de> for Type {
 impl Serialize for Type {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
-        S: serde::Serializer {
+        S: serde::Serializer,
+    {
         match *self {
             Type::NPN => 'p'.serialize(serializer),
             Type::PNP => 'n'.serialize(serializer),

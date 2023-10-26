@@ -2,9 +2,9 @@ App                                               | Main egui application
  └arc SimulationContext                           | 
    ├[arc CircuitPreview]                          | Map for circuit previews, type id -> preview
    └rwlock [StoredCircuitBoard]                   | 
-     ├arc rwlock CircuitBoard                     | 
-     │ ├[Wire]                                    | 
-     │ ├[arc Circuit]                             | 
+     ├arc CircuitBoard                            | 
+     │ ├rwlock [Wire]                             | 
+     │ ├rwlock [arc Circuit]                      | 
      │ │ ├arc rwlock CircuitInfo                  | 
      │ │ │ └[CircuitPinInfo]                      | 
      │ │ │                                        | 

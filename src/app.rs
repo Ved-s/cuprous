@@ -65,12 +65,10 @@ impl eframe::App for App {
 
     fn save(&mut self, _storage: &mut dyn eframe::Storage) {
         let boards = self.sim.boards.read();
-        let guards: Vec<_> = boards.values().map(|b| b.board.read()).collect();
-        let locks: Vec<_> = guards.iter().map(|g| g.sim_lock.write()).collect();
-        let data: Vec<_> = guards.iter().map(|g| g.save(false)).collect();
+        let locks: Vec<_> = boards.values().map(|b| b.board.sim_lock.write()).collect();
+        let data: Vec<_> = boards.values().map(|b| b.board.save(false)).collect();
 
         drop(locks);
-        drop(guards);
 
         _storage.set_string("boards", ron::to_string(&data).unwrap());
 
@@ -87,29 +85,29 @@ impl eframe::App for App {
 impl App {
     pub fn create(cc: &CreationContext) -> Self {
         let previews = [
-            Box::new(circuits::button::Preview {}) as Box<dyn CircuitPreviewImpl>,
-            Box::new(circuits::gates::gate::Preview {
+            Box::new(circuits::button::ButtonPreview {}) as Box<dyn CircuitPreviewImpl>,
+            Box::new(circuits::gates::gate::GatePreview {
                 template: circuits::gates::or::TEMPLATE,
             }),
-            Box::new(circuits::gates::gate::Preview {
+            Box::new(circuits::gates::gate::GatePreview {
                 template: circuits::gates::nor::TEMPLATE,
             }),
-            Box::new(circuits::gates::gate::Preview {
+            Box::new(circuits::gates::gate::GatePreview {
                 template: circuits::gates::xor::TEMPLATE,
             }),
-            Box::new(circuits::gates::gate::Preview {
+            Box::new(circuits::gates::gate::GatePreview {
                 template: circuits::gates::xnor::TEMPLATE,
             }),
-            Box::new(circuits::gates::gate::Preview {
+            Box::new(circuits::gates::gate::GatePreview {
                 template: circuits::gates::and::TEMPLATE,
             }),
-            Box::new(circuits::gates::gate::Preview {
+            Box::new(circuits::gates::gate::GatePreview {
                 template: circuits::gates::nand::TEMPLATE,
             }),
-            Box::new(circuits::gates::not::Preview {}),
-            Box::new(circuits::pullup::Preview {}),
-            Box::new(circuits::transistor::Preview {}),
-            Box::new(circuits::freq_meter::Preview {}),
+            Box::new(circuits::gates::not::NotPreview {}),
+            Box::new(circuits::pullup::PullupPreview {}),
+            Box::new(circuits::transistor::TransistorPreview {}),
+            Box::new(circuits::freq_meter::FreqMeterPreview {}),
             Box::new(circuits::pin::Preview {}),
         ];
         let preview_data = cc
@@ -137,7 +135,7 @@ impl App {
                 if let Ok(data) = ron::from_str::<Vec<crate::io::CircuitBoardData>>(&boards) {
                     for data in &data {
                         let board = CircuitBoard::load(data, &ctx);
-                        let uid = board.read().uid;
+                        let uid = board.uid;
                         ctx.boards
                             .write()
                             .insert(uid, StoredCircuitBoard::new(board));
@@ -148,16 +146,17 @@ impl App {
 
                 if let Ok(data) = ron::from_str::<crate::io::CircuitBoardData>(&main_board) {
                     let board = CircuitBoard::load(&data, &ctx);
-                    let mut board_guard = board.write();
-                    if board_guard.name.get_str().is_empty() {
-                        board_guard.name = "main".into();
+                    let mut name = board.name.write();
+                    if name.get_str().is_empty() {
+                        let string = name.get_mut();
+                        string.clear();
+                        string.push_str("main");
                     }
-                    let uid = board_guard.uid;
-                    drop(board_guard);
+                    drop(name);
 
                     ctx.boards
                         .write()
-                        .insert(uid, StoredCircuitBoard::new(board));
+                        .insert(board.uid, StoredCircuitBoard::new(board));
                 }
             }
         }
@@ -176,10 +175,12 @@ impl App {
             states.clear();
             circuits.clear();
 
-            let guard = board.read();
-            states.extend(guard.states.states().read().iter().cloned());
-            circuits.extend(guard.circuits.iter().cloned());
-            drop(guard);
+            let board_states = board.states.states.read();
+            states.extend(board_states.iter().cloned());
+            let board_circuits = board.circuits.read();
+            circuits.extend(board_circuits.iter().cloned());
+
+            drop((board_states, board_circuits));
 
             for state in states.drain(..) {
                 for circuit in circuits.drain(..) {
@@ -194,18 +195,17 @@ impl App {
 
     pub fn new(ctx: Arc<SimulationContext>) -> Self {
         if ctx.boards.read().is_empty() {
-            let mut board = CircuitBoard::new(ctx.clone());
-            board.name = "main".into();
+            let board = CircuitBoard::new(ctx.clone(), "main");
             ctx.boards.write().insert(
                 board.uid,
-                StoredCircuitBoard::new(Arc::new(RwLock::new(board))),
+                StoredCircuitBoard::new(Arc::new(board)),
             );
         }
 
         #[cfg(not(feature = "single_thread"))]
         {
             for board in ctx.boards.read().values() {
-                board.board.read().activate();
+                board.board.activate();
             }
         }
 

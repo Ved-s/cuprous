@@ -42,7 +42,7 @@ mod containers;
 use crate::containers::*;
 
 mod circuits;
-use circuits::CircuitPreview;
+use circuits::{CircuitPreview, CircuitStateContext};
 
 mod wires;
 
@@ -897,7 +897,7 @@ impl PastePreview {
             return;
         }
 
-        let sim_lock = { board.board.read().sim_lock.clone() };
+        let sim_lock = { board.board.sim_lock.clone() };
         let sim_lock = sim_lock.write();
 
         let mut wire_ids: HashSet<usize> = HashSet::new();
@@ -920,37 +920,35 @@ impl PastePreview {
                 preview,
                 None,
                 &|board, id| {
-                    let board = board.board.read();
-                    if let Some(circuit) = board.circuits.get(id) {
+                    if let Some(circuit) = board.board.circuits.read().get(id).cloned() {
                         if !matches!(
                             circuit_data.internal,
                             serde_intermediate::Intermediate::Unit
                         ) {
-                            for state in board.states.states().read().iter() {
+                            for state in board.board.states.states.read().iter() {
+                                let ctx = CircuitStateContext::new(state.clone(), circuit.clone());
                                 state.write_circuit(id, |state| {
                                     state.internal =
-                                        circuit.imp.write().load_internal(&circuit_data.internal);
+                                        circuit.imp.write().load_internal(&ctx, &circuit_data.internal);
                                 });
                             }
                         }
 
                         if !matches!(circuit_data.imp, serde_intermediate::Intermediate::Unit) {
-                            circuit.imp.write().load(&circuit_data.imp)
+                            circuit.imp.write().load(&circuit, &circuit_data.imp)
                         }
                     }
                 }
             );
             if let (Some(id), Some(dur)) = (id, circuit_data.update) {
-                let board = board.board.read();
-                for state in board.states.states().read().iter() {
+                for state in board.board.states.states.read().iter() {
                     state.set_circuit_update_interval(id, dur)
                 }
             }
         }
 
-        let board = board.board.read();
         for wire in wire_ids {
-            board.states.update_wire(wire, true);
+            board.board.states.update_wire(wire, true);
         }
         drop(sim_lock)
     }

@@ -21,7 +21,7 @@ use crate::{
     },
     state::WireState,
     vector::{Vec2f, Vec2i},
-    Direction4, DynStaticStr, PaintContext, PanAndZoom, PastePreview, RwLock, Screen,
+    Direction4, DynStaticStr, PaintContext, PanAndZoom, PastePreview, Screen,
 };
 
 use super::{
@@ -259,16 +259,8 @@ impl CircuitBoardEditor {
             if ui.input(|input| input.key_pressed(Key::F9)) {
                 self.debug = !self.debug;
             } else if ui.input(|input| input.key_pressed(Key::F8)) {
-                let board = self.board.board.clone();
                 let state = self.board.state.clone();
-                self.board = ActiveCircuitBoard::new(board, state);
-            } else if ui.input(|input| input.key_pressed(Key::F7)) {
-                self.board.board.write().regenerate_temp_design();
-                if let Some(board) = self.sim.boards.read().get(&self.board.board.read().uid) {
-                    if let Some(preview) = &board.preview {
-                        preview.redescribe();
-                    }
-                }
+                self.board = ActiveCircuitBoard::new(state);
             } else if ui.input(|input| input.key_pressed(Key::F4)) {
                 let state = &self.board.state;
                 state.reset();
@@ -288,12 +280,11 @@ impl CircuitBoardEditor {
             }
 
             if ui.input(|input| input.key_pressed(Key::Q)) {
-                let sim_lock = self.board.board.read().sim_lock.clone();
+                let sim_lock = self.board.board.sim_lock.clone();
                 let sim_lock = sim_lock.write();
 
-                let mut board = self.board.board.write();
-                let ordered = board.is_ordered_queue();
-                board.set_ordered_queue(!ordered, false);
+                let ordered = self.board.board.is_ordered_queue();
+                self.board.board.set_ordered_queue(!ordered, false);
                 drop(sim_lock);
             }
         }
@@ -319,7 +310,7 @@ impl CircuitBoardEditor {
             if let Some(board) = self.sim.boards.write().get_mut(&board_id) {
                 if board.preview.is_none() {
                     let preview =
-                        crate::circuits::board::Preview::new_from_board(board.board.clone());
+                        crate::circuits::board::BoardPreview::new_from_board(board.board.clone());
                     let preview =
                         CircuitPreview::new(Box::new(preview), CircuitPropertyStore::default());
                     board.preview = Some(Arc::new(preview));
@@ -343,14 +334,14 @@ impl CircuitBoardEditor {
                     SelectedBoardObject::Circuit { id } => Some(*id),
                     _ => None,
                 });
-                let board = self.board.board.read();
+                let circuits = self.board.board.circuits.read();
                 let stores: Vec<_> = selected_circuit_props
-                    .filter_map(|id| board.circuits.get(id).map(|c| (id, &c.props).into()))
+                    .filter_map(|id| circuits.get(id).map(|c| (id, &c.props).into()))
                     .collect();
 
                 let response = Self::properties_ui(&mut self.props_ui, ui, Some(stores));
                 drop(selection);
-                drop(board);
+                drop(circuits);
 
                 if let Some(changes) = response {
                     for property in changes {
@@ -393,7 +384,7 @@ impl CircuitBoardEditor {
                     .boards
                     .read()
                     .get(id)
-                    .map(|b| b.board.read().name.get_arc().into()),
+                    .map(|b| b.board.name.read().get_arc().into()),
             });
 
             match (
@@ -407,7 +398,7 @@ impl CircuitBoardEditor {
             }
 
             let debug = self.debug;
-            let ordered_queue = self.board.board.read().is_ordered_queue();
+            let ordered_queue = self.board.board.is_ordered_queue();
 
             let text = format!(
                 "[F9] Debug: {debug}\n\
@@ -469,9 +460,9 @@ impl CircuitBoardEditor {
                 .collect();
 
             let mut vec = vec![];
-            let board = self.board.board.read();
+            let circuits = self.board.board.circuits.read();
             for circuit_id in selected_circuits {
-                let circuit = board.circuits.get(circuit_id);
+                let circuit = circuits.get(circuit_id);
                 let circuit = unwrap_option_or_continue!(circuit);
                 let old = circuit.props.write(id, |p: &mut T| {
                     let old = p.clone();
@@ -481,7 +472,7 @@ impl CircuitBoardEditor {
                 let old = unwrap_option_or_continue!(old);
                 vec.push((circuit_id, old))
             }
-            drop(board);
+            drop(circuits);
             for (circuit, old) in vec {
                 self.board
                     .circuit_property_changed(circuit, id, old.as_ref());
@@ -625,13 +616,11 @@ impl CircuitBoardEditor {
                         let mut designer_request = None;
                         let no_delete = self.sim.boards.read().len() <= 1;
                         for board in self.sim.boards.read().values() {
-                            let board_guard = board.board.read();
 
-                            if Some(board_guard.uid) == rename && !drawn_renamer {
-                                drop(board_guard);
-                                let mut board_guard = board.board.write();
+                            if Some(board.board.uid) == rename && !drawn_renamer {
+                                let mut name = board.board.name.write();
 
-                                let res = TextEdit::singleline(board_guard.name.get_mut())
+                                let res = TextEdit::singleline(name.get_mut())
                                     .id(renamer_id)
                                     .show(ui);
                                 drawn_renamer = true;
@@ -643,20 +632,20 @@ impl CircuitBoardEditor {
                                 }
                             } else {
                                 let selected = self.selected_id
-                                    == Some(SelectedItemId::Board(board_guard.uid));
-                                let active = board_guard.uid == self.board.board.read().uid;
+                                    == Some(SelectedItemId::Board(board.board.uid));
+                                let active = board.board.uid == self.board.board.uid;
 
                                 let resp = ui.add(DoubleSelectableLabel::new(
                                     selected,
                                     active,
-                                    board_guard.name.get_str().deref(),
+                                    board.board.name.read().get_str().deref(),
                                     Color32::WHITE.gamma_multiply(0.3),
                                     None,
                                     Stroke::new(1.0, Color32::LIGHT_GREEN),
                                 ));
 
                                 if resp.clicked_by(egui::PointerButton::Primary) && !selected {
-                                    self.selected_id = Some(SelectedItemId::Board(board_guard.uid));
+                                    self.selected_id = Some(SelectedItemId::Board(board.board.uid));
                                 }
 
                                 if resp.double_clicked_by(egui::PointerButton::Primary) && !active {
@@ -681,7 +670,7 @@ impl CircuitBoardEditor {
                                         ui.memory_mut(|mem| {
                                             mem.data.insert_temp(
                                                 renamer_memory_id,
-                                                Some(board_guard.uid),
+                                                Some(board.board.uid),
                                             );
                                             mem.request_focus(renamer_id);
                                         });
@@ -691,13 +680,13 @@ impl CircuitBoardEditor {
                                     if !no_delete {
                                         if ui.input(|input| input.modifiers.shift) {
                                             if ui.button("Delete").clicked() {
-                                                queued_deletion = Some(board_guard.uid);
+                                                queued_deletion = Some(board.board.uid);
                                                 ui.close_menu();
                                             }
                                         } else {
                                             ui.menu_button("Delete", |ui| {
                                                 if ui.button("Confirm").clicked() {
-                                                    queued_deletion = Some(board_guard.uid);
+                                                    queued_deletion = Some(board.board.uid);
                                                     ui.close_menu();
                                                 }
                                             });
@@ -708,10 +697,9 @@ impl CircuitBoardEditor {
                         }
 
                         if ui.button("Add board").clicked() {
-                            let mut board = CircuitBoard::new(self.sim.clone());
+                            let board = CircuitBoard::new(self.sim.clone(), "New board");
                             let uid = board.uid;
-                            board.name = "New board".into();
-                            let board = Arc::new(RwLock::new(board));
+                            let board = Arc::new(board);
                             self.sim
                                 .boards
                                 .write()
@@ -732,7 +720,7 @@ impl CircuitBoardEditor {
                         if let Some(uid) = queued_deletion {
                             let mut boards = self.sim.boards.write();
                             boards.remove(&uid);
-                            if self.board.board.read().uid == uid {
+                            if self.board.board.uid == uid {
                                 let board = boards.values().next().expect("Boards must exist!");
                                 self.board = ActiveCircuitBoard::new_main(board.board.clone());
                             }

@@ -7,7 +7,10 @@ use emath::{pos2, vec2, Pos2, Rect};
 use crate::circuits::props::CircuitProperty;
 use crate::state::SafeWireState;
 use crate::vector::Vec2f;
-use crate::{circuits::*, describe_directional_circuit, unwrap_option_or_break, ArcString};
+use crate::{
+    circuits::*, describe_directional_circuit, unwrap_option_or_break, unwrap_option_or_return,
+    ArcString,
+};
 
 use super::props::CircuitPropertyImpl;
 
@@ -41,17 +44,17 @@ impl PinType {
 }
 
 #[derive(Default, Debug, Serialize, Deserialize, Clone, Copy)]
-struct State {
+struct PinState {
     state: SafeWireState,
 }
 
-impl InternalCircuitState for State {
+impl InternalCircuitState for PinState {
     fn serialize(&self) -> serde_intermediate::Intermediate {
         serde_intermediate::to_intermediate(self).unwrap()
     }
 }
 
-pub struct Circuit {
+pub struct Pin {
     pub dir: Direction4,
     pub ty: PinType,
     pub cpos: ControlPinPosition,
@@ -60,7 +63,7 @@ pub struct Circuit {
     ctl: Option<CircuitPinInfo>,
 }
 
-impl Circuit {
+impl Pin {
     pub const DEFAULT_DIR: Direction4 = Direction4::Right;
 
     fn new() -> Self {
@@ -173,7 +176,7 @@ impl Circuit {
     }
 
     fn describe_props(props: &CircuitPropertyStore) -> CircuitDescription<2> {
-        let dir = props.read_clone("dir").unwrap_or(Circuit::DEFAULT_DIR);
+        let dir = props.read_clone("dir").unwrap_or(Pin::DEFAULT_DIR);
         let ty = props.read_clone("ty").unwrap_or(PinType::Pico);
         let cpos = props.read_clone("cpos").unwrap_or(ControlPinPosition::Left);
 
@@ -218,21 +221,28 @@ impl Circuit {
         matches!(self.pin.get_direction(state_ctx), PinDirection::Outside)
     }
 
-    pub fn get_designer_info(&self, props: &CircuitPropertyStore) -> crate::ui::designer::CircuitDesignPinInfo {
+    pub fn get_designer_info(
+        &self,
+        props: &CircuitPropertyStore,
+    ) -> crate::ui::designer::CircuitDesignPinInfo {
         let dir = match self.ty {
             PinType::Pico => InternalPinDirection::Inside,
             PinType::Cipo => InternalPinDirection::Outside,
-            PinType::Controlled => InternalPinDirection::StateDependent { default: PinDirection::Inside },
+            PinType::Controlled => InternalPinDirection::StateDependent {
+                default: PinDirection::Inside,
+            },
         };
         crate::ui::designer::CircuitDesignPinInfo {
             dir,
             display_dir: Some(self.dir.inverted()),
-            display_name: props.read("name", |s: &ArcString| DynStaticStr::Dynamic(s.get_arc())).unwrap_or(DynStaticStr::Static("")),
+            display_name: props
+                .read("name", |s: &ArcString| DynStaticStr::Dynamic(s.get_arc()))
+                .unwrap_or(DynStaticStr::Static("")),
         }
     }
 }
 
-impl CircuitImpl for Circuit {
+impl CircuitImpl for Pin {
     fn draw(&self, state_ctx: &CircuitStateContext, paint_ctx: &PaintContext) {
         let outside_state = state_ctx
             .global_state
@@ -240,9 +250,9 @@ impl CircuitImpl for Circuit {
             .read()
             .as_ref()
             .map(|p| {
-                let board = p.state.board.read();
-                let circuit = board.circuits.get(p.circuit)?;
-                let outer = circuit.read_imp::<super::board::Circuit, _>(|board| {
+                let circuits = p.state.board.circuits.read();
+                let circuit = circuits.get(p.circuit)?;
+                let outer = circuit.read_imp::<super::board::Board, _>(|board| {
                     board.resolve_inner_to_outer(state_ctx.circuit.id)
                 })??;
                 let outer_state = CircuitStateContext::new(p.state.clone(), circuit.clone());
@@ -253,7 +263,7 @@ impl CircuitImpl for Circuit {
 
         let outside_state = outside_state.unwrap_or_else(|| {
             state_ctx
-                .clone_circuit_internal_state::<State>()
+                .clone_circuit_internal_state::<PinState>()
                 .unwrap_or_default()
                 .state
                 .0
@@ -269,7 +279,7 @@ impl CircuitImpl for Circuit {
         let is_pico = self.is_pico(state_ctx);
         let angle = self.dir.inverted_ud().angle_to_right();
 
-        let center = Circuit::draw(cpos, outside_state, state, is_pico, angle, paint_ctx);
+        let center = Pin::draw(cpos, outside_state, state, is_pico, angle, paint_ctx);
 
         // TODO: don't interact if this state has parent state
 
@@ -285,7 +295,7 @@ impl CircuitImpl for Circuit {
             let (shift, control) = paint_ctx
                 .ui
                 .input(|input| (input.modifiers.shift, input.modifiers.command));
-            let new_state = state_ctx.write_circuit_internal_state(|s: &mut State| {
+            let new_state = state_ctx.write_circuit_internal_state(|s: &mut PinState| {
                 // None -> False -> True -> [control: Error] -> [shift ? None : False]
                 // shift: None -> False -> True -> None
                 // control: None | Error -> False -> True -> Error
@@ -314,8 +324,8 @@ impl CircuitImpl for Circuit {
         }
     }
 
-    fn create_pins(&mut self, props: &CircuitPropertyStore) -> Box<[CircuitPinInfo]> {
-        let description = Self::describe_props(props);
+    fn create_pins(&mut self, circ: &Arc<Circuit>) -> Box<[CircuitPinInfo]> {
+        let description = Self::describe_props(&circ.props);
 
         self.pin = description.pins[0].to_info();
         self.ctl = description.pins[1].to_active_info();
@@ -342,52 +352,85 @@ impl CircuitImpl for Circuit {
             };
 
             self.pin.set_direction(state_ctx, dir);
+
+            let parent = state_ctx.global_state.parent.read();
+            if let Some(parent) = parent.deref() {
+                let circuits = parent.state.board.circuits.read();
+                let circuit = circuits.get(parent.circuit);
+                let circuit = unwrap_option_or_return!(circuit);
+                let outer = circuit
+                    .read_imp::<super::board::Board, _>(|board| {
+                        board.resolve_inner_to_outer(state_ctx.circuit.id)
+                    })
+                    .flatten();
+                let outer = unwrap_option_or_return!(outer);
+                let outer_state = CircuitStateContext::new(parent.state.clone(), circuit.clone());
+                let info = circuit.info.read();
+                let outer_pin = info.pins.get(outer);
+                let outer_pin = unwrap_option_or_return!(outer_pin);
+
+                let dir_inv = match dir {
+                    PinDirection::Inside => PinDirection::Outside,
+                    PinDirection::Outside => PinDirection::Inside,
+                    PinDirection::Custom => PinDirection::Custom,
+                };
+
+                outer_pin.set_direction(&outer_state, dir_inv);
+            }
         }
         if let None | Some(0) = changed_pin {
-
             let parent = state_ctx.global_state.parent.read();
             match parent.as_ref() {
                 Some(parent) => 'm: {
-                    let board = parent.state.board.read();
-                    let circuit = board.circuits.get(parent.circuit);
+                    let circuits = parent.state.board.circuits.read();
+                    let circuit = circuits.get(parent.circuit);
                     let circuit = unwrap_option_or_break!(circuit, 'm);
-                    let outer = circuit.read_imp::<super::board::Circuit, _>(|board| {
-                        board.resolve_inner_to_outer(state_ctx.circuit.id)
-                    }).flatten();
+                    let outer = circuit
+                        .read_imp::<super::board::Board, _>(|board| {
+                            board.resolve_inner_to_outer(state_ctx.circuit.id)
+                        })
+                        .flatten();
                     let outer = unwrap_option_or_break!(outer, 'm);
-                    let outer_state = CircuitStateContext::new(parent.state.clone(), circuit.clone());
+                    let outer_state =
+                        CircuitStateContext::new(parent.state.clone(), circuit.clone());
                     let info = circuit.info.read();
                     let outer_pin = info.pins.get(outer);
                     let outer_pin = unwrap_option_or_break!(outer_pin, 'm);
-                    
+
                     let this_dir = self.pin.get_direction(state_ctx);
                     let outer_dir = outer_pin.get_direction(&outer_state);
 
                     match (this_dir, outer_dir) {
-                        (PinDirection::Inside, PinDirection::Outside) => outer_pin.set_state(&outer_state, self.pin.get_state(state_ctx)),
-                        (PinDirection::Outside, PinDirection::Inside) => self.pin.set_state(state_ctx, outer_pin.get_state(&outer_state)),
-                        (PinDirection::Outside, PinDirection::Outside) =>self.pin.set_state(state_ctx, WireState::None),
+                        (PinDirection::Inside, PinDirection::Outside) => {
+                            outer_pin.set_state(&outer_state, self.pin.get_state(state_ctx))
+                        }
+                        (PinDirection::Outside, PinDirection::Inside) => self
+                            .pin
+                            .set_state(state_ctx, outer_pin.get_state(&outer_state)),
+                        (PinDirection::Outside, PinDirection::Outside) => {
+                            self.pin.set_state(state_ctx, WireState::None)
+                        }
                         _ => {}
                     }
-                },
+                }
                 None => {
                     if self.is_pico(state_ctx) {
                         self.pin.set_state(
                             state_ctx,
                             state_ctx
-                                .clone_circuit_internal_state::<State>()
+                                .clone_circuit_internal_state::<PinState>()
                                 .unwrap_or_default()
                                 .state
                                 .0,
                         )
                     }
-                },
+                }
             }
         }
     }
 
-    fn size(&self, props: &CircuitPropertyStore) -> Vec2u {
-        Self::describe_props(props).size
+    fn size(&self, circ: &Arc<Circuit>) -> Vec2u {
+        Self::describe_props(&circ.props).size
     }
 
     fn prop_changed(&self, prop_id: &str, resize: &mut bool, recreate_pins: &mut bool) {
@@ -397,17 +440,48 @@ impl CircuitImpl for Circuit {
         }
     }
 
-    fn apply_props(&mut self, props: &CircuitPropertyStore, _: Option<&str>) {
-        self.dir = props.read_clone("dir").unwrap_or(Self::DEFAULT_DIR);
-        self.ty = props.read_clone("ty").unwrap_or(PinType::Pico);
-        self.cpos = props.read_clone("cpos").unwrap_or(ControlPinPosition::Left);
+    fn apply_props(&mut self, circ: &Arc<Circuit>, _: Option<&str>) {
+        self.dir = circ.props.read_clone("dir").unwrap_or(Self::DEFAULT_DIR);
+        self.ty = circ.props.read_clone("ty").unwrap_or(PinType::Pico);
+        self.cpos = circ
+            .props
+            .read_clone("cpos")
+            .unwrap_or(ControlPinPosition::Left);
+
+        let outer_pd = match self.ty {
+            PinType::Pico => InternalPinDirection::Inside,
+            PinType::Cipo => InternalPinDirection::Outside,
+            PinType::Controlled => InternalPinDirection::StateDependent {
+                default: PinDirection::Inside,
+            },
+        };
+
+        // Update pin direction in the board design if possible
+        let my_id = circ.board.pins.read().get_by_right(&circ.id).cloned();
+        let my_id = unwrap_option_or_return!(my_id);
+
+        let mut designs = circ.board.designs.write();
+        let current = designs.current();
+        let current_this = current.pins.iter().find(|p| p.id.deref() == my_id.deref());
+        let current_this = unwrap_option_or_return!(current_this);
+
+        if current_this.dir != outer_pd {
+            let current = designs.current_mut();
+            let current_this = current
+                .pins
+                .iter_mut()
+                .find(|p| p.id.deref() == my_id.deref());
+            let current_this = unwrap_option_or_return!(current_this);
+            current_this.dir = outer_pd;
+        }
     }
 
     fn load_internal(
         &self,
+        _: &CircuitStateContext,
         data: &serde_intermediate::Intermediate,
     ) -> Option<Box<dyn InternalCircuitState>> {
-        serde_intermediate::de::intermediate::deserialize::<State>(data)
+        serde_intermediate::de::intermediate::deserialize::<PinState>(data)
             .ok()
             .map(|s| Box::new(s) as Box<dyn InternalCircuitState>)
     }
@@ -418,8 +492,12 @@ impl CircuitImpl for Circuit {
         let hex_y = format!("{:x}", pos.x());
         let uid = format!("{:x}:{:x}:{}{}", hex_x.len(), hex_y.len(), hex_x, hex_y);
 
-        let board = state.global_state.board.read();
-        board.pins.write().insert(uid.into(), state.circuit.id);
+        state
+            .global_state
+            .board
+            .pins
+            .write()
+            .insert(uid.into(), state.circuit.id);
     }
 }
 
@@ -433,14 +511,14 @@ impl CircuitPreviewImpl for Preview {
     }
 
     fn draw_preview(&self, props: &CircuitPropertyStore, ctx: &PaintContext, _: bool) {
-        let dir = props.read_clone("dir").unwrap_or(Circuit::DEFAULT_DIR);
+        let dir = props.read_clone("dir").unwrap_or(Pin::DEFAULT_DIR);
         let ty = props.read_clone("ty").unwrap_or(PinType::Pico);
         let cpos = props.read_clone("cpos").unwrap_or(ControlPinPosition::Left);
 
         let cpos = ty.is_controlled().then_some((cpos, WireState::False));
         let angle = dir.inverted_ud().angle_to_right();
 
-        Circuit::draw(
+        Pin::draw(
             cpos,
             WireState::False,
             WireState::False,
@@ -451,7 +529,7 @@ impl CircuitPreviewImpl for Preview {
     }
 
     fn create_impl(&self) -> Box<dyn CircuitImpl> {
-        Box::new(Circuit::new())
+        Box::new(Pin::new())
     }
 
     fn load_impl_data(
@@ -464,7 +542,7 @@ impl CircuitPreviewImpl for Preview {
 
     fn default_props(&self) -> CircuitPropertyStore {
         CircuitPropertyStore::new([
-            CircuitProperty::new("dir", "Direction", Circuit::DEFAULT_DIR),
+            CircuitProperty::new("dir", "Direction", Pin::DEFAULT_DIR),
             CircuitProperty::new("ty", "Pin type", PinType::Pico),
             CircuitProperty::new("cpos", "Control pos", ControlPinPosition::Left),
         ])
@@ -475,7 +553,7 @@ impl CircuitPreviewImpl for Preview {
     }
 
     fn describe(&self, props: &CircuitPropertyStore) -> DynCircuitDescription {
-        Circuit::describe_props(props).to_dyn()
+        Pin::describe_props(props).to_dyn()
     }
 }
 

@@ -4,23 +4,24 @@ use eframe::epaint::{Color32, PathShape, Stroke};
 use emath::{pos2, vec2, Pos2};
 
 use crate::{
+    app::SimulationContext,
     circuits::{
-        props::CircuitProperty, CircuitDescription, CircuitImpl, CircuitPinInfo,
+        props::CircuitProperty, Circuit, CircuitDescription, CircuitImpl, CircuitPinInfo,
         CircuitPreviewImpl, CircuitPropertyStore, CircuitStateContext, InternalPinDirection,
     },
     describe_directional_circuit,
     state::WireState,
     vector::{Vec2f, Vec2u},
-    Direction4, DynStaticStr, PaintContext, app::SimulationContext,
+    Direction4, DynStaticStr, PaintContext,
 };
 
-struct Circuit {
+struct Not {
     dir: Direction4,
     input: CircuitPinInfo,
     output: CircuitPinInfo,
 }
 
-impl Circuit {
+impl Not {
     fn new() -> Self {
         let description = Self::describe(Direction4::Right);
         Self {
@@ -81,14 +82,14 @@ impl Circuit {
     }
 }
 
-impl CircuitImpl for Circuit {
+impl CircuitImpl for Not {
     fn draw(&self, _: &CircuitStateContext, paint_ctx: &PaintContext) {
         let angle = self.dir.inverted_ud().angle_to_right();
-        Circuit::draw(paint_ctx, angle, false);
+        Not::draw(paint_ctx, angle, false);
     }
 
-    fn create_pins(&mut self, props: &CircuitPropertyStore) -> Box<[CircuitPinInfo]> {
-        let description = Circuit::describe_props(props);
+    fn create_pins(&mut self, circ: &Arc<Circuit>) -> Box<[CircuitPinInfo]> {
+        let description = Not::describe_props(&circ.props);
         self.input = description.pins[0].to_info();
         self.output = description.pins[1].to_info();
         vec![self.input.clone(), self.output.clone()].into_boxed_slice()
@@ -105,8 +106,8 @@ impl CircuitImpl for Circuit {
         self.output.set_state(state_ctx, state);
     }
 
-    fn size(&self, props: &CircuitPropertyStore) -> Vec2u {
-        Self::describe_props(props).size
+    fn size(&self, circ: &Arc<Circuit>) -> Vec2u {
+        Self::describe_props(&circ.props).size
     }
 
     fn prop_changed(&self, prop_id: &str, resize: &mut bool, recreate_pins: &mut bool) {
@@ -116,25 +117,25 @@ impl CircuitImpl for Circuit {
         }
     }
 
-    fn apply_props(&mut self, props: &CircuitPropertyStore, _: Option<&str>) {
-        self.dir = props.read_clone("dir").unwrap_or(Direction4::Right);
+    fn apply_props(&mut self, circ: &Arc<Circuit>, _: Option<&str>) {
+        self.dir = circ.props.read_clone("dir").unwrap_or(Direction4::Right);
     }
 }
 
-pub struct Preview {}
+pub struct NotPreview {}
 
-impl CircuitPreviewImpl for Preview {
+impl CircuitPreviewImpl for NotPreview {
     fn draw_preview(&self, props: &CircuitPropertyStore, ctx: &PaintContext, in_world: bool) {
         let angle = props
             .read_clone("dir")
             .unwrap_or(Direction4::Right)
             .inverted_ud()
             .angle_to_right();
-        Circuit::draw(ctx, angle, in_world);
+        Not::draw(ctx, angle, in_world);
     }
 
     fn create_impl(&self) -> Box<dyn CircuitImpl> {
-        Box::new(Circuit::new())
+        Box::new(Not::new())
     }
 
     fn type_name(&self) -> DynStaticStr {
@@ -146,7 +147,7 @@ impl CircuitPreviewImpl for Preview {
         _: &serde_intermediate::Intermediate,
         _: &Arc<SimulationContext>,
     ) -> Option<Box<dyn CircuitPreviewImpl>> {
-        Some(Box::new(Preview {}))
+        Some(Box::new(NotPreview {}))
     }
 
     fn default_props(&self) -> CircuitPropertyStore {
@@ -158,6 +159,6 @@ impl CircuitPreviewImpl for Preview {
     }
 
     fn describe(&self, props: &CircuitPropertyStore) -> crate::circuits::DynCircuitDescription {
-        Circuit::describe_props(props).to_dyn()
+        Not::describe_props(props).to_dyn()
     }
 }

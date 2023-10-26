@@ -100,7 +100,7 @@ where
                     self.imp.collect_changes(
                         pass,
                         &mut self.change,
-                        rect,
+                        Rect::from_min_max(min.into(), max.into()),
                     );
                 } else {
                     self.rect = None;

@@ -4,11 +4,11 @@ use crate::circuits::*;
 
 use super::props::CircuitPropertyStore;
 
-struct Circuit {
+struct Pullup {
     pin: CircuitPinInfo,
 }
 
-impl Circuit {
+impl Pullup {
     fn new() -> Self {
         let description = Self::describe();
         Self {
@@ -43,12 +43,12 @@ impl Circuit {
     }
 }
 
-impl CircuitImpl for Circuit {
+impl CircuitImpl for Pullup {
     fn draw(&self, _: &CircuitStateContext, paint_ctx: &PaintContext) {
-        Circuit::draw(paint_ctx, false);
+        Pullup::draw(paint_ctx, false);
     }
 
-    fn create_pins(&mut self, _: &CircuitPropertyStore) -> Box<[CircuitPinInfo]> {
+    fn create_pins(&mut self, _: &Arc<Circuit>) -> Box<[CircuitPinInfo]> {
         vec![self.pin.clone()].into_boxed_slice()
     }
 
@@ -60,21 +60,21 @@ impl CircuitImpl for Circuit {
         }
     }
 
-    fn size(&self, props: &CircuitPropertyStore) -> Vec2u {
-        Self::describe_props(props).size
+    fn size(&self, circ: &Arc<Circuit>) -> Vec2u {
+        Self::describe_props(&circ.props).size
     }
 }
 
 #[derive(Debug)]
-pub struct Preview {}
+pub struct PullupPreview {}
 
-impl CircuitPreviewImpl for Preview {
+impl CircuitPreviewImpl for PullupPreview {
     fn draw_preview(&self, _: &CircuitPropertyStore, ctx: &PaintContext, in_world: bool) {
-        Circuit::draw(ctx, in_world);
+        Pullup::draw(ctx, in_world);
     }
 
     fn create_impl(&self) -> Box<dyn CircuitImpl> {
-        Box::new(Circuit::new())
+        Box::new(Pullup::new())
     }
 
     fn type_name(&self) -> DynStaticStr {
@@ -86,7 +86,7 @@ impl CircuitPreviewImpl for Preview {
         _: &serde_intermediate::Intermediate,
         _: &Arc<SimulationContext>,
     ) -> Option<Box<dyn CircuitPreviewImpl>> {
-        Some(Box::new(Preview {}))
+        Some(Box::new(PullupPreview {}))
     }
 
     fn default_props(&self) -> CircuitPropertyStore {
@@ -98,6 +98,6 @@ impl CircuitPreviewImpl for Preview {
     }
 
     fn describe(&self, props: &CircuitPropertyStore) -> DynCircuitDescription {
-        Circuit::describe_props(props).to_dyn()
+        Pullup::describe_props(props).to_dyn()
     }
 }

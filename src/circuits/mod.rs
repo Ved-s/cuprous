@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     app::SimulationContext,
-    board::ActiveCircuitBoard,
+    board::{ActiveCircuitBoard, CircuitBoard},
     state::{CircuitState, InternalCircuitState, State, StateCollection, WireState},
     time::Instant,
     vector::{Vec2i, Vec2u, Vector},
@@ -37,12 +37,13 @@ mod circuit_template;
 #[path = "../../templates/directional_circuit_template.rs"]
 mod directional_circuit_template;
 
+#[derive(Default)]
 pub struct CircuitInfo {
     pub size: Vec2u,
     pub pins: Box<[CircuitPinInfo]>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InternalPinDirection {
     StateDependent { default: PinDirection },
     Inside,
@@ -202,7 +203,9 @@ impl CircuitPinInfo {
             return;
         }
 
-        state_ctx.write_circuit_state(|cs| { cs.pins.set(value, pin.id.id); });
+        state_ctx.write_circuit_state(|cs| {
+            cs.pins.set(value, pin.id.id);
+        });
         if let Some(wire) = pin.wire {
             state_ctx.global_state.update_wire(wire, false)
         }
@@ -280,6 +283,7 @@ pub struct Circuit {
     pub id: usize,
     pub pos: Vec2i,
 
+    pub board: Arc<CircuitBoard>,
     pub info: Arc<RwLock<CircuitInfo>>,
     pub imp: Arc<RwLock<Box<dyn CircuitImpl>>>,
     pub props: CircuitPropertyStore,
@@ -290,31 +294,38 @@ impl Circuit {
         id: usize,
         pos: Vec2i,
         preview: &CircuitPreview,
+        board: Arc<CircuitBoard>,
         props_override: Option<CircuitPropertyStore>,
-    ) -> Self {
-        let mut imp = preview.imp.create_impl();
+    ) -> Arc<Self> {
+        let imp = preview.imp.create_impl();
         let props = props_override.unwrap_or_else(|| preview.props.clone());
-        imp.apply_props(&props, None);
-        let mut pins = imp.create_pins(&props);
-        for pin in pins.iter_mut().enumerate() {
-            pin.1.pin.write().id = CircuitPinId::new(pin.0, id);
-        }
-        let info = Arc::new(RwLock::new(CircuitInfo {
-            size: imp.size(&props),
-            pins,
-        }));
 
-        Self {
+        let circuit = Arc::new(Self {
             ty: preview.imp.type_name(),
             id,
             pos,
-            info,
+            board,
+            info: Default::default(),
             imp: Arc::new(RwLock::new(imp)),
             props,
+        });
+
+        let mut imp = circuit.imp.write();
+
+        imp.apply_props(&circuit, None);
+        let mut pins = imp.create_pins(&circuit);
+        for pin in pins.iter_mut().enumerate() {
+            pin.1.pin.write().id = CircuitPinId::new(pin.0, id);
         }
+        *circuit.info.write() = CircuitInfo {
+            size: imp.size(&circuit),
+            pins,
+        };
+        drop(imp);
+        circuit
     }
 
-    pub fn save(&self) -> crate::io::CircuitData {
+    pub fn save(self: &Arc<Self>) -> crate::io::CircuitData {
         let info = self.info.read();
         crate::io::CircuitData {
             ty: self.ty.clone(),
@@ -327,12 +338,12 @@ impl Circuit {
                     pin.connected_wire().map(|w| (pin.name(), w))
                 })
                 .collect(),
-            imp: self.imp.read().save(),
+            imp: self.imp.read().save(self),
             props: self.props.save(),
         }
     }
 
-    pub fn copy(&self, pos: Vec2u, state: &State) -> crate::io::CircuitCopyData {
+    pub fn copy(self: &Arc<Self>, pos: Vec2u, state: &State) -> crate::io::CircuitCopyData {
         let internal = state
             .read_circuit(self.id, |circuit| {
                 circuit
@@ -346,7 +357,7 @@ impl Circuit {
         crate::io::CircuitCopyData {
             ty: self.ty.clone(),
             pos,
-            imp: self.imp.read().save(),
+            imp: self.imp.read().save(self),
             internal,
             update: state
                 .updates
@@ -449,24 +460,24 @@ impl CircuitStateContext {
 
 #[allow(unused_variables)]
 pub trait CircuitImpl: Any + Send + Sync {
-    fn draw(&self, state_ctx: &CircuitStateContext, paint_ctx: &PaintContext);
+    fn draw(&self, ctx: &CircuitStateContext, paint_ctx: &PaintContext);
 
     /// After calling this, consider all connected pins invalid
-    fn create_pins(&mut self, props: &CircuitPropertyStore) -> Box<[CircuitPinInfo]>;
+    fn create_pins(&mut self, circ: &Arc<Circuit>) -> Box<[CircuitPinInfo]>;
 
-    fn update_signals(&self, state_ctx: &CircuitStateContext, changed_pin: Option<usize>);
+    fn update_signals(&self, ctx: &CircuitStateContext, changed_pin: Option<usize>);
 
     /// Called once every period determined by `Self::update_interval`
-    fn update(&self, state_ctx: &CircuitStateContext) {}
+    fn update(&self, ctx: &CircuitStateContext) {}
 
     /// Called once on circuit creation, use for update interval setup
-    fn init_state(&self, state_ctx: &CircuitStateContext) {}
+    fn init_state(&self, ctx: &CircuitStateContext) {}
 
     /// Called once when placed or loaded
-    fn postload(&mut self, state: &CircuitStateContext, just_placed: bool) {}
+    fn postload(&mut self, ctx: &CircuitStateContext, just_placed: bool) {}
 
     /// Called after `Self::update` to determine next update timestamp
-    fn update_interval(&self, state_ctx: &CircuitStateContext) -> Option<Duration> {
+    fn update_interval(&self, ctx: &CircuitStateContext) -> Option<Duration> {
         None
     }
 
@@ -476,14 +487,15 @@ pub trait CircuitImpl: Any + Send + Sync {
     }
 
     /// Serialize circuit parameters. NOT for circuit state
-    fn save(&self) -> serde_intermediate::Intermediate {
+    fn save(&self, circ: &Arc<Circuit>) -> serde_intermediate::Intermediate {
         ().into()
     }
 
-    fn load(&mut self, data: &serde_intermediate::Intermediate) {}
+    fn load(&mut self, circ: &Arc<Circuit>, data: &serde_intermediate::Intermediate) {}
 
     fn load_internal(
         &self,
+        ctx: &CircuitStateContext,
         data: &serde_intermediate::Intermediate,
     ) -> Option<Box<dyn InternalCircuitState>> {
         None
@@ -492,7 +504,7 @@ pub trait CircuitImpl: Any + Send + Sync {
     /// Custom handler for [`PinDirection::Custom`]
     fn custom_pin_mutate_state(
         &self,
-        state_ctx: &CircuitStateContext,
+        ctx: &CircuitStateContext,
         pin: usize,
         state: &mut WireState,
     ) {
@@ -502,9 +514,9 @@ pub trait CircuitImpl: Any + Send + Sync {
     fn prop_changed(&self, prop_id: &str, resize: &mut bool, recreate_pins: &mut bool) {}
 
     /// Called after all circuit parameters were successfully updated
-    fn apply_props(&mut self, props: &CircuitPropertyStore, changed: Option<&str>) {}
+    fn apply_props(&mut self, circ: &Arc<Circuit>, changed: Option<&str>) {}
 
-    fn size(&self, props: &CircuitPropertyStore) -> Vec2u;
+    fn size(&self, circ: &Arc<Circuit>) -> Vec2u;
 }
 
 pub struct CircuitPreview {

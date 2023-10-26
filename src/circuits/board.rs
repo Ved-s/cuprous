@@ -15,7 +15,7 @@ use crate::{
 
 #[derive(Clone, Default)]
 struct ResolvedCircuitData {
-    board: Option<Arc<RwLock<CircuitBoard>>>,
+    board: Option<Arc<CircuitBoard>>,
     state: Option<Arc<State>>,
     design: Option<Arc<CircuitDesign>>,
 }
@@ -23,7 +23,7 @@ struct ResolvedCircuitData {
 impl ResolvedCircuitData {
     fn unresolve_into(&self, unresolved: &mut UnresolvedCircuitData) {
         if let Some(board) = &self.board {
-            unresolved.board = board.read().uid;
+            unresolved.board = board.uid;
         }
         if let Some(state) = &self.state {
             unresolved.state = state.id;
@@ -48,13 +48,13 @@ impl UnresolvedCircuitData {
 
         if let Some(board) = &resolved.board {
             if resolved.state.is_none() {
-                resolved.state = board.read().states.get(self.state);
+                resolved.state = board.states.get(self.state);
             }
 
             if resolved.design.is_none() {
                 resolved.design = match self.design.get() {
-                    Some(id) => board.read().designs.read().get(id),
-                    None => Some(board.read().designs.read().current()),
+                    Some(id) => board.designs.read().get(id),
+                    None => Some(board.designs.read().current()),
                 };
             }
         }
@@ -79,7 +79,7 @@ impl CircuitDataModel {
 }
 
 #[derive(Default)]
-pub struct Circuit {
+pub struct Board {
     unresolved: Option<UnresolvedCircuitData>,
     resolved: ResolvedCircuitData,
 
@@ -93,7 +93,7 @@ pub struct Circuit {
 }
 
 // TODO: handle state destruction on remove
-impl Circuit {
+impl Board {
     fn draw(
         data: &ResolvedCircuitData,
         ignore_state: bool,
@@ -206,8 +206,7 @@ impl Circuit {
         }
 
         fn resolve(data: &ResolvedCircuitData, inner: usize) -> Option<usize> {
-            let board = data.board.as_ref()?.read();
-            let pins = board.pins.read();
+            let pins = data.board.as_ref()?.pins.read();
             let str_id = pins.get_by_right(&inner)?;
             let id = data
                 .design
@@ -242,8 +241,7 @@ impl Circuit {
 
         fn resolve(data: &ResolvedCircuitData, outer: usize) -> Option<usize> {
             let str_id = data.design.as_ref()?.pins.get(outer)?.id.deref();
-            let board = data.board.as_ref()?.read();
-            let pins = board.pins.read();
+            let pins = data.board.as_ref()?.pins.read();
             let id = pins.get_by_left(str_id)?;
             Some(*id)
         }
@@ -261,13 +259,13 @@ impl Circuit {
     }
 }
 
-impl CircuitImpl for Circuit {
+impl CircuitImpl for Board {
     fn draw(&self, _: &CircuitStateContext, paint_ctx: &PaintContext) {
-        Circuit::draw(&self.resolved, false, self.parent_error, paint_ctx, false);
+        Board::draw(&self.resolved, false, self.parent_error, paint_ctx, false);
     }
 
-    fn create_pins(&mut self, props: &CircuitPropertyStore) -> Box<[CircuitPinInfo]> {
-        let description = Self::describe_props(&self.resolved, props);
+    fn create_pins(&mut self, circ: &Arc<Circuit>) -> Box<[CircuitPinInfo]> {
+        let description = Self::describe_props(&self.resolved, &circ.props);
         let pins = description
             .pins
             .iter()
@@ -280,22 +278,23 @@ impl CircuitImpl for Circuit {
 
     fn update_signals(&self, state_ctx: &CircuitStateContext, changed_pin: Option<usize>) {
         let inner_board = &self.resolved.board;
-        let inner_board = unwrap_option_or_return!(inner_board).read();
+        let inner_board = unwrap_option_or_return!(inner_board);
 
         let inner_state = &self.resolved.state;
         let inner_state = unwrap_option_or_return!(inner_state);
 
         fn handle_pin(
-            this: &Circuit,
+            this: &Board,
             inner_board: &CircuitBoard,
             inner_state: &Arc<State>,
             id: usize,
             info: &CircuitPinInfo,
             state_ctx: &CircuitStateContext,
         ) {
+            let circuits = inner_board.circuits.read();
             let inner_circuit = this
                 .resolve_outer_to_inner(id)
-                .and_then(|inner| inner_board.circuits.get(inner));
+                .and_then(|inner| circuits.get(inner));
 
             // Somehow this circuit is not pin...
             if inner_circuit.is_some_and(|inner| inner.ty.deref() != super::pin::TYPEID) {
@@ -303,11 +302,12 @@ impl CircuitImpl for Circuit {
             }
             let dir = info.get_direction(state_ctx);
             let inner = inner_circuit.and_then(|i| {
-                i.info
-                    .read()
-                    .pins
-                    .first()
-                    .map(|p| (p.clone(), CircuitStateContext::new(inner_state.clone(), i.clone())))
+                i.info.read().pins.first().map(|p| {
+                    (
+                        p.clone(),
+                        CircuitStateContext::new(inner_state.clone(), i.clone()),
+                    )
+                })
             });
 
             match (dir, inner) {
@@ -325,24 +325,24 @@ impl CircuitImpl for Circuit {
         match changed_pin {
             Some(id) => {
                 if let Some(info) = self.pins.get(id) {
-                    handle_pin(self, &inner_board, inner_state, id, info, state_ctx);
+                    handle_pin(self, inner_board, inner_state, id, info, state_ctx);
                 }
             }
             None => {
                 for (id, info) in self.pins.iter().enumerate() {
-                    handle_pin(self, &inner_board, inner_state, id, info, state_ctx);
+                    handle_pin(self, inner_board, inner_state, id, info, state_ctx);
                 }
             }
         }
     }
 
-    fn size(&self, _: &CircuitPropertyStore) -> Vec2u {
+    fn size(&self, _: &Arc<Circuit>) -> Vec2u {
         self.resolved.design.as_ref().map_or(2.into(), |d| d.size)
     }
 
     fn postload(&mut self, state: &CircuitStateContext, _: bool) {
         if let Some(unresolved) = &self.unresolved {
-            unresolved.resolve_into(&mut self.resolved, &state.global_state.board.read().ctx);
+            unresolved.resolve_into(&mut self.resolved, &state.global_state.board.ctx);
         }
 
         if let Some(inner_state) = &self.resolved.state {
@@ -359,12 +359,12 @@ impl CircuitImpl for Circuit {
         }
     }
 
-    fn save(&self) -> serde_intermediate::Intermediate {
+    fn save(&self, _: &Arc<Circuit>) -> serde_intermediate::Intermediate {
         let board_id = self
             .resolved
             .board
             .as_ref()
-            .map_or_else(|| self.unresolved.map(|u| u.board), |b| Some(b.read().uid));
+            .map_or_else(|| self.unresolved.map(|u| u.board), |b| Some(b.uid));
         let state_id = self
             .resolved
             .state
@@ -389,7 +389,7 @@ impl CircuitImpl for Circuit {
         serde_intermediate::to_intermediate(&model).unwrap_or_default()
     }
 
-    fn load(&mut self, data: &serde_intermediate::Intermediate) {
+    fn load(&mut self, _: &Arc<Circuit>, data: &serde_intermediate::Intermediate) {
         let model = serde_intermediate::from_intermediate::<CircuitDataModel>(data).ok();
         let model = unwrap_option_or_return!(model);
 
@@ -397,22 +397,24 @@ impl CircuitImpl for Circuit {
     }
 }
 
-pub struct Preview {
+pub struct BoardPreview {
     unresolved: Option<UnresolvedCircuitData>,
     resolved: ResolvedCircuitData,
 }
 
-impl Preview {
+impl BoardPreview {
     fn resolve_data(&self, create_state: bool) -> ResolvedCircuitData {
         match &self.resolved.board {
             // Try selecting current circuit design
             Some(board) => {
                 let mut resolved = self.resolved.clone();
-                if !self.unresolved.as_ref().is_some_and(|u| u.design.is_some()) && self.resolved.design.is_none() {
-                    resolved.design = Some(board.read().designs.read().current());
+                if !self.unresolved.as_ref().is_some_and(|u| u.design.is_some())
+                    && self.resolved.design.is_none()
+                {
+                    resolved.design = Some(board.designs.read().current());
                 }
                 if create_state {
-                    resolved.state = Some(board.read().states.create_state(board.clone()));
+                    resolved.state = Some(board.states.create_state(board.clone()));
                 }
 
                 resolved
@@ -421,7 +423,7 @@ impl Preview {
         }
     }
 
-    pub fn new_from_board(board: Arc<RwLock<CircuitBoard>>) -> Self {
+    pub fn new_from_board(board: Arc<CircuitBoard>) -> Self {
         Self {
             unresolved: None,
             resolved: ResolvedCircuitData {
@@ -433,13 +435,13 @@ impl Preview {
     }
 }
 
-impl CircuitPreviewImpl for Preview {
+impl CircuitPreviewImpl for BoardPreview {
     fn type_name(&self) -> DynStaticStr {
         "board".into()
     }
 
     fn draw_preview(&self, _: &CircuitPropertyStore, ctx: &PaintContext, in_world: bool) {
-        Circuit::draw(&self.resolve_data(false), true, false, ctx, in_world);
+        Board::draw(&self.resolve_data(false), true, false, ctx, in_world);
     }
 
     fn create_impl(&self) -> Box<dyn CircuitImpl> {
@@ -449,10 +451,10 @@ impl CircuitPreviewImpl for Preview {
             u
         });
 
-        Box::new(Circuit {
+        Box::new(Board {
             resolved,
             unresolved,
-            ..Circuit::default()
+            ..Board::default()
         })
     }
 
@@ -468,7 +470,7 @@ impl CircuitPreviewImpl for Preview {
         let mut resolved = ResolvedCircuitData::default();
         unresolved.resolve_into(&mut resolved, ctx);
 
-        Some(Box::new(Preview {
+        Some(Box::new(BoardPreview {
             unresolved: Some(unresolved),
             resolved,
         }))
@@ -479,10 +481,14 @@ impl CircuitPreviewImpl for Preview {
     }
 
     fn display_name(&self) -> DynStaticStr {
-        self.resolved.board.as_ref().map(|b| b.read().name.get_arc().into()).unwrap_or("Circuit board".into())
+        self.resolved
+            .board
+            .as_ref()
+            .map(|b| b.name.read().get_arc().into())
+            .unwrap_or("Circuit board".into())
     }
 
     fn describe(&self, props: &CircuitPropertyStore) -> DynCircuitDescription {
-        Circuit::describe_props(&self.resolve_data(false), props)
+        Board::describe_props(&self.resolve_data(false), props)
     }
 }

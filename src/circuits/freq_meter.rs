@@ -5,11 +5,11 @@ use crate::{circuits::*, containers::ConstRingBuffer, Direction4};
 
 use super::props::CircuitProperty;
 
-struct State {
+struct FreqMeterState {
     timings: ConstRingBuffer<64, Instant>,
 }
 
-impl Default for State {
+impl Default for FreqMeterState {
     fn default() -> Self {
         Self {
             timings: ConstRingBuffer::new(),
@@ -17,13 +17,13 @@ impl Default for State {
     }
 }
 
-impl InternalCircuitState for State {}
+impl InternalCircuitState for FreqMeterState {}
 
-struct Circuit {
+struct FreqMeter {
     input: CircuitPinInfo,
 }
 
-impl Circuit {
+impl FreqMeter {
     fn new() -> Self {
         let description = Self::describe(Direction4::Left);
         Self {
@@ -62,7 +62,7 @@ impl Circuit {
 
         let text: String = match state {
             Some(s) => format_freq(
-                s.read_circuit_internal_state(|s: &State| {
+                s.read_circuit_internal_state(|s: &FreqMeterState| {
                     if s.timings.len() < 2 {
                         return 0.0;
                     }
@@ -114,13 +114,13 @@ impl Circuit {
     }
 }
 
-impl CircuitImpl for Circuit {
+impl CircuitImpl for FreqMeter {
     fn draw(&self, state_ctx: &CircuitStateContext, paint_ctx: &PaintContext) {
-        Circuit::draw(paint_ctx, Some(state_ctx), false);
+        FreqMeter::draw(paint_ctx, Some(state_ctx), false);
     }
 
-    fn create_pins(&mut self, props: &CircuitPropertyStore) -> Box<[CircuitPinInfo]> {
-        let description = Self::describe_props(props);
+    fn create_pins(&mut self, circ: &Arc<Circuit>) -> Box<[CircuitPinInfo]> {
+        let description = Self::describe_props(&circ.props);
         self.input = description.pins[0].to_info();
         vec![self.input.clone()].into_boxed_slice()
     }
@@ -128,12 +128,12 @@ impl CircuitImpl for Circuit {
     fn update_signals(&self, state_ctx: &CircuitStateContext, changed_pin: Option<usize>) {
         if changed_pin == Some(0) && self.input.get_state(state_ctx) == WireState::True {
             state_ctx
-                .write_circuit_internal_state(|s: &mut State| s.timings.push_back(Instant::now()))
+                .write_circuit_internal_state(|s: &mut FreqMeterState| s.timings.push_back(Instant::now()))
         }
     }
 
-    fn size(&self, props: &CircuitPropertyStore) -> Vec2u {
-        Self::describe_props(props).size
+    fn size(&self, circ: &Arc<Circuit>) -> Vec2u {
+        Self::describe_props(&circ.props).size
     }
 
     fn prop_changed(&self, prop_id: &str, _: &mut bool, recreate_pins: &mut bool) {
@@ -144,19 +144,19 @@ impl CircuitImpl for Circuit {
 }
 
 #[derive(Debug)]
-pub struct Preview {}
+pub struct FreqMeterPreview {}
 
-impl CircuitPreviewImpl for Preview {
+impl CircuitPreviewImpl for FreqMeterPreview {
     fn type_name(&self) -> DynStaticStr {
         "freq_meter".into()
     }
 
     fn draw_preview(&self, _: &CircuitPropertyStore, ctx: &PaintContext, in_world: bool) {
-        Circuit::draw(ctx, None, in_world);
+        FreqMeter::draw(ctx, None, in_world);
     }
 
     fn create_impl(&self) -> Box<dyn CircuitImpl> {
-        Box::new(Circuit::new())
+        Box::new(FreqMeter::new())
     }
 
     fn load_impl_data(
@@ -164,7 +164,7 @@ impl CircuitPreviewImpl for Preview {
         _: &serde_intermediate::Intermediate,
         _: &Arc<SimulationContext>
     ) -> Option<Box<dyn CircuitPreviewImpl>> {
-        Some(Box::new(Preview {}))
+        Some(Box::new(FreqMeterPreview {}))
     }
 
     fn default_props(&self) -> CircuitPropertyStore {
@@ -176,6 +176,6 @@ impl CircuitPreviewImpl for Preview {
     }
 
     fn describe(&self, props: &CircuitPropertyStore) -> DynCircuitDescription {
-        Circuit::describe_props(props).to_dyn()
+        FreqMeter::describe_props(props).to_dyn()
     }
 }

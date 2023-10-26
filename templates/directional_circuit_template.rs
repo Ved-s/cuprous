@@ -3,11 +3,11 @@
 use crate::{circuits::*, describe_directional_circuit};
 use crate::circuits::props::CircuitProperty;
 
-struct Circuit {
+struct Template {
     dir: Direction4,
 }
 
-impl Circuit {
+impl Template {
 
     const DEFAULT_DIR: Direction4 = Direction4::Right;
 
@@ -36,13 +36,13 @@ impl Circuit {
     }
 }
 
-impl CircuitImpl for Circuit {
+impl CircuitImpl for Template {
     fn draw(&self, state_ctx: &CircuitStateContext, paint_ctx: &PaintContext) {
-        Circuit::draw(Some(state_ctx), self.dir, paint_ctx, false);
+        Template::draw(Some(state_ctx), self.dir, paint_ctx, false);
     }
 
-    fn create_pins(&mut self, props: &CircuitPropertyStore) -> Box<[CircuitPinInfo]> {
-        let description = Self::describe_props(props);
+    fn create_pins(&mut self, circ: &Arc<Circuit>) -> Box<[CircuitPinInfo]> {
+        let description = Self::describe_props(&circ.props);
         vec![].into_boxed_slice()
     }
 
@@ -50,8 +50,8 @@ impl CircuitImpl for Circuit {
         todo!()
     }
 
-    fn size(&self, props: &CircuitPropertyStore) -> Vec2u {
-        Self::describe_props(props).size
+    fn size(&self, circ: &Arc<Circuit>) -> Vec2u {
+        Self::describe_props(&circ.props).size
     }
 
     fn prop_changed(&self, prop_id: &str, resize: &mut bool, recreate_pins: &mut bool) {
@@ -61,25 +61,25 @@ impl CircuitImpl for Circuit {
         }
     }
 
-    fn apply_props(&mut self, props: &CircuitPropertyStore, _: Option<&str>) {
-        self.dir = props.read_clone("dir").unwrap_or(Self::DEFAULT_DIR);
+    fn apply_props(&mut self, circ: &Arc<Circuit>, _: Option<&str>) {
+        self.dir = circ.props.read_clone("dir").unwrap_or(Self::DEFAULT_DIR);
     }
 }
 
-pub struct Preview {}
+pub struct TemplatePreview {}
 
-impl CircuitPreviewImpl for Preview {
+impl CircuitPreviewImpl for TemplatePreview {
     fn type_name(&self) -> DynStaticStr {
         todo!()
     }
 
     fn draw_preview(&self, props: &CircuitPropertyStore, ctx: &PaintContext, in_world: bool) {
-        let dir = props.read_clone("dir").unwrap_or(Circuit::DEFAULT_DIR);
-        Circuit::draw(None, dir, ctx, in_world);
+        let dir = props.read_clone("dir").unwrap_or(Template::DEFAULT_DIR);
+        Template::draw(None, dir, ctx, in_world);
     }
 
     fn create_impl(&self) -> Box<dyn CircuitImpl> {
-        Box::new(Circuit::new())
+        Box::new(Template::new())
     }
 
     fn load_impl_data(
@@ -87,12 +87,12 @@ impl CircuitPreviewImpl for Preview {
         data: &serde_intermediate::Intermediate,
         ctx: &Arc<SimulationContext>
     ) -> Option<Box<dyn CircuitPreviewImpl>> {
-        Some(Box::new(Preview {}))
+        Some(Box::new(TemplatePreview {}))
     }
 
     fn default_props(&self) -> CircuitPropertyStore {
         CircuitPropertyStore::new([
-            CircuitProperty::new("dir", "Direction", Circuit::DEFAULT_DIR)
+            CircuitProperty::new("dir", "Direction", Template::DEFAULT_DIR)
         ])
     }
 
@@ -101,6 +101,6 @@ impl CircuitPreviewImpl for Preview {
     }
 
     fn describe(&self, props: &CircuitPropertyStore) -> DynCircuitDescription {
-        Circuit::describe_props(props).to_dyn()
+        Template::describe_props(props).to_dyn()
     }
 }
