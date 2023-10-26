@@ -1,7 +1,7 @@
 use std::{collections::HashSet, hash::Hash, marker::PhantomData};
 
 use eframe::{
-    egui::{self, Sense},
+    egui::{self, Sense, layers::ShapeIdx},
     epaint::{Color32, Rounding, Stroke, Shape},
 };
 use emath::Rect;
@@ -22,9 +22,9 @@ pub enum SelectionMode {
 pub trait SelectionImpl<O, P> {
     fn collect_changes(&mut self, pass: &P, changes: &mut HashSet<O>, rect: Rect);
 
-    fn draw_object_selection(&mut self, pass: &P, object: &O, ctx: &PaintContext);
-    fn post_draw_selection(&mut self, pass: &P, ctx: &PaintContext, mode: SelectionMode, selected: &HashSet<O>, change: &HashSet<O>) {
-        let _ = (pass, ctx, mode, selected, change);
+    fn draw_object_selection(&mut self, pass: &P, object: &O, ctx: &PaintContext, shapes: &mut Vec<Shape>);
+    fn post_draw_selection(&mut self, pass: &P, ctx: &PaintContext, mode: SelectionMode, selected: &HashSet<O>, change: &HashSet<O>, shapes: &mut Vec<Shape>) {
+        let _ = (pass, ctx, mode, selected, change, shapes);
     }
 }
 
@@ -34,12 +34,16 @@ where
     O: Hash + Eq,
 {
     start_pos: Option<Vec2f>,
-    rect: Option<Rect>,
-    change: HashSet<O>,
-    mode: SelectionMode,
+    pub rect: Option<Rect>,
+    pub change: HashSet<O>,
+    pub mode: SelectionMode,
     pub selection: HashSet<O>,
     imp: I,
     phantom: PhantomData<P>,
+    prev_frame_shapes: usize,
+
+    shape_indexes: Vec<ShapeIdx>,
+    shapes: Vec<Shape>,
 }
 
 pub fn selection_fill_color() -> Color32 {
@@ -64,6 +68,9 @@ where
             mode: SelectionMode::Include,
             imp,
             phantom: PhantomData,
+            prev_frame_shapes: 0,
+            shape_indexes: vec![],
+            shapes: vec![],
         }
     }
 
@@ -148,25 +155,56 @@ where
             }
         }
 
+        let mut min_shapes = 0;
         for object in self.selection.iter() {
             if matches!(self.mode, SelectionMode::Exclude) && self.change.contains(object) {
                 continue;
             }
-            self.imp.draw_object_selection(pass, object, ctx);
+            min_shapes += 1;
         }
         if matches!(self.mode, SelectionMode::Include) {
             for object in self.change.iter() {
                 if self.selection.contains(object) {
                     continue;
                 }
-                self.imp.draw_object_selection(pass, object, ctx);
+                min_shapes += 1;
             }
         }
 
-        self.imp.post_draw_selection(pass, ctx, self.mode, &self.selection, &self.change);
+        let alloc_shapes = min_shapes.max(self.prev_frame_shapes);
+        self.shape_indexes.clear();
+        for _ in 0..alloc_shapes {
+            self.shape_indexes.push(ctx.paint.add(Shape::Noop))
+        }
     }
 
-    pub fn update_selection(&mut self, ctx: &PaintContext) {
+    pub fn update_selection(&mut self, pass: &P, ctx: &PaintContext) {
+
+        self.shapes.clear();
+
+        for object in self.selection.iter() {
+            if matches!(self.mode, SelectionMode::Exclude) && self.change.contains(object) {
+                continue;
+            }
+            self.imp.draw_object_selection(pass, object, ctx, &mut self.shapes);
+        }
+        if matches!(self.mode, SelectionMode::Include) {
+            for object in self.change.iter() {
+                if self.selection.contains(object) {
+                    continue;
+                }
+                self.imp.draw_object_selection(pass, object, ctx, &mut self.shapes);
+            }
+        }
+
+        self.imp.post_draw_selection(pass, ctx, self.mode, &self.selection, &self.change, &mut self.shapes);
+
+        self.prev_frame_shapes = self.shapes.len();
+
+        for (idx, shape) in self.shape_indexes.drain(..).zip(self.shapes.drain(..)) {
+            ctx.paint.set(idx, shape);
+        }
+
         if let Some(rect) = self.rect {
             ctx.paint
                 .rect_stroke(rect, Rounding::ZERO, Stroke::new(1.0, Color32::WHITE));

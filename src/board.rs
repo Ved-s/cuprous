@@ -13,7 +13,7 @@ use std::{
 use bimap::BiMap;
 use eframe::{
     egui::{self, FontSelection, Painter, Sense, TextStyle, WidgetText},
-    epaint::{Color32, FontId, Rounding, Stroke, TextShape},
+    epaint::{Color32, FontId, Rounding, Stroke, TextShape, Shape, RectShape},
 };
 use emath::{pos2, vec2, Align2, Pos2, Rect, Vec2};
 use serde::{Deserialize, Serialize};
@@ -34,6 +34,7 @@ use crate::{
         selection::{
             selection_border_color, selection_fill_color, Selection, SelectionImpl, SelectionMode,
         },
+        RectVisuals,
     },
     unwrap_option_or_continue, unwrap_option_or_return,
     vector::{IsZero, Vec2f, Vec2i, Vec2isize, Vec2u},
@@ -578,7 +579,7 @@ impl ActiveCircuitBoard {
         self.draw_hovered_circuit_pin_names(ctx);
 
         self.update_previews(ctx, selected);
-        self.selection.borrow_mut().update_selection(ctx);
+        self.selection.borrow_mut().update_selection(self, ctx);
     }
 
     fn draw_hovered_circuit_pin_names(&self, ctx: &PaintContext) {
@@ -1439,8 +1440,7 @@ impl ActiveCircuitBoard {
         {
             let pin = self.pin_at(pos);
             if let Some(pin) = &pin {
-                pin.write()
-                    .set_wire(&self.board.states, wire, false, true);
+                pin.write().set_wire(&self.board.states, wire, false, true);
             }
 
             let mut wires = self.board.wires.write();
@@ -2029,10 +2029,14 @@ impl ActiveCircuitBoard {
                 };
 
                 if let Some(wire) = wire {
-                    pin.pin.write().set_wire(&self.board.states, Some(wire), true, false);
+                    pin.pin
+                        .write()
+                        .set_wire(&self.board.states, Some(wire), true, false);
                 }
             } else {
-                pin.pin.write().set_wire(&self.board.states, None, true, false);
+                pin.pin
+                    .write()
+                    .set_wire(&self.board.states, None, true, false);
             }
         }
     }
@@ -2240,13 +2244,17 @@ impl ActiveCircuitBoard {
             self.connect_circuit_to_wires(circuit_id);
         }
 
-        let circuit = self.board.circuits.read().get(circuit_id).expect("unexpected").clone();
+        let circuit = self
+            .board
+            .circuits
+            .read()
+            .get(circuit_id)
+            .expect("unexpected")
+            .clone();
 
         circuit.imp.write().apply_props(&circuit, Some(property));
 
-        self.board
-            .states
-            .update_circuit_signals(circuit_id, None);
+        self.board.states.update_circuit_signals(circuit_id, None);
 
         drop(sim_lock);
         true
@@ -2417,29 +2425,34 @@ impl CircuitDesignStorage {
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 pub enum Decoration {
-    Rect {
-        rect: Rect,
-        rounding: Rounding,
-        fill: Color32,
-        stroke: Stroke,
-    }, // TODO: MOAR!
+    Rect { rect: Rect, visuals: RectVisuals }, // TODO: MOAR!
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DecorationType {
+    Rect,
 }
 
 impl Decoration {
-    pub fn draw(&self, painter: &Painter, base_pos: Pos2, scale: Vec2) {
+    pub fn draw(&self, painter: &Painter, base_pos: Pos2, scale: f32) {
         match self {
-            Decoration::Rect {
-                rect,
-                rounding,
-                fill,
-                stroke,
-            } => {
+            Decoration::Rect { rect, visuals } => {
                 let rect = Rect::from_min_size(
                     (rect.left_top().to_vec2() * scale + base_pos.to_vec2()).to_pos2(),
                     rect.size() * scale,
                 );
-                painter.rect(rect, *rounding, *fill, *stroke);
+                let scaled_stroke = Stroke::new(visuals.stroke.width * scale, visuals.stroke.color);
+                painter.rect(rect, visuals.rounding, visuals.fill, scaled_stroke);
             }
+        }
+    }
+
+    pub fn ty(self) -> DecorationType {
+        match self {
+            Decoration::Rect {
+                rect: _,
+                visuals: _,
+            } => DecorationType::Rect,
         }
     }
 }
@@ -2478,9 +2491,11 @@ impl CircuitDesign {
             pins: vec![],
             decorations: vec![Decoration::Rect {
                 rect: Rect::from_min_size(pos2(0.0, 0.0), vec2(2.0, 2.0)),
-                rounding: Rounding::ZERO,
-                fill: Color32::from_gray(100),
-                stroke: Stroke::new(0.1, Color32::BLACK),
+                visuals: RectVisuals {
+                    rounding: Rounding::ZERO,
+                    fill: Color32::from_gray(100),
+                    stroke: Stroke::new(0.1, Color32::BLACK),
+                },
             }],
         }
     }
@@ -2489,7 +2504,7 @@ impl CircuitDesign {
         let base_pos = rect.left_top();
         let scale = rect.size() / Vec2::from(self.size.convert(|v| v as f32));
         for decoration in self.decorations.iter() {
-            decoration.draw(painter, base_pos, scale);
+            decoration.draw(painter, base_pos, scale.x.min(scale.y));
         }
     }
 }
@@ -2511,6 +2526,7 @@ impl SelectionImpl<SelectedBoardObject, ActiveCircuitBoard> for BoardObjectSelec
         pass: &ActiveCircuitBoard,
         object: &SelectedBoardObject,
         ctx: &PaintContext,
+        shapes: &mut Vec<Shape>
     ) {
         match object {
             SelectedBoardObject::WirePart { pos, dir } => {
@@ -2522,7 +2538,7 @@ impl SelectionImpl<SelectedBoardObject, ActiveCircuitBoard> for BoardObjectSelec
                     };
                     let rect = ActiveCircuitBoard::calc_wire_part_rect(&ctx.screen, &part);
                     let rect = rect.expand(2.0);
-                    ctx.paint.rect_filled(rect, Rounding::ZERO, Color32::WHITE);
+                    shapes.push(Shape::rect_filled(rect, Rounding::ZERO, Color32::WHITE));
 
                     self.possible_points.insert(*pos);
                     self.possible_points.insert(w.pos);
@@ -2535,12 +2551,12 @@ impl SelectionImpl<SelectedBoardObject, ActiveCircuitBoard> for BoardObjectSelec
                     let rect_size = circ.info.read().size.convert(|v| v as f32) * ctx.screen.scale;
                     let rect = Rect::from_min_size(rect_pos.into(), rect_size.into());
                     let rect = rect.expand(2.0);
-                    ctx.paint.rect(
+                    shapes.push(Shape::Rect(RectShape::new(
                         rect,
                         Rounding::ZERO,
                         selection_fill_color(),
                         Stroke::new(2.0, selection_border_color()),
-                    );
+                    )));
                 }
             }
         }
@@ -2603,6 +2619,7 @@ impl SelectionImpl<SelectedBoardObject, ActiveCircuitBoard> for BoardObjectSelec
         mode: SelectionMode,
         selected: &HashSet<SelectedBoardObject>,
         change: &HashSet<SelectedBoardObject>,
+        shapes: &mut Vec<Shape>
     ) {
         let shift = ctx.ui.input(|input| input.modifiers.shift);
         for point in self.possible_points.iter().copied() {
@@ -2644,7 +2661,7 @@ impl SelectionImpl<SelectedBoardObject, ActiveCircuitBoard> for BoardObjectSelec
                 if all_connections_selected {
                     let rect = ActiveCircuitBoard::calc_wire_point_rect(&ctx.screen, point);
                     let rect = rect.expand(2.0);
-                    ctx.paint.rect_filled(rect, Rounding::ZERO, Color32::WHITE);
+                    shapes.push(Shape::rect_filled(rect, Rounding::ZERO, Color32::WHITE));
                 }
             }
         }
@@ -2676,7 +2693,7 @@ impl DesignProvider for BoardDesignProvider {
             .collect()
     }
 
-    fn get_pin(&self, id: DynStaticStr) -> Option<crate::ui::designer::CircuitDesignPinInfo> {
+    fn get_pin(&self, id: &DynStaticStr) -> Option<crate::ui::designer::CircuitDesignPinInfo> {
         let pin_id = *self.board.pins.read().get_by_left(id.deref())?;
 
         let circuits = self.board.circuits.read();

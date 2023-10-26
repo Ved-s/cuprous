@@ -1,4 +1,7 @@
+use std::collections::hash_map::DefaultHasher;
 use std::f32::consts::TAU;
+use std::fmt::Write;
+use std::hash::{SipHasher, Hash, Hasher};
 
 use eframe::egui::{ComboBox, Sense, Ui};
 use eframe::epaint::{PathShape, Stroke};
@@ -80,11 +83,11 @@ impl Pin {
         }
     }
 
-    fn draw(
+    pub fn draw(
         ctl: Option<(ControlPinPosition, WireState)>,
         outside_state: WireState,
         state: WireState,
-        is_pico: bool,
+        is_pico: Option<bool>,
         angle: f32,
         ctx: &PaintContext,
     ) -> Pos2 {
@@ -115,21 +118,23 @@ impl Pin {
             Stroke::new(ActiveCircuitBoard::WIRE_THICKNESS * scale, state.color()),
         );
 
-        let points = if is_pico {
-            [pos2(1.12, 0.75), pos2(1.42, 0.5), pos2(1.12, 0.25)] // Right
-        } else {
-            [pos2(1.3, 0.75), pos2(1.0, 0.5), pos2(1.3, 0.25)] // Left
-        };
-        let points = points
-            .into_iter()
-            .map(|p| transformer(p + center_off))
-            .collect();
-        ctx.paint.add(PathShape {
-            points,
-            closed: true,
-            fill: state.color(),
-            stroke: Stroke::NONE,
-        });
+        if let Some(is_pico) = is_pico {
+            let points = if is_pico {
+                [pos2(1.12, 0.75), pos2(1.42, 0.5), pos2(1.12, 0.25)] // Right
+            } else {
+                [pos2(1.3, 0.75), pos2(1.0, 0.5), pos2(1.3, 0.25)] // Left
+            };
+            let points = points
+                .into_iter()
+                .map(|p| transformer(p + center_off))
+                .collect();
+            ctx.paint.add(PathShape {
+                points,
+                closed: true,
+                fill: state.color(),
+                stroke: Stroke::NONE,
+            });
+        }
         ctx.paint
             .circle_filled(center, 0.3 * scale, outside_state.color());
         ctx.paint.circle_stroke(
@@ -279,7 +284,7 @@ impl CircuitImpl for Pin {
         let is_pico = self.is_pico(state_ctx);
         let angle = self.dir.inverted_ud().angle_to_right();
 
-        let center = Pin::draw(cpos, outside_state, state, is_pico, angle, paint_ctx);
+        let center = Pin::draw(cpos, outside_state, state, Some(is_pico), angle, paint_ctx);
 
         // TODO: don't interact if this state has parent state
 
@@ -486,18 +491,36 @@ impl CircuitImpl for Pin {
             .map(|s| Box::new(s) as Box<dyn InternalCircuitState>)
     }
 
-    fn postload(&mut self, state: &CircuitStateContext, _: bool) {
+    fn postload(&mut self, state: &CircuitStateContext, just_placed: bool) {
         let pos = state.circuit.pos;
-        let hex_x = format!("{:x}", pos.x());
-        let hex_y = format!("{:x}", pos.x());
+        let hex_x = format!("{}{:x}", if pos.x() < 0 { "-" } else { "" }, pos.x().abs());
+        let hex_y = format!("{}{:x}", if pos.y() < 0 { "-" } else { "" }, pos.y().abs());
+
         let uid = format!("{:x}:{:x}:{}{}", hex_x.len(), hex_y.len(), hex_x, hex_y);
+        let uid_arc: Arc<str> = uid.into();
 
         state
             .global_state
             .board
             .pins
             .write()
-            .insert(uid.into(), state.circuit.id);
+            .insert(uid_arc.clone(), state.circuit.id);
+
+        if just_placed {
+            let name_empty = state.circuit.props.read("name", |s: &ArcString| s.is_empty());
+            if let Some(true) = name_empty {
+                state.circuit.props.write("name", |s: &mut ArcString| {
+                    let string = s.get_mut();
+                    string.clear();
+                    string.push_str("Pin ");
+
+                    let mut hasher = DefaultHasher::default();
+                    uid_arc.hash(&mut hasher);
+                    let hash = (hasher.finish() & 0xffffffff) as u32;
+                    let _ = string.write_fmt(format_args!("{hash:x}"));
+                });
+            }
+        }
     }
 }
 
@@ -522,7 +545,7 @@ impl CircuitPreviewImpl for Preview {
             cpos,
             WireState::False,
             WireState::False,
-            !ty.is_cipo(),
+            Some(!ty.is_cipo()),
             angle,
             ctx,
         );

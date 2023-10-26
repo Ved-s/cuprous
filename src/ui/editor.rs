@@ -646,6 +646,10 @@ impl CircuitBoardEditor {
 
                                 if resp.clicked_by(egui::PointerButton::Primary) && !selected {
                                     self.selected_id = Some(SelectedItemId::Board(board.board.uid));
+
+                                    if let Some(preview) = board.preview.as_ref() {
+                                        preview.redescribe();
+                                    }
                                 }
 
                                 if resp.double_clicked_by(egui::PointerButton::Primary) && !active {
@@ -697,7 +701,7 @@ impl CircuitBoardEditor {
                         }
 
                         if ui.button("Add board").clicked() {
-                            let board = CircuitBoard::new(self.sim.clone(), "New board");
+                            let  board = CircuitBoard::new(self.sim.clone(), "New board");
                             let uid = board.uid;
                             let board = Arc::new(board);
                             self.sim

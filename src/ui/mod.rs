@@ -9,6 +9,7 @@ use eframe::{
     epaint::{Color32, PathShape, Rounding, Stroke, TextShape},
 };
 use emath::{pos2, vec2, Rect, Rot2, Vec2};
+use serde::{Serialize, Deserialize};
 
 pub mod designer;
 pub mod drawing;
@@ -654,7 +655,7 @@ impl CollapsibleSidePanel {
             side,
         } = self;
 
-        ui.push_id(id, |ui| {
+        let resp = ui.push_id(id, |ui| {
             let open_id = ui.id().with("_collapsed");
             let open = ui.ctx().data(|mem| mem.get_temp(open_id).unwrap_or(true));
 
@@ -667,7 +668,7 @@ impl CollapsibleSidePanel {
                 .map(|state| state.rect.width())
                 .unwrap_or_default();
 
-            let offset = if animation > 0.0 {
+            let panel_width = if animation > 0.0 {
                 expanded_width * animation
             } else {
                 0.0
@@ -689,8 +690,8 @@ impl CollapsibleSidePanel {
                 header_text.rect.width() + header_text.rect.height() + 20.0,
             );
             let pos = match side {
-                panel::Side::Left => pos2(offset, header_offset),
-                panel::Side::Right => pos2(ui.max_rect().width() - size.x - offset, header_offset),
+                panel::Side::Left => pos2(panel_width, header_offset),
+                panel::Side::Right => pos2(ui.max_rect().width() - size.x - panel_width, header_offset),
             };
 
             let text_color =
@@ -783,6 +784,18 @@ impl CollapsibleSidePanel {
                     panel::Side::Right => (1.0 - animation) * expanded_width,
                 };
 
+                let panel_rect = match side {
+                    panel::Side::Left => {
+                        Rect::from_min_size(pos2(0.0, 0.0), vec2(panel_width, clip.height()))
+                    }
+                    panel::Side::Right => Rect::from_min_size(
+                        pos2(ui.max_rect().width() - panel_width, 0.0),
+                        vec2(panel_width, clip.height()),
+                    ),
+                };
+
+                ui.interact(panel_rect, id, Sense::click_and_drag());
+
                 let rect = Rect::from_min_size(clip.min + vec2(panel_offset, 0.0), clip.size());
 
                 let mut panel_ui = ui.child_ui(rect, *ui.layout());
@@ -803,7 +816,9 @@ impl CollapsibleSidePanel {
                 panel,
             }
         })
-        .inner
+        .inner;
+
+        resp
     }
 }
 
@@ -904,27 +919,42 @@ pub struct Sides {
     pub left: bool,
     pub right: bool,
     pub bottom: bool,
+    pub center: bool,
 }
 
 impl Sides {
+    pub const ALL: Self = Self {
+        top: true,
+        left: true,
+        right: true,
+        bottom: true,
+        center: true,
+    };
+
     pub fn any(self) -> bool {
-        self.top || self.left || self.right || self.bottom
+        self.top || self.left || self.right || self.bottom || self.center
     }
 }
 
-pub fn rect_resizer(
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct RectVisuals {
+    pub rounding: Rounding,
+    pub fill: Color32,
+    pub stroke: Stroke,
+}
+
+pub fn rect_editor(
     rect: &mut Rect,
     sides: Sides,
     ui: &Ui,
     id: Id,
     constrain: impl FnOnce(Sides, &mut Rect),
-    fill: Color32,
-    stroke: Stroke,
+    visuals: RectVisuals
 ) -> Sides {
-    let resizing = ui.memory(|mem| mem.is_being_dragged(id));
+    let editing = ui.memory(|mem| mem.is_being_dragged(id));
     let grab = ui.style().interaction.resize_grab_radius_side;
 
-    let hover = if resizing {
+    let hover = if editing {
         ui.memory(|mem| mem.data.get_temp(id).unwrap_or_default())
     } else if let Some(pointer) = ui.ctx().pointer_latest_pos() {
         let on_top = ui
@@ -935,27 +965,18 @@ pub fn rect_resizer(
         let draggable = rect.expand(grab).contains(pointer);
 
         if draggable {
-            let right = sides.right
-                && on_top
-                && rect.right() - grab <= pointer.x;
-            let bottom = sides.bottom
-                && on_top
-                && rect.bottom() - grab <= pointer.y;
+            let right = sides.right && on_top && rect.right() - grab <= pointer.x;
+            let bottom = sides.bottom && on_top && rect.bottom() - grab <= pointer.y;
 
-            let top = !bottom
-                && sides.top
-                && on_top
-                && pointer.y <= rect.top() + grab;
-            let left = !right
-                && sides.left
-                && on_top
-                && pointer.x <= rect.left() + grab;
+            let top = !bottom && sides.top && on_top && pointer.y <= rect.top() + grab;
+            let left = !right && sides.left && on_top && pointer.x <= rect.left() + grab;
 
             Sides {
                 top,
                 left,
                 right,
                 bottom,
+                center: sides.center && !top && !left && !right && !bottom,
             }
         } else {
             Sides::default()
@@ -964,12 +985,21 @@ pub fn rect_resizer(
         Sides::default()
     };
 
-    if ui.input(|i| i.pointer.any_pressed() && i.pointer.any_down()) && hover.any() {
+    if ui.input(|i| i.pointer.primary_pressed()) && hover.any() {
         ui.memory_mut(|mem| {
             mem.set_dragged_id(id);
             mem.data.insert_temp(id, hover)
         });
     }
+
+    let any_drag = ui.memory(|mem| mem.is_anything_being_dragged());
+    let editing = ui.memory(|mem| mem.is_being_dragged(id));
+
+    let hover = if hover.any() && any_drag && !editing {
+        Default::default()
+    } else {
+        hover
+    };
 
     if hover.top && hover.left {
         ui.ctx().set_cursor_icon(CursorIcon::ResizeNorthWest);
@@ -987,10 +1017,17 @@ pub fn rect_resizer(
         ui.ctx().set_cursor_icon(CursorIcon::ResizeEast);
     } else if hover.bottom {
         ui.ctx().set_cursor_icon(CursorIcon::ResizeSouth);
+    } else if hover.center {
+        ui.ctx().set_cursor_icon(CursorIcon::Move);
     }
 
-    if resizing {
-        if let Some(pointer) = ui.ctx().pointer_latest_pos() {
+    if editing {
+        if hover.center {
+            let delta = ui.ctx().input(|input| input.pointer.delta());
+            rect.min += delta;
+            rect.max += delta;
+            constrain(hover, rect);
+        } else if let Some(pointer) = ui.ctx().pointer_latest_pos() {
             if hover.top {
                 rect.min.y = pointer.y.min(rect.max.y);
             }
@@ -1003,14 +1040,13 @@ pub fn rect_resizer(
             if hover.bottom {
                 rect.max.y = pointer.y.max(rect.min.y);
             }
-
             constrain(hover, rect);
         }
     }
 
     let paint = ui.painter();
 
-    paint.rect(*rect, Rounding::ZERO, fill, stroke);
+    paint.rect(*rect, visuals.rounding, visuals.fill, visuals.stroke);
 
     let hover_rounding = Rounding::same(grab / 2.0);
     let hover_color = Color32::WHITE.linear_multiply(0.3);
@@ -1069,10 +1105,23 @@ pub fn rect_resizer(
         )
     }
 
+    let center = ui
+        .ctx()
+        .animate_bool(id.with("__hover_center"), hover.center);
+    if center > 0.0 {
+        paint.rect(
+            rect.expand(2.0),
+            visuals.rounding,
+            Color32::TRANSPARENT,
+            Stroke::new(2.0, hover_color.linear_multiply(center)),
+        )
+    }
+
     Sides {
-        top: hover.top && resizing,
-        left: hover.left && resizing,
-        right: hover.right && resizing,
-        bottom: hover.bottom && resizing,
+        top: hover.top && editing,
+        left: hover.left && editing,
+        right: hover.right && editing,
+        bottom: hover.bottom && editing,
+        center: hover.center && editing,
     }
 }

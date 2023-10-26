@@ -59,6 +59,7 @@ mod debug;
 
 mod app;
 mod cache;
+mod ext;
 mod io;
 mod path;
 mod time;
@@ -113,7 +114,7 @@ impl<'a> PaintContext<'a> {
     pub fn new_on_ui(ui: &'a Ui, rect: Rect, scale: f32) -> Self {
         Self {
             screen: Screen {
-                scr_rect: rect, 
+                scr_rect: rect,
                 wld_pos: 0.0.into(),
                 scale,
             },
@@ -231,7 +232,7 @@ impl PanAndZoom {
                 })
         });
 
-        let interaction = ui.interact(rect, ui.id(), Sense::drag());
+        let interaction = ui.interact(rect, ui.id(), Sense::click_and_drag());
 
         if interaction.dragged_by(egui::PointerButton::Secondary)
             || (allow_primary_button_drag && interaction.dragged_by(egui::PointerButton::Primary))
@@ -302,6 +303,20 @@ impl Screen {
 
     pub fn world_to_screen_tile(&self, v: Vec2i) -> Vec2f {
         self.world_to_screen(v.convert(|v| v as f32))
+    }
+
+    pub fn screen_to_world_rect(&self, r: Rect) -> Rect {
+        Rect::from_min_size(
+            self.screen_to_world(r.left_top().into()).into(),
+            r.size() / self.scale,
+        )
+    }
+
+    pub fn world_to_screen_rect(&self, r: Rect) -> Rect {
+        Rect::from_min_size(
+            self.world_to_screen(r.left_top().into()).into(),
+            r.size() * self.scale,
+        )
     }
 }
 trait Intersect {
@@ -817,16 +832,14 @@ pub struct PastePreview {
 }
 
 impl PastePreview {
-    pub fn new(
-        data: crate::io::CopyPasteData,
-        ctx: &Arc<SimulationContext>
-    ) -> Self {
+    pub fn new(data: crate::io::CopyPasteData, ctx: &Arc<SimulationContext>) -> Self {
         let wires = data.wires;
         let circuits: Vec<_> = data
             .circuits
             .into_iter()
             .filter_map(|d| {
-                ctx.previews.get(&d.ty)
+                ctx.previews
+                    .get(&d.ty)
                     .and_then(|p| p.load_new(&d.imp, &d.props, ctx).map(|b| (d, b)))
             })
             .collect();
@@ -928,8 +941,10 @@ impl PastePreview {
                             for state in board.board.states.states.read().iter() {
                                 let ctx = CircuitStateContext::new(state.clone(), circuit.clone());
                                 state.write_circuit(id, |state| {
-                                    state.internal =
-                                        circuit.imp.write().load_internal(&ctx, &circuit_data.internal);
+                                    state.internal = circuit
+                                        .imp
+                                        .write()
+                                        .load_internal(&ctx, &circuit_data.internal);
                                 });
                             }
                         }
@@ -938,7 +953,7 @@ impl PastePreview {
                             circuit.imp.write().load(&circuit, &circuit_data.imp)
                         }
                     }
-                }
+                },
             );
             if let (Some(id), Some(dur)) = (id, circuit_data.update) {
                 for state in board.board.states.states.read().iter() {
@@ -1038,6 +1053,11 @@ impl ArcString {
         } else {
             ArcBorrowStr::Borrow("")
         }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        !self.string.as_ref().is_some_and(|s| !s.is_empty())
+            && !self.arc.read().as_ref().is_some_and(|a| !a.is_empty())
     }
 }
 
