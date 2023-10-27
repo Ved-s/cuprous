@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     app::SimulationContext,
     board::{ActiveCircuitBoard, CircuitBoard},
+    io::CircuitCopyData,
     state::{CircuitState, InternalCircuitState, State, StateCollection, WireState},
     time::Instant,
     vector::{Vec2i, Vec2u, Vector},
@@ -338,7 +339,7 @@ impl Circuit {
                     pin.connected_wire().map(|w| (pin.name(), w))
                 })
                 .collect(),
-            imp: self.imp.read().save(self),
+            imp: self.imp.read().save(self, false),
             props: self.props.save(),
         }
     }
@@ -349,7 +350,7 @@ impl Circuit {
                 circuit
                     .internal
                     .as_ref()
-                    .map(|i| i.serialize())
+                    .map(|i| i.serialize(true))
                     .unwrap_or_default()
             })
             .unwrap_or_default();
@@ -357,7 +358,7 @@ impl Circuit {
         crate::io::CircuitCopyData {
             ty: self.ty.clone(),
             pos,
-            imp: self.imp.read().save(self),
+            imp: self.imp.read().save(self, true),
             internal,
             update: state
                 .updates
@@ -442,6 +443,11 @@ impl CircuitStateContext {
             .write_circuit(self.circuit.id, |c| writer(c.get_internal_mut()))
     }
 
+    pub fn set_circuit_internal_state<T: InternalCircuitState>(&self, value: Option<T>) {
+        self.global_state
+            .write_circuit(self.circuit.id, |c| c.set_internal(value));
+    }
+
     pub fn set_update_interval(&self, interval: Option<Duration>) {
         match interval {
             Some(dur) => self
@@ -470,11 +476,23 @@ pub trait CircuitImpl: Any + Send + Sync {
     /// Called once every period determined by `Self::update_interval`
     fn update(&self, ctx: &CircuitStateContext) {}
 
-    /// Called once on circuit creation, use for update interval setup
-    fn init_state(&self, ctx: &CircuitStateContext) {}
+    /// Called once on circuit state creation or load<br>
+    /// Called after `circuit_init`<br>
+    /// `first_init`: `true` on new state creation, `false` on loaded state
+    fn state_init(&self, ctx: &CircuitStateContext, first_init: bool) {}
 
-    /// Called once when placed or loaded
-    fn postload(&mut self, ctx: &CircuitStateContext, just_placed: bool) {}
+    /// Called once on circuit placement or load<br>
+    /// Called before all calls to `state_init`<br>
+    /// `first_init`: `true` on placement, `false` on load
+    fn circuit_init(&mut self, circ: &Arc<Circuit>, first_init: bool) {}
+
+    /// Called once on circuit removal for each active state<br>
+    /// Called before `remove_circuit`<br>
+    fn state_remove(&self, ctx: &CircuitStateContext) {}
+
+    /// Called once on circuit removal<br>
+    /// Called after all calls to `remove_state`<br>
+    fn circuit_remove(&mut self, circ: &Arc<Circuit>) {}
 
     /// Called after `Self::update` to determine next update timestamp
     fn update_interval(&self, ctx: &CircuitStateContext) -> Option<Duration> {
@@ -486,17 +504,20 @@ pub trait CircuitImpl: Any + Send + Sync {
         true
     }
 
-    /// Serialize circuit parameters. NOT for circuit state
-    fn save(&self, circ: &Arc<Circuit>) -> serde_intermediate::Intermediate {
+    /// Serialize circuit parameters. NOT for circuit state<br>
+    /// `copy`: `true` if data is saved for copying
+    fn save(&self, circ: &Arc<Circuit>, copy: bool) -> serde_intermediate::Intermediate {
         ().into()
     }
 
-    fn load(&mut self, circ: &Arc<Circuit>, data: &serde_intermediate::Intermediate) {}
+    fn load(&mut self, circ: &Arc<Circuit>, data: &serde_intermediate::Intermediate, paste: bool) {}
 
+    /// Load data for internal state. Global states may not be loaded yet.
     fn load_internal(
         &self,
         ctx: &CircuitStateContext,
         data: &serde_intermediate::Intermediate,
+        paste: bool,
     ) -> Option<Box<dyn InternalCircuitState>> {
         None
     }
@@ -544,15 +565,10 @@ impl CircuitPreview {
         Self::new(imp, props)
     }
 
-    pub fn load_new(
-        &self,
-        imp: &serde_intermediate::Intermediate,
-        props_data: &crate::io::CircuitPropertyStoreData,
-        ctx: &Arc<SimulationContext>,
-    ) -> Option<Self> {
-        let imp = self.imp.load_impl_data(imp, ctx)?;
+    pub fn load_copy(&self, data: &CircuitCopyData, ctx: &Arc<SimulationContext>) -> Option<Self> {
+        let imp = self.imp.load_copy_data(&data.imp, &data.internal, ctx)?;
         let props = imp.default_props();
-        props.load(props_data);
+        props.load(&data.props);
         let description = RwLock::new(imp.describe(&props));
         Some(Self {
             imp,
@@ -601,9 +617,12 @@ pub trait CircuitPreviewImpl: Send + Sync {
     fn draw_preview(&self, props: &CircuitPropertyStore, ctx: &PaintContext, in_world: bool);
     fn describe(&self, props: &CircuitPropertyStore) -> DynCircuitDescription;
     fn create_impl(&self) -> Box<dyn CircuitImpl>;
-    fn load_impl_data(
+
+    /// For loading data created with `CircuidImpl::save(circuit, true)` and `InternalCircuitState::serialize(true)`
+    fn load_copy_data(
         &self,
-        data: &serde_intermediate::Intermediate,
+        imp: &serde_intermediate::Intermediate,
+        internal: &serde_intermediate::Intermediate,
         ctx: &Arc<SimulationContext>,
     ) -> Option<Box<dyn CircuitPreviewImpl>>;
     fn default_props(&self) -> CircuitPropertyStore;

@@ -10,78 +10,49 @@ use emath::pos2;
 use crate::{
     board::{CircuitBoard, CircuitDesign},
     circuits::*,
+    state::StateParent,
     unwrap_option_or_return,
 };
-
-#[derive(Clone, Default)]
-struct ResolvedCircuitData {
-    board: Option<Arc<CircuitBoard>>,
-    state: Option<Arc<State>>,
-    design: Option<Arc<CircuitDesign>>,
-}
-
-impl ResolvedCircuitData {
-    fn unresolve_into(&self, unresolved: &mut UnresolvedCircuitData) {
-        if let Some(board) = &self.board {
-            unresolved.board = board.uid;
-        }
-        if let Some(state) = &self.state {
-            unresolved.state = state.id;
-        }
-        if let Some(design) = &self.design {
-            unresolved.design = OptionalInt::new(design.id);
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct UnresolvedCircuitData {
-    board: u128,
-    state: usize,
-    design: OptionalInt<usize>,
-}
-impl UnresolvedCircuitData {
-    fn resolve_into(&self, resolved: &mut ResolvedCircuitData, ctx: &Arc<SimulationContext>) {
-        if resolved.board.is_none() {
-            resolved.board = ctx.boards.read().get(&self.board).map(|b| b.board.clone());
-        }
-
-        if let Some(board) = &resolved.board {
-            if resolved.state.is_none() {
-                resolved.state = board.states.get(self.state);
-            }
-
-            if resolved.design.is_none() {
-                resolved.design = match self.design.get() {
-                    Some(id) => board.designs.read().get(id),
-                    None => Some(board.designs.read().current()),
-                };
-            }
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 struct CircuitDataModel {
     board: u128,
-    state: usize,
     design: usize,
 }
 
-impl CircuitDataModel {
-    fn into_unresolved(self) -> UnresolvedCircuitData {
-        UnresolvedCircuitData {
-            board: self.board,
-            state: self.state,
-            design: OptionalInt::new(self.design),
-        }
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+struct CircuitStateDataModel {
+    state: usize,
+}
+
+#[derive(Default)]
+pub struct BoardState {
+    pasted: bool,
+    parent_error: bool,
+    state_id: Option<usize>,
+    state: Option<Arc<State>>,
+}
+
+impl InternalCircuitState for BoardState {
+    fn serialize(&self, _: bool) -> serde_intermediate::Intermediate {
+        let state_id = self.state.as_ref().map(|s| s.id).or(self.state_id);
+
+        state_id
+            .map(|id| {
+                serde_intermediate::to_intermediate(&CircuitStateDataModel { state: id })
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default()
     }
 }
 
 #[derive(Default)]
 pub struct Board {
-    unresolved: Option<UnresolvedCircuitData>,
-    resolved: ResolvedCircuitData,
+    board_id: Option<u128>,
+    design_id: Option<usize>,
+
+    board: Option<Arc<CircuitBoard>>,
+    design: Option<Arc<CircuitDesign>>,
 
     // Inner pin, outer pin
     // Resolves while executing
@@ -89,13 +60,14 @@ pub struct Board {
     unresolved_inner_pins: RwLock<HashSet<usize>>,
     unresolved_outer_pins: RwLock<HashSet<usize>>,
     pins: Box<[CircuitPinInfo]>,
-    parent_error: bool,
 }
 
 // TODO: handle state destruction on remove
 impl Board {
     fn draw(
-        data: &ResolvedCircuitData,
+        board: Option<&Arc<CircuitBoard>>,
+        design: Option<&Arc<CircuitDesign>>,
+        state: Option<&Arc<State>>,
         ignore_state: bool,
         parent_error: bool,
         ctx: &PaintContext,
@@ -135,7 +107,7 @@ impl Board {
             return;
         }
 
-        let board = match &data.board {
+        let board = match board {
             Some(v) => v,
             None => {
                 draw_error("Invalid board");
@@ -143,7 +115,7 @@ impl Board {
             }
         };
 
-        let state = match &data.state {
+        let state = match state {
             Some(v) => Some(v),
             None if !ignore_state => {
                 draw_error("Invalid state");
@@ -152,7 +124,7 @@ impl Board {
             None => None,
         };
 
-        let design = match &data.design {
+        let design = match design {
             Some(v) => v,
             None => {
                 draw_error("Invalid design");
@@ -160,20 +132,18 @@ impl Board {
             }
         };
 
-        design.draw_decorations(ctx.ui.painter(), ctx.rect);
+        design.draw_decorations(ctx.ui.painter(), ctx.rect, trans);
     }
 
     fn describe_props(
-        data: &ResolvedCircuitData,
+        design: Option<&CircuitDesign>,
         _: &CircuitPropertyStore,
     ) -> DynCircuitDescription {
-        Self::describe(data)
+        Self::describe(design)
     }
 
-    fn describe(data: &ResolvedCircuitData) -> DynCircuitDescription {
-        let pins = data
-            .design
-            .as_ref()
+    fn describe(design: Option<&CircuitDesign>) -> DynCircuitDescription {
+        let pins = design
             .map(|d| {
                 d.pins
                     .iter()
@@ -189,7 +159,7 @@ impl Board {
             })
             .unwrap_or_default();
 
-        let size = data.design.as_ref().map(|d| d.size).unwrap_or(2.into());
+        let size = design.map(|d| d.size).unwrap_or(2.into());
 
         DynCircuitDescription {
             size,
@@ -205,12 +175,14 @@ impl Board {
             return None;
         }
 
-        fn resolve(data: &ResolvedCircuitData, inner: usize) -> Option<usize> {
-            let pins = data.board.as_ref()?.pins.read();
+        fn resolve(
+            board: Option<&CircuitBoard>,
+            design: Option<&CircuitDesign>,
+            inner: usize,
+        ) -> Option<usize> {
+            let pins = board?.pins.read();
             let str_id = pins.get_by_right(&inner)?;
-            let id = data
-                .design
-                .as_ref()?
+            let id = design?
                 .pins
                 .iter()
                 .enumerate()
@@ -219,7 +191,7 @@ impl Board {
             Some(id)
         }
 
-        let outer = resolve(&self.resolved, inner);
+        let outer = resolve(self.board.as_deref(), self.design.as_deref(), inner);
         match outer {
             Some(outer) => {
                 self.pinmap.write().insert(inner, outer);
@@ -239,14 +211,18 @@ impl Board {
             return None;
         }
 
-        fn resolve(data: &ResolvedCircuitData, outer: usize) -> Option<usize> {
-            let str_id = data.design.as_ref()?.pins.get(outer)?.id.deref();
-            let pins = data.board.as_ref()?.pins.read();
+        fn resolve(
+            board: Option<&CircuitBoard>,
+            design: Option<&CircuitDesign>,
+            outer: usize,
+        ) -> Option<usize> {
+            let str_id = design?.pins.get(outer)?.id.deref();
+            let pins = board?.pins.read();
             let id = pins.get_by_left(str_id)?;
             Some(*id)
         }
 
-        let inner = resolve(&self.resolved, outer);
+        let inner = resolve(self.board.as_deref(), self.design.as_deref(), outer);
         match inner {
             Some(inner) => {
                 self.pinmap.write().insert(inner, outer);
@@ -260,12 +236,23 @@ impl Board {
 }
 
 impl CircuitImpl for Board {
-    fn draw(&self, _: &CircuitStateContext, paint_ctx: &PaintContext) {
-        Board::draw(&self.resolved, false, self.parent_error, paint_ctx, false);
+    fn draw(&self, ctx: &CircuitStateContext, paint_ctx: &PaintContext) {
+        let data = ctx
+            .read_circuit_internal_state(|s: &BoardState| (s.state.clone(), s.parent_error));
+
+        Board::draw(
+            self.board.as_ref(),
+            self.design.as_ref(),
+            data.as_ref().and_then(|d| d.0.as_ref()),
+            false,
+            data.as_ref().is_some_and(|d| d.1),
+            paint_ctx,
+            false,
+        );
     }
 
     fn create_pins(&mut self, circ: &Arc<Circuit>) -> Box<[CircuitPinInfo]> {
-        let description = Self::describe_props(&self.resolved, &circ.props);
+        let description = Self::describe_props(self.design.as_deref(), &circ.props);
         let pins = description
             .pins
             .iter()
@@ -277,10 +264,12 @@ impl CircuitImpl for Board {
     }
 
     fn update_signals(&self, state_ctx: &CircuitStateContext, changed_pin: Option<usize>) {
-        let inner_board = &self.resolved.board;
+        let inner_board = self.board.as_deref();
         let inner_board = unwrap_option_or_return!(inner_board);
 
-        let inner_state = &self.resolved.state;
+        let inner_state = state_ctx
+            .read_circuit_internal_state(|s: &BoardState| s.state.clone())
+            .flatten();
         let inner_state = unwrap_option_or_return!(inner_state);
 
         fn handle_pin(
@@ -325,112 +314,144 @@ impl CircuitImpl for Board {
         match changed_pin {
             Some(id) => {
                 if let Some(info) = self.pins.get(id) {
-                    handle_pin(self, inner_board, inner_state, id, info, state_ctx);
+                    handle_pin(self, inner_board, &inner_state, id, info, state_ctx);
                 }
             }
             None => {
                 for (id, info) in self.pins.iter().enumerate() {
-                    handle_pin(self, inner_board, inner_state, id, info, state_ctx);
+                    handle_pin(self, inner_board, &inner_state, id, info, state_ctx);
                 }
             }
         }
     }
 
     fn size(&self, _: &Arc<Circuit>) -> Vec2u {
-        self.resolved.design.as_ref().map_or(2.into(), |d| d.size)
+        self.design.as_ref().map_or(2.into(), |d| d.size)
     }
 
-    fn postload(&mut self, state: &CircuitStateContext, _: bool) {
-        if let Some(unresolved) = &self.unresolved {
-            unresolved.resolve_into(&mut self.resolved, &state.global_state.board.ctx);
+    // Load board and design
+    fn circuit_init(&mut self, circ: &Arc<Circuit>, _: bool) {
+        if let (true, Some(id)) = (self.board.is_none(), &self.board_id) {
+            let ctx = &circ.board.ctx;
+            self.board = ctx.boards.read().get(id).map(|sb| sb.board.clone());
         }
 
-        if let Some(inner_state) = &self.resolved.state {
-            let mut parent = inner_state.parent.write();
+        if let (true, Some(id), Some(board)) = (self.design.is_none(), self.design_id, &self.board)
+        {
+            self.design = board.designs.read().get(id);
+        }
+    }
 
-            if parent.is_none() {
-                *parent = Some(crate::state::StateParent {
-                    state: state.global_state.get_self_arc(),
-                    circuit: state.circuit.id,
-                })
-            } else {
-                self.parent_error = true;
+    // Load state
+    fn state_init(&self, ctx: &CircuitStateContext, first_init: bool) {
+        if let Some(board) = self.board.as_ref() {
+            let create_new = ctx.write_circuit_internal_state(|s: &mut BoardState| {
+                if let Some(id) = s.state_id {
+                    let state = board.states.get(id);
+                    if let Some(state) = state {
+                        let mut parent = state.parent.write();
+                        if parent.is_some() {
+
+                            // If circuit was pasted and there's a state conflict, create new state instead
+                            if s.pasted {
+                                return true;
+                            }
+
+                            s.parent_error = true;
+                            return false;
+                        }
+
+                        *parent = Some(StateParent {
+                            state: ctx.global_state.clone(),
+                            circuit: ctx.circuit.clone(),
+                        });
+                        drop(parent);
+                        state.set_frozen(false);
+                        s.state = Some(state);
+                        return false;
+                    }
+                }
+                true
+            });
+
+            if create_new && first_init {
+                let state = board.states.create_state(board.clone());
+                *state.parent.write() = Some(StateParent {
+                    state: ctx.global_state.clone(),
+                    circuit: ctx.circuit.clone(),
+                });
+                ctx.set_circuit_internal_state(Some(BoardState {
+                    parent_error: false,
+                    pasted: false,
+                    state: Some(state.clone()),
+                    state_id: Some(state.id),
+                }))
             }
         }
     }
 
-    fn save(&self, _: &Arc<Circuit>) -> serde_intermediate::Intermediate {
-        let board_id = self
-            .resolved
-            .board
-            .as_ref()
-            .map_or_else(|| self.unresolved.map(|u| u.board), |b| Some(b.uid));
-        let state_id = self
-            .resolved
-            .state
-            .as_ref()
-            .map_or_else(|| self.unresolved.map(|u| u.state), |s| Some(s.id));
+    fn state_remove(&self, ctx: &CircuitStateContext) {
+        ctx.write_circuit_internal_state(|s: &mut BoardState| {
+            if let Some(state) = s.state.take() {
+                *state.parent.write() = None;
+                state.set_frozen(true);
+            }
+            s.state_id = None;
+        });
+    }
 
-        // Saving "current" design isn't allowed, it must be a specific id
-        let design_id = self.resolved.design.as_ref().map_or_else(
-            || self.unresolved.and_then(|u| u.design.get()),
-            |d| Some(d.id),
-        );
+    fn load_internal(
+        &self,
+        _: &CircuitStateContext,
+        data: &serde_intermediate::Intermediate,
+        paste: bool,
+    ) -> Option<Box<dyn InternalCircuitState>> {
+        if let Ok(data) = serde_intermediate::from_intermediate::<CircuitStateDataModel>(data) {
+            return Some(Box::new(BoardState {
+                parent_error: false,
+                pasted: paste,
+                state_id: Some(data.state),
+                state: None,
+            }));
+        }
+        None
+    }
+
+    fn save(&self, _: &Arc<Circuit>, _: bool) -> serde_intermediate::Intermediate {
+        let board_id = self.board.as_ref().map(|b| b.uid).or(self.board_id);
+
+        let design_id = self.design.as_ref().map(|d| d.id).or(self.design_id);
 
         let board_id = unwrap_option_or_return!(board_id, ().into());
-        let state_id = unwrap_option_or_return!(state_id, ().into());
         let design_id = unwrap_option_or_return!(design_id, ().into());
 
         let model = CircuitDataModel {
             board: board_id,
-            state: state_id,
             design: design_id,
         };
         serde_intermediate::to_intermediate(&model).unwrap_or_default()
     }
 
-    fn load(&mut self, _: &Arc<Circuit>, data: &serde_intermediate::Intermediate) {
+    fn load(&mut self, _: &Arc<Circuit>, data: &serde_intermediate::Intermediate, _: bool) {
         let model = serde_intermediate::from_intermediate::<CircuitDataModel>(data).ok();
         let model = unwrap_option_or_return!(model);
 
-        self.unresolved = Some(model.into_unresolved());
+        self.board_id = Some(model.board);
+        self.design_id = Some(model.design);
     }
 }
 
+#[derive(Default)]
 pub struct BoardPreview {
-    unresolved: Option<UnresolvedCircuitData>,
-    resolved: ResolvedCircuitData,
+    board: Option<Arc<CircuitBoard>>,
+    design: Option<Arc<CircuitDesign>>,
 }
 
 impl BoardPreview {
-    fn resolve_data(&self, create_state: bool) -> ResolvedCircuitData {
-        match &self.resolved.board {
-            // Try selecting current circuit design
-            Some(board) => {
-                let mut resolved = self.resolved.clone();
-                if !self.unresolved.as_ref().is_some_and(|u| u.design.is_some())
-                    && self.resolved.design.is_none()
-                {
-                    resolved.design = Some(board.designs.read().current());
-                }
-                if create_state {
-                    resolved.state = Some(board.states.create_state(board.clone()));
-                }
-
-                resolved
-            }
-            _ => self.resolved.clone(),
-        }
-    }
-
     pub fn new_from_board(board: Arc<CircuitBoard>) -> Self {
         Self {
-            unresolved: None,
-            resolved: ResolvedCircuitData {
-                board: Some(board),
-                state: None,
-                design: None,
-            },
+            board: Some(board),
+            design: None,
         }
     }
 }
@@ -441,39 +462,51 @@ impl CircuitPreviewImpl for BoardPreview {
     }
 
     fn draw_preview(&self, _: &CircuitPropertyStore, ctx: &PaintContext, in_world: bool) {
-        Board::draw(&self.resolve_data(false), true, false, ctx, in_world);
+        let design = self
+            .design
+            .clone()
+            .or_else(|| self.board.as_ref().map(|b| b.designs.read().current()));
+
+        Board::draw(
+            self.board.as_ref(),
+            design.as_ref(),
+            None,
+            true,
+            false,
+            ctx,
+            in_world,
+        );
     }
 
     fn create_impl(&self) -> Box<dyn CircuitImpl> {
-        let resolved = self.resolve_data(true);
-        let unresolved = self.unresolved.map(|mut u| {
-            resolved.unresolve_into(&mut u);
-            u
-        });
+        let design = self
+            .design
+            .clone()
+            .or_else(|| self.board.as_ref().map(|b| b.designs.read().current()));
 
         Box::new(Board {
-            resolved,
-            unresolved,
+            board: self.board.clone(),
+            design,
             ..Board::default()
         })
     }
 
-    fn load_impl_data(
+    fn load_copy_data(
         &self,
         data: &serde_intermediate::Intermediate,
+        _: &serde_intermediate::Intermediate,
         ctx: &Arc<SimulationContext>,
     ) -> Option<Box<dyn CircuitPreviewImpl>> {
         let model = serde_intermediate::from_intermediate::<CircuitDataModel>(data).ok();
-        let model = unwrap_option_or_return!(model, None);
 
-        let unresolved = model.into_unresolved();
-        let mut resolved = ResolvedCircuitData::default();
-        unresolved.resolve_into(&mut resolved, ctx);
+        let board = model
+            .as_ref()
+            .and_then(|m| ctx.boards.read().get(&m.board).map(|sb| sb.board.clone()));
+        let design = model
+            .as_ref()
+            .and_then(|m| board.as_ref().and_then(|b| b.designs.read().get(m.design)));
 
-        Some(Box::new(BoardPreview {
-            unresolved: Some(unresolved),
-            resolved,
-        }))
+        Some(Box::new(BoardPreview { board, design }))
     }
 
     fn default_props(&self) -> CircuitPropertyStore {
@@ -481,14 +514,13 @@ impl CircuitPreviewImpl for BoardPreview {
     }
 
     fn display_name(&self) -> DynStaticStr {
-        self.resolved
-            .board
+        self.board
             .as_ref()
             .map(|b| b.name.read().get_arc().into())
             .unwrap_or("Circuit board".into())
     }
 
     fn describe(&self, props: &CircuitPropertyStore) -> DynCircuitDescription {
-        Board::describe_props(&self.resolve_data(false), props)
+        Board::describe_props(self.design.as_deref(), props)
     }
 }

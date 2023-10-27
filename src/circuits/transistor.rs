@@ -235,8 +235,9 @@ impl CircuitPreviewImpl for TransistorPreview {
         Box::new(Transistor::new())
     }
 
-    fn load_impl_data(
+    fn load_copy_data(
         &self,
+        _: &serde_intermediate::Intermediate,
         _: &serde_intermediate::Intermediate,
         _: &Arc<SimulationContext>,
     ) -> Option<Box<dyn CircuitPreviewImpl>> {

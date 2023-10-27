@@ -1,7 +1,7 @@
 use std::{
     any::{Any, TypeId},
     borrow::BorrowMut,
-    sync::Arc,
+    sync::{Arc, atomic::{AtomicBool, Ordering}},
     time::Duration,
 };
 
@@ -129,7 +129,8 @@ impl From<SafeWireState> for WireState {
 }
 
 pub trait InternalCircuitState: Any + Send + Sync {
-    fn serialize(&self) -> serde_intermediate::Intermediate {
+    fn serialize(&self, copy: bool) -> serde_intermediate::Intermediate {
+        let _  = copy;
         ().into()
     }
 }
@@ -156,6 +157,10 @@ impl CircuitState {
         unsafe { &mut *(b.as_mut() as *mut dyn InternalCircuitState as *mut T) }
     }
 
+    pub fn set_internal<T: InternalCircuitState>(&mut self, value: Option<T>) {
+        self.internal = value.map(|v| Box::new(v) as Box<dyn InternalCircuitState>);
+    }
+
     pub fn save(&self) -> crate::io::CircuitStateData {
         crate::io::CircuitStateData {
             pins: self.pins.inner().clone(),
@@ -163,7 +168,7 @@ impl CircuitState {
             internal: self
                 .internal
                 .as_ref()
-                .map(|s| s.serialize())
+                .map(|s| s.serialize(false))
                 .unwrap_or_default(),
         }
     }
@@ -174,7 +179,7 @@ impl CircuitState {
             pin_dirs: FixedVec::from_option_vec(data.pin_dirs.clone()),
             internal: match &data.internal {
                 serde_intermediate::Intermediate::Unit => None,
-                data => circ.circuit.imp.read().load_internal(circ, data),
+                data => circ.circuit.imp.read().load_internal(circ, data, false),
             },
         }
     }
@@ -207,7 +212,7 @@ impl StateCollection {
     pub fn create_state(&self, board: Arc<CircuitBoard>) -> Arc<State> {
         let mut states = self.states.write();
         let id = states.first_free_pos_filtered(|i| i > 0); // id 0 reserved
-        let state = Arc::new(State::new(board, id));
+        let state = State::new(board, id);
         states.set(state.clone(), id);
         state
     }
@@ -243,9 +248,9 @@ impl StateCollection {
         }
     }
 
-    pub fn reset_circuit(&self, circuit: usize) {
+    pub fn reset_circuit(&self, circuit: &Arc<Circuit>) {
         for state in self.states.read().iter() {
-            state.reset_circuit(circuit);
+            state.remove_circuit_state(circuit);
         }
     }
 
@@ -265,14 +270,14 @@ impl StateCollection {
             None => self
                 .states
                 .write()
-                .get_or_create_mut(id, || Arc::new(State::new(board, id)))
+                .get_or_create_mut(id, || State::new(board, id))
                 .clone(),
         }
     }
 
-    pub fn init_circuit(&self, circuit: &Arc<Circuit>) {
+    pub fn init_circuit_state(&self, circuit: &Arc<Circuit>, first_init: bool) {
         for state in self.states.read().iter() {
-            state.init_circuit(circuit);
+            state.init_circuit_state(circuit, first_init);
         }
     }
 
@@ -280,7 +285,11 @@ impl StateCollection {
     pub fn update(&self) {}
 
     #[cfg(not(feature = "single_thread"))]
-    pub fn activate(&self) {
+    pub fn initialize(&self) {
+        for state in self.states.read().iter() {
+            state.init_circuit_states(false);
+        }
+
         for state in self.states.read().iter() {
             state.wake_thread(false);
         }
@@ -295,7 +304,7 @@ impl StateCollection {
 
 pub struct StateParent {
     pub state: Arc<State>,
-    pub circuit: usize,
+    pub circuit: Arc<Circuit>,
 }
 
 pub struct State {
@@ -314,12 +323,13 @@ pub struct State {
     circuit_updates_removes: Mutex<Vec<usize>>,
 
     pub updates: Mutex<Vec<(usize, Instant)>>,
+    frozen: AtomicBool,
 }
 
 impl State {
-    pub fn new(board: Arc<CircuitBoard>, id: usize) -> Self {
+    pub fn new(board: Arc<CircuitBoard>, id: usize) -> Arc<Self> {
         let ordered = board.is_ordered_queue();
-        Self {
+        let state = Arc::new(Self {
             id,
             parent: RwLock::new(None),
             wires: Default::default(),
@@ -330,7 +340,10 @@ impl State {
             board,
             circuit_updates_removes: Default::default(),
             updates: Default::default(),
-        }
+            frozen: AtomicBool::new(false),
+        });
+        state.init_circuit_states(false);
+        state
     }
 
     pub fn get_wire(&self, id: usize) -> WireState {
@@ -402,6 +415,19 @@ impl State {
         }
     }
 
+    pub fn set_frozen(self: &Arc<Self>, frozen: bool) {
+        self.frozen.store(frozen, Ordering::Relaxed);
+        self.wake_thread(true);
+    }
+
+    pub fn is_frozen(&self) -> bool {
+        self.frozen.load(Ordering::Relaxed)
+    }
+
+    pub fn is_being_used(self: &Arc<Self>) -> bool {
+        self.parent.read().is_some() || self.id == 0 || Arc::strong_count(self) > 1 || Arc::weak_count(self) > 0
+    }
+
     pub fn save(&self) -> crate::io::StateData {
         let now = Instant::now();
         crate::io::StateData {
@@ -452,6 +478,7 @@ impl State {
             board,
             circuit_updates_removes: Default::default(),
             updates: Mutex::new(updates),
+            frozen: AtomicBool::new(false),
         });
 
         let board_circuits = state.board.circuits.read();
@@ -487,9 +514,13 @@ impl State {
         self.wires.write().remove(wire);
     }
 
-    pub fn reset_circuit(&self, circuit: usize) {
-        self.circuits.write().remove(circuit);
-        self.reset_circuit_update_interval(circuit);
+    pub fn remove_circuit_state(self: &Arc<Self>, circuit: &Arc<Circuit>) {
+
+        let state_ctx = CircuitStateContext::new(self.clone(), circuit.clone());
+        circuit.imp.read().state_remove(&state_ctx);
+
+        self.circuits.write().remove(circuit.id);
+        self.reset_circuit_update_interval(circuit.id);
     }
 
     pub fn set_ordered(&self, ordered: bool) {
@@ -510,6 +541,11 @@ impl State {
     }
 
     fn update_once(self: &Arc<State>, queue_limit: usize) -> Option<Instant> {
+
+        if self.frozen.load(Ordering::Relaxed) {
+            return None;
+        }
+
         // Lock shared simulation, so placing/deleting won't interrupt anything
         let sim_lock = { self.board.sim_lock.clone() };
         let sim_lock = sim_lock.read();
@@ -590,11 +626,17 @@ impl State {
         }
     }
 
-    fn init_circuit(self: &Arc<Self>, circuit: &Arc<Circuit>) {
+    pub fn init_circuit_states(self: &Arc<Self>, first_init: bool) {
+        let circuits = self.board.circuits.read();
+        for circuit in circuits.iter() {
+            self.init_circuit_state(circuit, first_init);
+        }
+    }
+
+    pub fn init_circuit_state(self: &Arc<Self>, circuit: &Arc<Circuit>, first_init: bool) {
         let state_ctx = CircuitStateContext::new(self.clone(), circuit.clone());
-        let mut imp = circuit.imp.write();
-        imp.init_state(&state_ctx);
-        imp.postload(&state_ctx, true);
+        let imp = circuit.imp.read();
+        imp.state_init(&state_ctx, first_init);
     }
 
     fn update_wire_now(self: &Arc<State>, wire: &Wire, skip_state_ckeck: bool) {
@@ -715,6 +757,9 @@ impl State {
             }
             return;
         }
+        if self.frozen.load(Ordering::Relaxed) {
+            return;
+        }
 
         let clone = self.clone();
         let sync = Arc::new((parking_lot::Condvar::new(), parking_lot::Mutex::new(false)));
@@ -824,6 +869,10 @@ impl StateThread {
                 if *self.sync.1.lock() {
                     return;
                 }
+            }
+
+            if self.state.frozen.load(Ordering::Relaxed) {
+                return;
             }
 
             let wait = self.state.update_once(200);

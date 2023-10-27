@@ -1,7 +1,7 @@
 use std::collections::hash_map::DefaultHasher;
 use std::f32::consts::TAU;
 use std::fmt::Write;
-use std::hash::{SipHasher, Hash, Hasher};
+use std::hash::{Hash, Hasher};
 
 use eframe::egui::{ComboBox, Sense, Ui};
 use eframe::epaint::{PathShape, Stroke};
@@ -52,7 +52,7 @@ struct PinState {
 }
 
 impl InternalCircuitState for PinState {
-    fn serialize(&self) -> serde_intermediate::Intermediate {
+    fn serialize(&self, _: bool) -> serde_intermediate::Intermediate {
         serde_intermediate::to_intermediate(self).unwrap()
     }
 }
@@ -255,13 +255,11 @@ impl CircuitImpl for Pin {
             .read()
             .as_ref()
             .map(|p| {
-                let circuits = p.state.board.circuits.read();
-                let circuit = circuits.get(p.circuit)?;
-                let outer = circuit.read_imp::<super::board::Board, _>(|board| {
+                let outer = p.circuit.read_imp::<super::board::Board, _>(|board| {
                     board.resolve_inner_to_outer(state_ctx.circuit.id)
                 })??;
-                let outer_state = CircuitStateContext::new(p.state.clone(), circuit.clone());
-                let state = circuit.info.read().pins.get(outer)?.get_state(&outer_state);
+                let outer_state = CircuitStateContext::new(p.state.clone(), p.circuit.clone());
+                let state = p.circuit.info.read().pins.get(outer)?.get_state(&outer_state);
                 Some(state)
             })
             .map(|s| s.unwrap_or(WireState::None));
@@ -360,17 +358,14 @@ impl CircuitImpl for Pin {
 
             let parent = state_ctx.global_state.parent.read();
             if let Some(parent) = parent.deref() {
-                let circuits = parent.state.board.circuits.read();
-                let circuit = circuits.get(parent.circuit);
-                let circuit = unwrap_option_or_return!(circuit);
-                let outer = circuit
+                let outer = parent.circuit
                     .read_imp::<super::board::Board, _>(|board| {
                         board.resolve_inner_to_outer(state_ctx.circuit.id)
                     })
                     .flatten();
                 let outer = unwrap_option_or_return!(outer);
-                let outer_state = CircuitStateContext::new(parent.state.clone(), circuit.clone());
-                let info = circuit.info.read();
+                let outer_state = CircuitStateContext::new(parent.state.clone(), parent.circuit.clone());
+                let info = parent.circuit.info.read();
                 let outer_pin = info.pins.get(outer);
                 let outer_pin = unwrap_option_or_return!(outer_pin);
 
@@ -387,18 +382,15 @@ impl CircuitImpl for Pin {
             let parent = state_ctx.global_state.parent.read();
             match parent.as_ref() {
                 Some(parent) => 'm: {
-                    let circuits = parent.state.board.circuits.read();
-                    let circuit = circuits.get(parent.circuit);
-                    let circuit = unwrap_option_or_break!(circuit, 'm);
-                    let outer = circuit
+                    let outer = parent.circuit
                         .read_imp::<super::board::Board, _>(|board| {
                             board.resolve_inner_to_outer(state_ctx.circuit.id)
                         })
                         .flatten();
                     let outer = unwrap_option_or_break!(outer, 'm);
                     let outer_state =
-                        CircuitStateContext::new(parent.state.clone(), circuit.clone());
-                    let info = circuit.info.read();
+                        CircuitStateContext::new(parent.state.clone(), parent.circuit.clone());
+                    let info = parent.circuit.info.read();
                     let outer_pin = info.pins.get(outer);
                     let outer_pin = unwrap_option_or_break!(outer_pin, 'm);
 
@@ -485,31 +477,31 @@ impl CircuitImpl for Pin {
         &self,
         _: &CircuitStateContext,
         data: &serde_intermediate::Intermediate,
+        _: bool
     ) -> Option<Box<dyn InternalCircuitState>> {
         serde_intermediate::de::intermediate::deserialize::<PinState>(data)
             .ok()
             .map(|s| Box::new(s) as Box<dyn InternalCircuitState>)
     }
 
-    fn postload(&mut self, state: &CircuitStateContext, just_placed: bool) {
-        let pos = state.circuit.pos;
+    fn circuit_init(&mut self, circ: &Arc<Circuit>, first_init: bool) {
+        let pos = circ.pos;
         let hex_x = format!("{}{:x}", if pos.x() < 0 { "-" } else { "" }, pos.x().abs());
         let hex_y = format!("{}{:x}", if pos.y() < 0 { "-" } else { "" }, pos.y().abs());
 
         let uid = format!("{:x}:{:x}:{}{}", hex_x.len(), hex_y.len(), hex_x, hex_y);
         let uid_arc: Arc<str> = uid.into();
 
-        state
-            .global_state
+        circ
             .board
             .pins
             .write()
-            .insert(uid_arc.clone(), state.circuit.id);
+            .insert(uid_arc.clone(), circ.id);
 
-        if just_placed {
-            let name_empty = state.circuit.props.read("name", |s: &ArcString| s.is_empty());
+        if first_init {
+            let name_empty = circ.props.read("name", |s: &ArcString| s.is_empty());
             if let Some(true) = name_empty {
-                state.circuit.props.write("name", |s: &mut ArcString| {
+                circ.props.write("name", |s: &mut ArcString| {
                     let string = s.get_mut();
                     string.clear();
                     string.push_str("Pin ");
@@ -521,6 +513,14 @@ impl CircuitImpl for Pin {
                 });
             }
         }
+    }
+
+    fn circuit_remove(&mut self, circ: &Arc<Circuit>) {
+        circ
+            .board
+            .pins
+            .write()
+            .remove_by_right(&circ.id);
     }
 }
 
@@ -555,8 +555,9 @@ impl CircuitPreviewImpl for Preview {
         Box::new(Pin::new())
     }
 
-    fn load_impl_data(
+    fn load_copy_data(
         &self,
+        _: &serde_intermediate::Intermediate,
         _: &serde_intermediate::Intermediate,
         _: &Arc<SimulationContext>,
     ) -> Option<Box<dyn CircuitPreviewImpl>> {

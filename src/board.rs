@@ -13,7 +13,7 @@ use std::{
 use bimap::BiMap;
 use eframe::{
     egui::{self, FontSelection, Painter, Sense, TextStyle, WidgetText},
-    epaint::{Color32, FontId, Rounding, Stroke, TextShape, Shape, RectShape},
+    epaint::{Color32, FontId, RectShape, Rounding, Shape, Stroke, TextShape},
 };
 use emath::{pos2, vec2, Align2, Pos2, Rect, Vec2};
 use serde::{Deserialize, Serialize};
@@ -229,7 +229,7 @@ impl CircuitBoard {
                 .read()
                 .inner()
                 .iter()
-                .map(|s| s.as_ref().map(|s| s.save()))
+                .map(|s| s.as_ref().and_then(|s| s.is_being_used().then(|| s.save())))
                 .collect(),
             ordered: self.ordered_queue.load(Ordering::Relaxed),
             designs: self.designs.read().save(),
@@ -265,7 +265,7 @@ impl CircuitBoard {
             props.load(&c.props);
             let circ = Circuit::create(i, c.pos, preview, board.clone(), Some(props));
             if !matches!(c.imp, serde_intermediate::Intermediate::Unit) {
-                circ.imp.write().load(&circ, &c.imp);
+                circ.imp.write().load(&circ, &c.imp, false);
             }
             {
                 let mut info = circ.info.write();
@@ -285,10 +285,10 @@ impl CircuitBoard {
             let wire = Wire::load(w, i, &circuits);
             wires.set(wire, i);
         }
+
         drop((wires, circuits));
 
         let mut states = board.states.states.write();
-
         for (i, s) in data.states.iter().enumerate() {
             let s = unwrap_option_or_continue!(s);
             states.set(State::load(s, board.clone(), i), i);
@@ -310,9 +310,14 @@ impl CircuitBoard {
     }
 
     // Run board simulation after loading. Not required on newly created or empty boards
-    #[cfg(not(feature = "single_thread"))]
     pub fn activate(&self) {
-        self.states.activate();
+        let circuits = self.circuits.read();
+        for circuit in circuits.iter() {
+            circuit.imp.write().circuit_init(circuit, false);
+        }
+        drop(circuits);
+
+        self.states.initialize();
     }
 }
 
@@ -2000,7 +2005,8 @@ impl ActiveCircuitBoard {
         self.connect_circuit_to_wires(cid);
         let circ = self.board.circuits.read().get(cid).unwrap().clone();
 
-        self.board.states.init_circuit(&circ);
+        circ.imp.write().circuit_init(&circ, true);
+        self.board.states.init_circuit_state(&circ, true);
         self.board.states.update_circuit_signals(cid, None);
         drop(sim_lock);
         Some(cid)
@@ -2147,25 +2153,22 @@ impl ActiveCircuitBoard {
     }
 
     fn remove_circuit(&mut self, id: usize, affected_wires: &mut HashSet<usize>) {
-        let circuits = self.board.circuits.read();
-        let circuit = unwrap_option_or_return!(circuits.get(id));
+        let circuit = self.board.circuits.read().get(id).cloned();
+        let circuit = unwrap_option_or_return!(circuit);
 
-        let pos = circuit.pos;
-        let info = circuit.info.clone();
-        let size = info.read().size;
+        let size = circuit.info.read().size;
 
-        drop(circuits);
-        self.set_circuit_nodes(size, pos, None);
+        self.set_circuit_nodes(size, circuit.pos, None);
 
         let mut wires = self.board.wires.write();
 
-        for pin in info.read().pins.iter() {
+        for pin in circuit.info.read().pins.iter() {
             let wire_id = pin.pin.read().connected_wire();
             let wire_id = unwrap_option_or_continue!(wire_id);
             pin.pin.write().wire = None;
 
             let wire = unwrap_option_or_continue!(wires.get_mut(wire_id));
-            let pos = pos + pin.pos.convert(|v| v as i32);
+            let pos = circuit.pos + pin.pos.convert(|v| v as i32);
             let point = unwrap_option_or_continue!(wire.points.get_mut(&pos));
             point.pin = None;
 
@@ -2173,7 +2176,9 @@ impl ActiveCircuitBoard {
         }
 
         self.board.circuits.write().remove(id);
-        self.board.states.reset_circuit(id);
+        self.board.states.reset_circuit(&circuit);
+
+        circuit.imp.write().circuit_remove(&circuit);
     }
 
     // Todo: result
@@ -2327,32 +2332,6 @@ impl CircuitDesignStorage {
             .clone()
     }
 
-    // pub fn current_mut(&mut self) -> &mut CustomCircuitDesign {
-
-    //     // I don't care... I'm tired of endless borrowing errors
-    //     let ptr1 = &mut self.designs as *mut FixedVec<Arc<CustomCircuitDesign>>;
-
-    //     let current = self
-    //         .designs
-    //         .get_mut(self.current)
-    //         .expect("current design must always exist");
-
-    //     let ptr2 = Arc::as_ptr(current);
-
-    //     if let Some(unique) = Arc::get_mut(current) {
-    //         return unique;
-    //     }
-
-    //     unsafe {
-
-    //         let mut new = (*ptr2).clone();
-    //         let id = (*ptr1).first_free_pos();
-    //         new.id = id;
-    //         let arc = (*ptr1).set(Arc::new(new), id).value_ref;
-    //         Arc::make_mut(arc)
-    //     }
-    // }
-
     pub fn current_mut(&mut self) -> &mut CircuitDesign {
         let current_unique = Arc::get_mut(
             self.designs
@@ -2390,10 +2369,13 @@ impl CircuitDesignStorage {
                 .inner()
                 .iter()
                 .map(|d| {
-                    d.as_ref().map(|d| crate::io::CircuitDesignData {
-                        pins: d.pins.clone(),
-                        size: d.size,
-                        decorations: d.decorations.clone(),
+                    d.as_ref().and_then(|d| {
+                        (Arc::strong_count(d) > 1 || Arc::weak_count(d) > 0 || d.id == self.current)
+                            .then(|| crate::io::CircuitDesignData {
+                                pins: d.pins.clone(),
+                                size: d.size,
+                                decorations: d.decorations.clone(),
+                            })
                     })
                 })
                 .collect(),
@@ -2434,15 +2416,23 @@ pub enum DecorationType {
 }
 
 impl Decoration {
-    pub fn draw(&self, painter: &Painter, base_pos: Pos2, scale: f32) {
+    pub fn draw(&self, painter: &Painter, base_pos: Pos2, scale: f32, opacity: f32) {
         match self {
             Decoration::Rect { rect, visuals } => {
                 let rect = Rect::from_min_size(
                     (rect.left_top().to_vec2() * scale + base_pos.to_vec2()).to_pos2(),
                     rect.size() * scale,
                 );
-                let scaled_stroke = Stroke::new(visuals.stroke.width * scale, visuals.stroke.color);
-                painter.rect(rect, visuals.rounding, visuals.fill, scaled_stroke);
+                let scaled_stroke = Stroke::new(
+                    visuals.stroke.width * scale,
+                    visuals.stroke.color.linear_multiply(opacity),
+                );
+                painter.rect(
+                    rect,
+                    visuals.rounding,
+                    visuals.fill.linear_multiply(opacity),
+                    scaled_stroke,
+                );
             }
         }
     }
@@ -2500,11 +2490,11 @@ impl CircuitDesign {
         }
     }
 
-    pub fn draw_decorations(&self, painter: &Painter, rect: Rect) {
+    pub fn draw_decorations(&self, painter: &Painter, rect: Rect, opacity: f32) {
         let base_pos = rect.left_top();
         let scale = rect.size() / Vec2::from(self.size.convert(|v| v as f32));
         for decoration in self.decorations.iter() {
-            decoration.draw(painter, base_pos, scale.x.min(scale.y));
+            decoration.draw(painter, base_pos, scale.x.min(scale.y), opacity);
         }
     }
 }
@@ -2526,7 +2516,7 @@ impl SelectionImpl<SelectedBoardObject, ActiveCircuitBoard> for BoardObjectSelec
         pass: &ActiveCircuitBoard,
         object: &SelectedBoardObject,
         ctx: &PaintContext,
-        shapes: &mut Vec<Shape>
+        shapes: &mut Vec<Shape>,
     ) {
         match object {
             SelectedBoardObject::WirePart { pos, dir } => {
@@ -2619,7 +2609,7 @@ impl SelectionImpl<SelectedBoardObject, ActiveCircuitBoard> for BoardObjectSelec
         mode: SelectionMode,
         selected: &HashSet<SelectedBoardObject>,
         change: &HashSet<SelectedBoardObject>,
-        shapes: &mut Vec<Shape>
+        shapes: &mut Vec<Shape>,
     ) {
         let shift = ctx.ui.input(|input| input.modifiers.shift);
         for point in self.possible_points.iter().copied() {

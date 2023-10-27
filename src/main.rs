@@ -2,7 +2,6 @@
 #![feature(generic_const_exprs)]
 #![feature(int_roundings)]
 #![feature(lazy_cell)]
-#![feature(thread_id_value)]
 
 use std::{
     borrow::Borrow,
@@ -840,7 +839,7 @@ impl PastePreview {
             .filter_map(|d| {
                 ctx.previews
                     .get(&d.ty)
-                    .and_then(|p| p.load_new(&d.imp, &d.props, ctx).map(|b| (d, b)))
+                    .and_then(|p| p.load_copy(&d, ctx).map(|b| (d, b)))
             })
             .collect();
 
@@ -944,13 +943,13 @@ impl PastePreview {
                                     state.internal = circuit
                                         .imp
                                         .write()
-                                        .load_internal(&ctx, &circuit_data.internal);
+                                        .load_internal(&ctx, &circuit_data.internal, true);
                                 });
                             }
                         }
 
                         if !matches!(circuit_data.imp, serde_intermediate::Intermediate::Unit) {
-                            circuit.imp.write().load(&circuit, &circuit_data.imp)
+                            circuit.imp.write().load(&circuit, &circuit_data.imp, true)
                         }
                     }
                 },

@@ -287,6 +287,10 @@ impl CircuitBoardEditor {
                 self.board.board.set_ordered_queue(!ordered, false);
                 drop(sim_lock);
             }
+
+            if ui.input(|input| input.key_pressed(Key::P)) {
+                self.board.state.set_frozen(!self.board.state.is_frozen());
+            }
         }
 
         let screen = self.pan_zoom.to_screen(rect);
@@ -399,6 +403,12 @@ impl CircuitBoardEditor {
 
             let debug = self.debug;
             let ordered_queue = self.board.board.is_ordered_queue();
+            let states = self.board.board.states.states.read().iter().count();
+            let frozen_states = self.board.board.states.states.read().iter().filter(|s| s.is_frozen()).count();
+            let unused_states = self.board.board.states.states.read().iter().filter(|s| !s.is_being_used()).count();
+
+            let this_frozen = self.board.state.is_frozen();
+            let freeze_text = if this_frozen { "Resume state" } else { "Freeze state" };
 
             let text = format!(
                 "[F9] Debug: {debug}\n\
@@ -408,6 +418,8 @@ impl CircuitBoardEditor {
                  [R]  Rotate\n\
                  [F]  Flip\n\
                  [Q]  Ordered queue: {ordered_queue}\n\
+                 [P]  {freeze_text}\n\
+                 This board has {states} state(s), {frozen_states} are frozen, {unused_states} will be removed
                 "
             );
 

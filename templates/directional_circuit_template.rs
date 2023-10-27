@@ -82,9 +82,10 @@ impl CircuitPreviewImpl for TemplatePreview {
         Box::new(Template::new())
     }
 
-    fn load_impl_data(
+    fn load_copy_data(
         &self,
-        data: &serde_intermediate::Intermediate,
+        imp: &serde_intermediate::Intermediate,
+        internal: &serde_intermediate::Intermediate,
         ctx: &Arc<SimulationContext>
     ) -> Option<Box<dyn CircuitPreviewImpl>> {
         Some(Box::new(TemplatePreview {}))

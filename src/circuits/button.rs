@@ -117,6 +117,7 @@ impl CircuitImpl for Button {
         &self,
         _: &CircuitStateContext,
         data: &serde_intermediate::Intermediate,
+        _: bool
     ) -> Option<Box<dyn InternalCircuitState>> {
         serde_intermediate::de::intermediate::deserialize::<ButtonState>(data)
             .ok()
@@ -134,7 +135,7 @@ struct ButtonState {
 }
 
 impl InternalCircuitState for ButtonState {
-    fn serialize(&self) -> serde_intermediate::Intermediate {
+    fn serialize(&self, _: bool) -> serde_intermediate::Intermediate {
         serde_intermediate::to_intermediate(self).unwrap()
     }
 }
@@ -155,8 +156,9 @@ impl CircuitPreviewImpl for ButtonPreview {
         "button".into()
     }
 
-    fn load_impl_data(
+    fn load_copy_data(
         &self,
+        _: &serde_intermediate::Intermediate,
         _: &serde_intermediate::Intermediate,
         _: &Arc<SimulationContext>
     ) -> Option<Box<dyn CircuitPreviewImpl>> {

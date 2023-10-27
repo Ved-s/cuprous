@@ -7,9 +7,9 @@ use eframe::{
 
 use crate::{
     board::{ActiveCircuitBoard, CircuitBoard, StoredCircuitBoard},
-    circuits::{self, CircuitPreview, CircuitPreviewImpl, CircuitStateContext},
+    circuits::{self, CircuitPreview, CircuitPreviewImpl},
     ui::editor::CircuitBoardEditor,
-    DynStaticStr, RwLock
+    DynStaticStr, RwLock,
 };
 
 pub struct SimulationContext {
@@ -46,7 +46,7 @@ impl eframe::App for App {
                     Some(designer) => {
                         let result = designer.update(ui);
                         result.close
-                    },
+                    }
                     None => {
                         let result = self.editor.update(ui);
 
@@ -54,7 +54,7 @@ impl eframe::App for App {
                             self.designer = Some(designer);
                         }
                         false
-                    },
+                    }
                 };
 
                 if close_designer {
@@ -109,7 +109,8 @@ impl App {
             Box::new(circuits::transistor::TransistorPreview {}),
             Box::new(circuits::freq_meter::FreqMeterPreview {}),
             Box::new(circuits::pin::Preview {}),
-        ];
+            Box::<circuits::board::BoardPreview>::default(),
+        ]; 
         let preview_data = cc
             .storage
             .and_then(|s| s.get_string("previews"))
@@ -161,52 +162,19 @@ impl App {
             }
         }
 
-        let boards: Vec<_> = ctx
-            .boards
-            .read()
-            .values()
-            .map(|s| s.board.clone())
-            .collect();
-
-        let mut states = vec![];
-        let mut circuits = vec![];
-
-        for board in boards {
-            states.clear();
-            circuits.clear();
-
-            let board_states = board.states.states.read();
-            states.extend(board_states.iter().cloned());
-            let board_circuits = board.circuits.read();
-            circuits.extend(board_circuits.iter().cloned());
-
-            drop((board_states, board_circuits));
-
-            for state in states.drain(..) {
-                for circuit in circuits.drain(..) {
-                    let csc = CircuitStateContext::new(state.clone(), circuit.clone());
-                    circuit.imp.write().postload(&csc, false);
-                }
-            }
-        }
-
         Self::new(ctx)
     }
 
     pub fn new(ctx: Arc<SimulationContext>) -> Self {
         if ctx.boards.read().is_empty() {
             let board = CircuitBoard::new(ctx.clone(), "main");
-            ctx.boards.write().insert(
-                board.uid,
-                StoredCircuitBoard::new(Arc::new(board)),
-            );
+            ctx.boards
+                .write()
+                .insert(board.uid, StoredCircuitBoard::new(Arc::new(board)));
         }
 
-        #[cfg(not(feature = "single_thread"))]
-        {
-            for board in ctx.boards.read().values() {
-                board.board.activate();
-            }
+        for board in ctx.boards.read().values() {
+            board.board.activate();
         }
 
         let board = ActiveCircuitBoard::new_main(

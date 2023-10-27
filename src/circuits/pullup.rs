@@ -81,8 +81,9 @@ impl CircuitPreviewImpl for PullupPreview {
         "pullup".into()
     }
 
-    fn load_impl_data(
+    fn load_copy_data(
         &self,
+        _: &serde_intermediate::Intermediate,
         _: &serde_intermediate::Intermediate,
         _: &Arc<SimulationContext>,
     ) -> Option<Box<dyn CircuitPreviewImpl>> {
