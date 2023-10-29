@@ -9,7 +9,7 @@ use eframe::{
     epaint::{Color32, PathShape, Rounding, Stroke, TextShape},
 };
 use emath::{pos2, vec2, Rect, Rot2, Vec2};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 pub mod designer;
 pub mod drawing;
@@ -222,7 +222,7 @@ where
         let (id, rect) = ui.allocate_space(vec2(width, full_item_size.y) + self.margin.sum());
         let rect = apply_margin_to_rect(rect, self.margin);
 
-        let response = ui.interact(rect, id, Sense::click());
+        let mut response = ui.interact(rect, id, Sense::click());
 
         let paint = ui.painter_at(rect);
         let rounding = Rounding::same(3.0);
@@ -232,6 +232,48 @@ where
             Color32::from_gray(32),
             Stroke::new(1.0, Color32::from_gray(100)),
         );
+
+        if let Some(selected) = &self.selected {
+            let name = name_resolver(selected);
+
+            if let Some(name) = name {
+                let galley = WidgetText::from(name.deref())
+                    .fallback_text_style(TextStyle::Monospace)
+                    .into_galley(
+                        ui,
+                        Some(false),
+                        f32::INFINITY,
+                        FontSelection::Style(TextStyle::Monospace),
+                    )
+                    .galley;
+                let inv_width = rect.width();
+                let size = galley.rect.size() + vec2(12.0, 6.0);
+                let width_diff = size.x - (inv_width - 3.0);
+
+                let rect = Rect::from_min_size(rect.left_bottom() + vec2(3.0, 0.0), size);
+                ui.allocate_rect(rect, Sense::hover());
+                let paint = ui.painter();
+                paint.rect(
+                    rect,
+                    Rounding {
+                        nw: 0.0,
+                        ne: width_diff.clamp(0.0, 3.0),
+                        sw: 3.0,
+                        se: 3.0,
+                    },
+                    ui.style().visuals.panel_fill,
+                    ui.style().visuals.window_stroke,
+                );
+
+                paint.add(TextShape {
+                    pos: rect.min + vec2(6.0, 3.0),
+                    galley,
+                    underline: Stroke::NONE,
+                    override_text_color: Some(ui.style().visuals.text_color()),
+                    angle: 0.0,
+                });
+            }
+        }
 
         let paint_ctx = PaintContext::new_on_ui(ui, rect, 1.0);
 
@@ -361,6 +403,7 @@ where
         }
 
         if selected_changed {
+            response.mark_changed();
             if let Some(selected) = &self.selected {
                 if let Some(group) = selected_group {
                     ui.memory_mut(|mem| {
@@ -378,48 +421,6 @@ where
                         last_group_items.insert(selected.clone());
                     });
                 }
-            }
-        }
-
-        if let Some(selected) = &self.selected {
-            let name = name_resolver(selected);
-
-            if let Some(name) = name {
-                let galley = WidgetText::from(name.deref())
-                    .fallback_text_style(TextStyle::Monospace)
-                    .into_galley(
-                        ui,
-                        Some(true),
-                        rect.width(),
-                        FontSelection::Style(TextStyle::Monospace),
-                    )
-                    .galley;
-
-                let size = galley.rect.size() + vec2(12.0, 6.0);
-                let offset = vec2(20.0f32.min(rect.width() - 5.0 - size.x).max(0.0), -2.5);
-
-                let resp = ui.allocate_response(size + offset, Sense::hover());
-                let rect = Rect::from_min_size(resp.rect.min + offset, size);
-                let paint = ui.painter();
-                paint.rect(
-                    rect,
-                    Rounding {
-                        nw: 0.0,
-                        ne: 0.0,
-                        sw: 3.0,
-                        se: 3.0,
-                    },
-                    ui.style().visuals.panel_fill,
-                    ui.style().visuals.window_stroke,
-                );
-
-                paint.add(TextShape {
-                    pos: rect.min + vec2(6.0, 3.0),
-                    galley,
-                    underline: Stroke::NONE,
-                    override_text_color: Some(ui.style().visuals.text_color()),
-                    angle: 0.0,
-                });
             }
         }
 
@@ -655,168 +656,171 @@ impl CollapsibleSidePanel {
             side,
         } = self;
 
-        let resp = ui.push_id(id, |ui| {
-            let open_id = ui.id().with("_collapsed");
-            let open = ui.ctx().data(|mem| mem.get_temp(open_id).unwrap_or(true));
+        let resp = ui
+            .push_id(id, |ui| {
+                let open_id = ui.id().with("_collapsed");
+                let open = ui.ctx().data(|mem| mem.get_temp(open_id).unwrap_or(true));
 
-            let panel_id = ui.id().with("_panel");
-            let animation = ui
-                .ctx()
-                .animate_bool(ui.id().with("_open-anim"), open && self.active);
+                let panel_id = ui.id().with("_panel");
+                let animation = ui
+                    .ctx()
+                    .animate_bool(ui.id().with("_open-anim"), open && self.active);
 
-            let expanded_width = PanelState::load(ui.ctx(), panel_id)
-                .map(|state| state.rect.width())
-                .unwrap_or_default();
+                let expanded_width = PanelState::load(ui.ctx(), panel_id)
+                    .map(|state| state.rect.width())
+                    .unwrap_or_default();
 
-            let panel_width = if animation > 0.0 {
-                expanded_width * animation
-            } else {
-                0.0
-            };
-
-            let painter = ui.painter();
-            let header_text = text
-                .fallback_text_style(TextStyle::Monospace)
-                .into_galley(
-                    ui,
-                    Some(false),
-                    f32::INFINITY,
-                    FontSelection::Style(TextStyle::Monospace),
-                )
-                .galley;
-
-            let size = vec2(
-                header_text.rect.height() + 10.0,
-                header_text.rect.width() + header_text.rect.height() + 20.0,
-            );
-            let pos = match side {
-                panel::Side::Left => pos2(panel_width, header_offset),
-                panel::Side::Right => pos2(ui.max_rect().width() - size.x - panel_width, header_offset),
-            };
-
-            let text_color =
-                ui.style()
-                    .visuals
-                    .text_color()
-                    .gamma_multiply(if active { 1.0 } else { 0.6 });
-            let arrow_rect = Rect::from_center_size(
-                pos + vec2(size.x / 2.0, size.x / 2.0),
-                vec2(size.x / 3.0, size.x / 3.0),
-            );
-
-            let mut points = vec![
-                arrow_rect.right_top(),
-                arrow_rect.left_center(),
-                arrow_rect.right_bottom(),
-            ];
-            let rotation = match side {
-                panel::Side::Left => Rot2::from_angle((1.0 - animation) * TAU * 0.5),
-                panel::Side::Right => Rot2::from_angle(animation * TAU * 0.5),
-            };
-            for p in &mut points {
-                *p = arrow_rect.center() + rotation * (*p - arrow_rect.center());
-            }
-
-            let rect = Rect::from_min_size(pos, size);
-
-            let rounding = match side {
-                panel::Side::Left => Rounding {
-                    ne: 5.0,
-                    se: 5.0,
-                    ..Default::default()
-                },
-                panel::Side::Right => Rounding {
-                    nw: 5.0,
-                    sw: 5.0,
-                    ..Default::default()
-                },
-            };
-
-            painter.rect(
-                rect,
-                rounding,
-                ui.style().visuals.panel_fill,
-                ui.style().visuals.window_stroke,
-            );
-
-            painter.add(PathShape {
-                points,
-                closed: true,
-                fill: text_color,
-                stroke: Stroke::NONE,
-            });
-
-            let (text_pos, text_angle) = match side {
-                panel::Side::Left => (vec2(size.x - 5.0, size.x), TAU * 0.25),
-                panel::Side::Right => (vec2(5.0, size.y - 10.0), TAU * 0.75),
-            };
-
-            painter.add(TextShape {
-                pos: pos + text_pos,
-                galley: header_text,
-                underline: Stroke::NONE,
-                override_text_color: Some(text_color),
-                angle: text_angle,
-            });
-
-            let response = ui.interact(rect, ui.id().with("_header"), Sense::click_and_drag());
-            if response.clicked() {
-                ui.ctx().data_mut(|data| {
-                    let open = data.get_temp_mut_or(open_id, true);
-                    *open = !*open;
-                })
-            }
-
-            let clip = ui.clip_rect();
-            let full_rect = match side {
-                panel::Side::Left => {
-                    Rect::from_min_size(pos2(0.0, 0.0), vec2(rect.right(), clip.height()))
-                }
-                panel::Side::Right => Rect::from_min_size(
-                    pos2(rect.left(), 0.0),
-                    vec2(clip.width() - rect.left(), clip.height()),
-                ),
-            };
-
-            let panel = if animation > 0.0 {
-                let panel_offset = match side {
-                    panel::Side::Left => (1.0 - animation) * -expanded_width,
-                    panel::Side::Right => (1.0 - animation) * expanded_width,
+                let panel_width = if animation > 0.0 {
+                    expanded_width * animation
+                } else {
+                    0.0
                 };
 
-                let panel_rect = match side {
+                let painter = ui.painter();
+                let header_text = text
+                    .fallback_text_style(TextStyle::Monospace)
+                    .into_galley(
+                        ui,
+                        Some(false),
+                        f32::INFINITY,
+                        FontSelection::Style(TextStyle::Monospace),
+                    )
+                    .galley;
+
+                let size = vec2(
+                    header_text.rect.height() + 10.0,
+                    header_text.rect.width() + header_text.rect.height() + 20.0,
+                );
+                let pos = match side {
+                    panel::Side::Left => pos2(panel_width, header_offset),
+                    panel::Side::Right => {
+                        pos2(ui.max_rect().width() - size.x - panel_width, header_offset)
+                    }
+                };
+
+                let text_color =
+                    ui.style()
+                        .visuals
+                        .text_color()
+                        .gamma_multiply(if active { 1.0 } else { 0.6 });
+                let arrow_rect = Rect::from_center_size(
+                    pos + vec2(size.x / 2.0, size.x / 2.0),
+                    vec2(size.x / 3.0, size.x / 3.0),
+                );
+
+                let mut points = vec![
+                    arrow_rect.right_top(),
+                    arrow_rect.left_center(),
+                    arrow_rect.right_bottom(),
+                ];
+                let rotation = match side {
+                    panel::Side::Left => Rot2::from_angle((1.0 - animation) * TAU * 0.5),
+                    panel::Side::Right => Rot2::from_angle(animation * TAU * 0.5),
+                };
+                for p in &mut points {
+                    *p = arrow_rect.center() + rotation * (*p - arrow_rect.center());
+                }
+
+                let rect = Rect::from_min_size(pos, size);
+
+                let rounding = match side {
+                    panel::Side::Left => Rounding {
+                        ne: 5.0,
+                        se: 5.0,
+                        ..Default::default()
+                    },
+                    panel::Side::Right => Rounding {
+                        nw: 5.0,
+                        sw: 5.0,
+                        ..Default::default()
+                    },
+                };
+
+                painter.rect(
+                    rect,
+                    rounding,
+                    ui.style().visuals.panel_fill,
+                    ui.style().visuals.window_stroke,
+                );
+
+                painter.add(PathShape {
+                    points,
+                    closed: true,
+                    fill: text_color,
+                    stroke: Stroke::NONE,
+                });
+
+                let (text_pos, text_angle) = match side {
+                    panel::Side::Left => (vec2(size.x - 5.0, size.x), TAU * 0.25),
+                    panel::Side::Right => (vec2(5.0, size.y - 10.0), TAU * 0.75),
+                };
+
+                painter.add(TextShape {
+                    pos: pos + text_pos,
+                    galley: header_text,
+                    underline: Stroke::NONE,
+                    override_text_color: Some(text_color),
+                    angle: text_angle,
+                });
+
+                let response = ui.interact(rect, ui.id().with("_header"), Sense::click_and_drag());
+                if response.clicked() {
+                    ui.ctx().data_mut(|data| {
+                        let open = data.get_temp_mut_or(open_id, true);
+                        *open = !*open;
+                    })
+                }
+
+                let clip = ui.clip_rect();
+                let full_rect = match side {
                     panel::Side::Left => {
-                        Rect::from_min_size(pos2(0.0, 0.0), vec2(panel_width, clip.height()))
+                        Rect::from_min_size(pos2(0.0, 0.0), vec2(rect.right(), clip.height()))
                     }
                     panel::Side::Right => Rect::from_min_size(
-                        pos2(ui.max_rect().width() - panel_width, 0.0),
-                        vec2(panel_width, clip.height()),
+                        pos2(rect.left(), 0.0),
+                        vec2(clip.width() - rect.left(), clip.height()),
                     ),
                 };
 
-                ui.interact(panel_rect, id, Sense::click_and_drag());
+                let panel = if animation > 0.0 {
+                    let panel_offset = match side {
+                        panel::Side::Left => (1.0 - animation) * -expanded_width,
+                        panel::Side::Right => (1.0 - animation) * expanded_width,
+                    };
 
-                let rect = Rect::from_min_size(clip.min + vec2(panel_offset, 0.0), clip.size());
+                    let panel_rect = match side {
+                        panel::Side::Left => {
+                            Rect::from_min_size(pos2(0.0, 0.0), vec2(panel_width, clip.height()))
+                        }
+                        panel::Side::Right => Rect::from_min_size(
+                            pos2(ui.max_rect().width() - panel_width, 0.0),
+                            vec2(panel_width, clip.height()),
+                        ),
+                    };
 
-                let mut panel_ui = ui.child_ui(rect, *ui.layout());
+                    ui.interact(panel_rect, id, Sense::click_and_drag());
 
-                let p = SidePanel::new(side, panel_id).resizable(false);
-                let p = match panel_transformer {
-                    Some(pt) => pt(p),
-                    None => p,
+                    let rect = Rect::from_min_size(clip.min + vec2(panel_offset, 0.0), clip.size());
+
+                    let mut panel_ui = ui.child_ui(rect, *ui.layout());
+
+                    let p = SidePanel::new(side, panel_id).resizable(false);
+                    let p = match panel_transformer {
+                        Some(pt) => pt(p),
+                        None => p,
+                    };
+                    Some(p.show_inside(&mut panel_ui, add_content))
+                } else {
+                    None
                 };
-                Some(p.show_inside(&mut panel_ui, add_content))
-            } else {
-                None
-            };
 
-            CollapsibleSidePanelResponse {
-                header: response,
-                full_rect,
-                panel,
-            }
-        })
-        .inner;
+                CollapsibleSidePanelResponse {
+                    header: response,
+                    full_rect,
+                    panel,
+                }
+            })
+            .inner;
 
         resp
     }
@@ -931,6 +935,14 @@ impl Sides {
         center: true,
     };
 
+    pub const CENTER: Self = Self {
+        top: false,
+        left: false,
+        right: false,
+        bottom: false,
+        center: true,
+    };
+
     pub fn any(self) -> bool {
         self.top || self.left || self.right || self.bottom || self.center
     }
@@ -943,18 +955,33 @@ pub struct RectVisuals {
     pub stroke: Stroke,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum DragState {
+    None,
+    Started(Sides),
+    Dragging(Sides),
+    Ended(Sides)
+}
+
 pub fn rect_editor(
     rect: &mut Rect,
     sides: Sides,
     ui: &Ui,
     id: Id,
     constrain: impl FnOnce(Sides, &mut Rect),
-    visuals: RectVisuals
-) -> Sides {
+    visuals: RectVisuals,
+) -> DragState {
+    #[derive(Default, Clone, Copy)]
+    struct State {
+        pos: Vec2,
+        sides: Sides,
+        drag: bool,
+    }
+
     let editing = ui.memory(|mem| mem.is_being_dragged(id));
     let grab = ui.style().interaction.resize_grab_radius_side;
 
-    let hover = if editing {
+    let state = if editing {
         ui.memory(|mem| mem.data.get_temp(id).unwrap_or_default())
     } else if let Some(pointer) = ui.ctx().pointer_latest_pos() {
         let on_top = ui
@@ -971,76 +998,95 @@ pub fn rect_editor(
             let top = !bottom && sides.top && on_top && pointer.y <= rect.top() + grab;
             let left = !right && sides.left && on_top && pointer.x <= rect.left() + grab;
 
-            Sides {
-                top,
-                left,
-                right,
-                bottom,
-                center: sides.center && !top && !left && !right && !bottom,
+            State {
+                sides: Sides {
+                    top,
+                    left,
+                    right,
+                    bottom,
+                    center: sides.center && !top && !left && !right && !bottom,
+                },
+                pos: pointer - rect.left_top(),
+                drag: false,
             }
         } else {
-            Sides::default()
+            State::default()
         }
     } else {
-        Sides::default()
+        State::default()
     };
 
-    if ui.input(|i| i.pointer.primary_pressed()) && hover.any() {
+    if ui.input(|i| i.pointer.primary_pressed()) && state.sides.any() {
         ui.memory_mut(|mem| {
             mem.set_dragged_id(id);
-            mem.data.insert_temp(id, hover)
+            mem.data.insert_temp(
+                id,
+                State {
+                    drag: true,
+                    ..state
+                },
+            );
         });
     }
 
     let any_drag = ui.memory(|mem| mem.is_anything_being_dragged());
     let editing = ui.memory(|mem| mem.is_being_dragged(id));
 
-    let hover = if hover.any() && any_drag && !editing {
+    let drag_changed = state.drag != editing;
+    if state.drag && !editing {
+        ui.memory_mut(|mem| {
+            mem.data.insert_temp(id, State::default());
+        });
+    }
+
+    let state = if state.sides.any() && any_drag && !editing {
         Default::default()
     } else {
-        hover
+        state
     };
 
-    if hover.top && hover.left {
+    let sides = state.sides;
+
+    if sides.top && sides.left {
         ui.ctx().set_cursor_icon(CursorIcon::ResizeNorthWest);
-    } else if hover.top && hover.right {
+    } else if sides.top && sides.right {
         ui.ctx().set_cursor_icon(CursorIcon::ResizeNorthEast);
-    } else if hover.bottom && hover.left {
+    } else if sides.bottom && sides.left {
         ui.ctx().set_cursor_icon(CursorIcon::ResizeSouthWest);
-    } else if hover.bottom && hover.right {
+    } else if sides.bottom && sides.right {
         ui.ctx().set_cursor_icon(CursorIcon::ResizeSouthEast);
-    } else if hover.top {
+    } else if sides.top {
         ui.ctx().set_cursor_icon(CursorIcon::ResizeNorth);
-    } else if hover.left {
+    } else if sides.left {
         ui.ctx().set_cursor_icon(CursorIcon::ResizeWest);
-    } else if hover.right {
+    } else if sides.right {
         ui.ctx().set_cursor_icon(CursorIcon::ResizeEast);
-    } else if hover.bottom {
+    } else if sides.bottom {
         ui.ctx().set_cursor_icon(CursorIcon::ResizeSouth);
-    } else if hover.center {
+    } else if sides.center {
         ui.ctx().set_cursor_icon(CursorIcon::Move);
     }
 
     if editing {
-        if hover.center {
-            let delta = ui.ctx().input(|input| input.pointer.delta());
-            rect.min += delta;
-            rect.max += delta;
-            constrain(hover, rect);
-        } else if let Some(pointer) = ui.ctx().pointer_latest_pos() {
-            if hover.top {
+        if let Some(pointer) = ui.ctx().pointer_latest_pos() {
+            if state.sides.center {
+                let size = rect.size();
+                *rect = Rect::from_min_size(pointer - state.pos, size);
+            }
+
+            if state.sides.top {
                 rect.min.y = pointer.y.min(rect.max.y);
             }
-            if hover.left {
+            if state.sides.left {
                 rect.min.x = pointer.x.min(rect.max.x);
             }
-            if hover.right {
+            if state.sides.right {
                 rect.max.x = pointer.x.max(rect.min.x);
             }
-            if hover.bottom {
+            if state.sides.bottom {
                 rect.max.y = pointer.y.max(rect.min.y);
             }
-            constrain(hover, rect);
+            constrain(state.sides, rect);
         }
     }
 
@@ -1051,7 +1097,7 @@ pub fn rect_editor(
     let hover_rounding = Rounding::same(grab / 2.0);
     let hover_color = Color32::WHITE.linear_multiply(0.3);
 
-    let top = ui.ctx().animate_bool(id.with("__hover_top"), hover.top);
+    let top = ui.ctx().animate_bool(id.with("__hover_top"), state.sides.top);
     if top > 0.0 {
         paint.rect(
             Rect::from_min_size(
@@ -1064,7 +1110,7 @@ pub fn rect_editor(
         )
     }
 
-    let left = ui.ctx().animate_bool(id.with("__hover_left"), hover.left);
+    let left = ui.ctx().animate_bool(id.with("__hover_left"), state.sides.left);
     if left > 0.0 {
         paint.rect(
             Rect::from_min_size(
@@ -1079,7 +1125,7 @@ pub fn rect_editor(
 
     let bottom = ui
         .ctx()
-        .animate_bool(id.with("__hover_bottom"), hover.bottom);
+        .animate_bool(id.with("__hover_bottom"), state.sides.bottom);
     if bottom > 0.0 {
         paint.rect(
             Rect::from_min_size(
@@ -1092,7 +1138,7 @@ pub fn rect_editor(
         )
     }
 
-    let right = ui.ctx().animate_bool(id.with("__hover_right"), hover.right);
+    let right = ui.ctx().animate_bool(id.with("__hover_right"), state.sides.right);
     if right > 0.0 {
         paint.rect(
             Rect::from_min_size(
@@ -1107,7 +1153,7 @@ pub fn rect_editor(
 
     let center = ui
         .ctx()
-        .animate_bool(id.with("__hover_center"), hover.center);
+        .animate_bool(id.with("__hover_center"), state.sides.center);
     if center > 0.0 {
         paint.rect(
             rect.expand(2.0),
@@ -1117,11 +1163,10 @@ pub fn rect_editor(
         )
     }
 
-    Sides {
-        top: hover.top && editing,
-        left: hover.left && editing,
-        right: hover.right && editing,
-        bottom: hover.bottom && editing,
-        center: hover.center && editing,
+    match (state.drag, editing) {
+        (true, true) => DragState::Dragging(state.sides),
+        (true, false) => DragState::Ended(state.sides),
+        (false, true) => DragState::Started(state.sides),
+        (false, false) => DragState::None,
     }
 }

@@ -2,19 +2,19 @@ use std::{f32::consts::TAU, ops::Deref, sync::Arc};
 
 use eframe::{
     egui::{
-        self, CollapsingHeader, Frame, Grid, Key, Label, Margin, Sense, SidePanel, Slider,
-        TextStyle, Ui, Widget,
+        self, CollapsingHeader, Frame, Grid, Key, Label, Margin, PointerButton, Sense, SidePanel,
+        Slider, TextStyle, Ui, Widget,
     },
-    epaint::{Color32, FontId, Rounding, Stroke, Shape, RectShape},
+    epaint::{Color32, FontId, RectShape, Rounding, Shape, Stroke},
 };
-use emath::{vec2, Align2, Rect};
+use emath::{pos2, vec2, Align2, Pos2, Rect};
 
 use crate::{
-    board::{CircuitDesign, CircuitDesignStorage, Decoration, DecorationType},
+    board::{CircuitDesign, CircuitDesignPin, CircuitDesignStorage, Decoration, DecorationType},
     circuits::InternalPinDirection,
     ext::IteratorSameExt,
     state::WireState,
-    vector::Vec2f,
+    vector::{Vec2f, Vec2u},
     Direction4, DynStaticStr, PaintContext, PanAndZoom, RwLock,
 };
 
@@ -24,7 +24,7 @@ use super::{
         selection_border_color, selection_fill_color, Selection, SelectionImpl,
         SelectionInventoryItem, SelectionMode,
     },
-    CollapsibleSidePanel, Inventory, InventoryItemGroup, RectVisuals, Sides,
+    CollapsibleSidePanel, DragState, Inventory, InventoryItemGroup, RectVisuals, Sides,
 };
 
 pub struct DesignerResponse {
@@ -40,11 +40,13 @@ enum SelectedItemId {
 #[derive(PartialEq, Eq, Hash)]
 enum SelectedDesignObject {
     Decoration(usize),
+    Pin(usize),
 }
 
 #[derive(PartialEq, Eq)]
 enum SelectedDesignObjectType {
     Decoration(DecorationType),
+    Pin,
 }
 
 pub struct CircuitDesignPinInfo {
@@ -71,14 +73,18 @@ impl SelectionImpl<SelectedDesignObject, CircuitDesign> for DesignerSelectionImp
     ) {
         for (i, deco) in pass.decorations.iter().enumerate() {
             match deco {
-                Decoration::Rect {
-                    rect: r,
-                    visuals,
-                } => {
+                Decoration::Rect { rect: r, visuals } => {
                     if rect.expand(visuals.stroke.width * 0.5).intersects(*r) {
                         changes.insert(SelectedDesignObject::Decoration(i));
                     }
                 }
+            }
+        }
+        for (i, pin) in pass.pins.iter().enumerate() {
+            let center = pin.pos.convert(|v| v as f32 + 0.5);
+            let pin_rect = Rect::from_center_size(center.into(), vec2(0.5, 0.5));
+            if pin_rect.intersects(rect) {
+                changes.insert(SelectedDesignObject::Pin(i));
             }
         }
     }
@@ -88,18 +94,33 @@ impl SelectionImpl<SelectedDesignObject, CircuitDesign> for DesignerSelectionImp
         pass: &CircuitDesign,
         object: &SelectedDesignObject,
         ctx: &crate::PaintContext,
-        shapes: &mut Vec<Shape>
+        shapes: &mut Vec<Shape>,
     ) {
         match object {
             SelectedDesignObject::Decoration(deco) => {
                 if let Some(deco) = pass.decorations.get(*deco) {
                     let rect = match deco {
-                        Decoration::Rect { rect, visuals } => rect.expand(visuals.stroke.width * 0.5),
+                        Decoration::Rect { rect, visuals } => {
+                            rect.expand(visuals.stroke.width * 0.5)
+                        }
                     };
 
                     let rect = ctx.screen.world_to_screen_rect(rect).expand(2.0);
                     shapes.push(Shape::Rect(RectShape::new(
                         rect,
+                        Rounding::ZERO,
+                        selection_fill_color(),
+                        Stroke::new(2.0, selection_border_color()),
+                    )));
+                }
+            }
+            SelectedDesignObject::Pin(id) => {
+                if let Some(pin) = pass.pins.get(*id) {
+                    let center = pin.pos.convert(|v| v as f32 + 0.5);
+                    let pin_rect = Rect::from_center_size(center.into(), vec2(0.5, 0.5));
+                    let scr_rect = ctx.screen.world_to_screen_rect(pin_rect);
+                    shapes.push(Shape::Rect(RectShape::new(
+                        scr_rect,
                         Rounding::ZERO,
                         selection_fill_color(),
                         Stroke::new(2.0, selection_border_color()),
@@ -119,7 +140,7 @@ pub struct Designer {
     inventory: Box<[InventoryItemGroup<SelectedItemId>]>,
     selection: Selection<DesignerSelectionImpl, SelectedDesignObject, CircuitDesign>,
 
-    circuit_size_rect: Option<Rect>,
+    selected_pin_dir: Option<Direction4>,
 }
 
 impl Designer {
@@ -139,8 +160,7 @@ impl Designer {
             ))]
             .into_boxed_slice(),
             selection: Default::default(),
-
-            circuit_size_rect: None,
+            selected_pin_dir: None,
         }
     }
 
@@ -148,6 +168,17 @@ impl Designer {
         let rect = ui.max_rect();
 
         self.pan_zoom.update(ui, rect, self.selected_id.is_none());
+
+        #[allow(clippy::collapsible_if)]
+        if !ui.ctx().wants_keyboard_input() {
+            if ui.input(|input| input.key_pressed(Key::R)) {
+                if self.selection.selection.is_empty() {
+                    if let Some(dir) = &mut self.selected_pin_dir {
+                        *dir = dir.rotate_clockwise();
+                    }
+                }
+            }
+        }
 
         let screen = self.pan_zoom.to_screen(rect);
         let paint = ui.painter_at(rect);
@@ -174,15 +205,13 @@ impl Designer {
 
         let color = Color32::from_rgb(134, 114, 135);
 
-        let mut size_rect = self.circuit_size_rect.unwrap_or_else(|| {
-            Rect::from_min_size(
-                screen.world_to_screen(0.0.into()).into(),
-                (design.size.convert(|v| v as f32) * screen.scale).into(),
-            )
-        });
+        let mut size_rect = Rect::from_min_size(
+            screen.world_to_screen(0.0.into()).into(),
+            (design.size.convert(|v| v as f32) * screen.scale).into(),
+        );
 
         if self.selected_id.is_none() {
-            let sides = super::rect_editor(
+            let state = super::rect_editor(
                 &mut size_rect,
                 Sides {
                     top: false,
@@ -203,15 +232,11 @@ impl Designer {
                 },
             );
 
-            if sides.any() {
-                self.circuit_size_rect = Some(size_rect);
+            if !matches!(state, DragState::None) {
                 design.size = (Vec2f::from(size_rect.size()) / screen.scale)
                     .convert(|v| (v.round() as u32).max(1))
-            } else {
-                self.circuit_size_rect = None;
             }
         } else {
-            self.circuit_size_rect = None;
             paint.rect(
                 size_rect,
                 Rounding::ZERO,
@@ -239,8 +264,12 @@ impl Designer {
         for (i, decoration) in design.decorations.iter_mut().enumerate() {
             match decoration {
                 Decoration::Rect { rect, visuals } => {
+                    rect.max.x = rect.max.x.max(rect.min.x + 0.05);
+                    rect.max.y = rect.max.y.max(rect.min.y + 0.05);
+
                     let mut scr_rect = screen.world_to_screen_rect(*rect);
-                    let scaled_stroke = Stroke::new(visuals.stroke.width * screen.scale, visuals.stroke.color);
+                    let scaled_stroke =
+                        Stroke::new(visuals.stroke.width * screen.scale, visuals.stroke.color);
                     if self.selected_id.is_none() {
                         let id = ui.id().with("deco_rect").with(i);
                         let visuals = RectVisuals {
@@ -249,10 +278,22 @@ impl Designer {
                         };
 
                         let shift = ui.input(|input| input.modifiers.shift);
-                        let sides =
-                            rect_editor(&mut scr_rect, Sides::ALL, ui, id, |sides, rect| {
-                                if shift && sides.any() && !sides.center {
+                        let state = rect_editor(
+                            &mut scr_rect,
+                            Sides::ALL,
+                            ui,
+                            id,
+                            |sides, rect| {
+                                rect.max.x = rect.max.x.max(rect.min.x + screen.scale * 0.05);
+                                rect.max.y = rect.max.y.max(rect.min.y + screen.scale * 0.05);
+                                if shift && sides.any() {
                                     let mut r = screen.screen_to_world_rect(*rect);
+                                    if sides.center {
+                                        let size = r.size();
+                                        let x = (r.left() * 2.0).round() * 0.5;
+                                        let y = (r.top() * 2.0).round() * 0.5;
+                                        r = Rect::from_min_size(pos2(x, y), size);
+                                    }
                                     if sides.top {
                                         r.set_top((r.top() * 2.0).round() * 0.5);
                                     }
@@ -267,9 +308,11 @@ impl Designer {
                                     }
                                     *rect = screen.world_to_screen_rect(r);
                                 }
-                            }, visuals);
+                            },
+                            visuals,
+                        );
 
-                        if sides.any() {
+                        if !matches!(state, DragState::None) {
                             *rect = screen.screen_to_world_rect(scr_rect);
                         }
                     } else {
@@ -279,7 +322,95 @@ impl Designer {
             }
         }
 
+        for (i, pin) in design.pins.iter_mut().enumerate() {
+            let center = ctx
+                .screen
+                .world_to_screen(pin.pos.convert(|v| v as f32 + 0.5));
+            let mut rect = Rect::from_center_size(center.into(), vec2(0.5, 0.5) * ctx.screen.scale);
+
+            if self.selected_id.is_none() {
+                let id = ui.id().with("pin_rect").with(i);
+                let state = rect_editor(
+                    &mut rect,
+                    Sides::CENTER,
+                    ui,
+                    id,
+                    |_, rect| {
+                        let pos = ctx.screen.screen_to_world(rect.center().into());
+                        let pos = pos.convert(|v| v.max(0.0) as u32);
+
+                        let center = ctx.screen.world_to_screen(pos.convert(|v| v as f32 + 0.5));
+                        *rect = Rect::from_center_size(
+                            center.into(),
+                            vec2(0.5, 0.5) * ctx.screen.scale,
+                        );
+                    },
+                    RectVisuals {
+                        rounding: Rounding::ZERO,
+                        fill: Color32::TRANSPARENT,
+                        stroke: Stroke::NONE,
+                    },
+                );
+
+                if !matches!(state, DragState::None) {
+                    let pos = ctx.screen.screen_to_world(rect.center().into());
+                    pin.pos = pos.convert(|v| v.max(0.0) as u32);
+                }
+            }
+
+            self.draw_pin(pin.dir, pin.display_dir, pin.pos, &ctx);
+        }
+
         self.selection.update_selection(design, &ctx);
+
+        #[allow(clippy::collapsible_match)] // More items todo
+        #[allow(clippy::single_match)]
+        if let Some(selected) = &self.selected_id {
+            match selected {
+                SelectedItemId::Pin(id) => 'm: {
+                    for pin in design.pins.iter() {
+                        if pin.id == *id {
+                            break 'm;
+                        }
+                    }
+
+                    let mouse_tile_pos = ctx
+                        .ui
+                        .input(|input| input.pointer.interact_pos())
+                        .map(|p| ctx.screen.screen_to_world(Vec2f::from(p)));
+                    let mouse_tile_pos_i = match mouse_tile_pos {
+                        None => break 'm,
+                        Some(v) => v.convert(|v| v.floor() as i32),
+                    };
+
+                    if mouse_tile_pos_i.x() < 0 || mouse_tile_pos_i.y() < 0 {
+                        break 'm;
+                    }
+                    let mouse_tile_pos_i = mouse_tile_pos_i.convert(|v| v as u32);
+
+                    let info = self.provider.get_pin(id);
+                    let info = unwrap_option_or_break!(info, 'm);
+
+                    if self.selected_pin_dir.is_none() {
+                        self.selected_pin_dir = info.display_dir;
+                    }
+
+                    self.draw_pin(info.dir, self.selected_pin_dir, mouse_tile_pos_i, &ctx);
+
+                    let interaction = ctx.ui.interact(ctx.rect, ctx.ui.id(), Sense::click());
+                    if interaction.clicked_by(PointerButton::Primary) {
+                        design.pins.push(CircuitDesignPin {
+                            id: id.clone(),
+                            pos: mouse_tile_pos_i,
+                            dir: info.dir,
+                            display_dir: self.selected_pin_dir,
+                            display_name: info.display_name,
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
 
         let components_rect = self.components_ui(ui);
         let properties_rect = self.properties_ui(ui, design);
@@ -298,12 +429,61 @@ impl Designer {
 
         let close = ui.button("Exit designer").clicked();
 
-        Inventory::new(&mut self.selected_id, &self.inventory).ui(&mut ui, |id| match id {
-            SelectedItemId::Selection => Some("Selection".into()),
-            SelectedItemId::Pin(id) => self.provider.get_pin(id).map(|i| i.display_name.clone()),
-        });
+        let inv_resp =
+            Inventory::new(&mut self.selected_id, &self.inventory).ui(&mut ui, |id| match id {
+                SelectedItemId::Selection => Some("Selection".into()),
+                SelectedItemId::Pin(id) => {
+                    self.provider.get_pin(id).map(|i| i.display_name.clone())
+                }
+            });
+
+        if inv_resp.changed() {
+            self.selected_pin_dir = None;
+        }
 
         DesignerResponse { close }
+    }
+
+    fn draw_pin(
+        &self,
+        dir: InternalPinDirection,
+        display_dir: Option<Direction4>,
+        pos: Vec2u,
+        ctx: &PaintContext<'_>,
+    ) {
+        let (rect_off, rect_size, angle) = match display_dir {
+            Some(Direction4::Up) => (vec2(-0.5, -0.65), vec2(1.0, 1.15), TAU * 0.75),
+            Some(Direction4::Left) => (vec2(-0.65, -0.5), vec2(1.15, 1.0), TAU * 0.5),
+            Some(Direction4::Right) => (vec2(-0.5, -0.5), vec2(1.15, 1.0), 0.0),
+            Some(Direction4::Down) => (vec2(-0.5, -0.5), vec2(1.0, 1.15), TAU * 0.25),
+            None => (vec2(-0.5, -0.5), vec2(1.0, 1.0), 0.0),
+        };
+
+        let center = ctx.screen.world_to_screen(pos.convert(|v| v as f32 + 0.5));
+
+        let rect = Rect::from_min_size(
+            Pos2::from(center) + rect_off * ctx.screen.scale,
+            rect_size * ctx.screen.scale,
+        );
+
+        {
+            let ctx = ctx.with_rect(rect);
+
+            let pico = match dir {
+                InternalPinDirection::StateDependent { default: _ } => None,
+                InternalPinDirection::Inside => Some(true),
+                InternalPinDirection::Outside => Some(false),
+                InternalPinDirection::Custom => None,
+            };
+
+            crate::graphics::outside_pin(
+                WireState::False,
+                display_dir.is_some(),
+                pico,
+                angle,
+                &ctx,
+            );
+        }
     }
 
     fn components_ui(&mut self, ui: &mut Ui) -> Rect {
@@ -341,7 +521,7 @@ impl Designer {
 
                                 ui.horizontal(|ui| {
                                     let resp = ui.allocate_response(
-                                        vec2(font.size * 2.0, font.size),
+                                        vec2(font.size * 1.15, font.size),
                                         Sense::hover(),
                                     );
 
@@ -350,15 +530,14 @@ impl Designer {
 
                                     let pico = match info.dir {
                                         InternalPinDirection::StateDependent { default: _ } => None,
-                                        InternalPinDirection::Inside => Some(false),
-                                        InternalPinDirection::Outside => Some(true),
+                                        InternalPinDirection::Inside => Some(true),
+                                        InternalPinDirection::Outside => Some(false),
                                         InternalPinDirection::Custom => None,
                                     };
                                     let angle = if pico == Some(false) { TAU * 0.5 } else { 0.0 };
-                                    crate::circuits::pin::Pin::draw(
-                                        None,
+                                    crate::graphics::outside_pin(
                                         WireState::False,
-                                        WireState::False,
+                                        true,
                                         pico,
                                         angle,
                                         &paint_ctx,
@@ -379,6 +558,7 @@ impl Designer {
                                             true => None,
                                             false => Some(SelectedItemId::Pin(id.clone())),
                                         };
+                                        self.selected_pin_dir = None;
                                     }
                                 });
                             }
@@ -428,6 +608,10 @@ impl Designer {
                                 .decorations
                                 .get(*id)
                                 .map(|d| SelectedDesignObjectType::Decoration(d.ty())),
+                            SelectedDesignObject::Pin(id) => design
+                                .decorations
+                                .get(*id)
+                                .map(|_| SelectedDesignObjectType::Pin),
                         })
                         .same();
                     match same_type {
@@ -443,6 +627,9 @@ impl Designer {
                             });
 
                             Self::rect_properties(iter, ui);
+                        }
+                        Some(SelectedDesignObjectType::Pin) => {
+                            todo!();
                         }
                     };
                 }

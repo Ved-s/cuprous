@@ -1,15 +1,12 @@
 use std::collections::hash_map::DefaultHasher;
-use std::f32::consts::TAU;
 use std::fmt::Write;
 use std::hash::{Hash, Hasher};
 
 use eframe::egui::{ComboBox, Sense, Ui};
-use eframe::epaint::{PathShape, Stroke};
-use emath::{pos2, vec2, Pos2, Rect};
+use emath::{vec2, Rect};
 
 use crate::circuits::props::CircuitProperty;
 use crate::state::SafeWireState;
-use crate::vector::Vec2f;
 use crate::{
     circuits::*, describe_directional_circuit, unwrap_option_or_break, unwrap_option_or_return,
     ArcString,
@@ -81,103 +78,6 @@ impl Pin {
             pin: description.pins[0].to_info(),
             ctl: description.pins[1].to_active_info(),
         }
-    }
-
-    pub fn draw(
-        ctl: Option<(ControlPinPosition, WireState)>,
-        outside_state: WireState,
-        state: WireState,
-        is_pico: Option<bool>,
-        angle: f32,
-        ctx: &PaintContext,
-    ) -> Pos2 {
-        let (size, center) = match ctl {
-            None => ((2, 1), (0, 0)),
-            Some((ControlPinPosition::Left, _)) => ((2, 2), (0, 1)),
-            Some((ControlPinPosition::Right, _)) => ((2, 2), (0, 0)),
-            Some((ControlPinPosition::Behind, _)) => ((3, 1), (1, 0)),
-        };
-        let size = vec2(size.0 as f32, size.1 as f32);
-        let transformer = |p: Pos2| {
-            ctx.rect.lerp_inside(
-                Vec2f::from(p.to_vec2() / size)
-                    .rotated_xy(angle, 0.5)
-                    .into(),
-            )
-        };
-
-        let scale = ctx.screen.scale;
-        let center_off = vec2(center.0 as f32, center.1 as f32);
-        let center = transformer(pos2(center.0 as f32 + 0.5, center.1 as f32 + 0.5));
-
-        ctx.paint.line_segment(
-            [
-                transformer(pos2(0.95, 0.5) + center_off),
-                transformer(pos2(1.5, 0.5) + center_off),
-            ],
-            Stroke::new(ActiveCircuitBoard::WIRE_THICKNESS * scale, state.color()),
-        );
-
-        if let Some(is_pico) = is_pico {
-            let points = if is_pico {
-                [pos2(1.12, 0.75), pos2(1.42, 0.5), pos2(1.12, 0.25)] // Right
-            } else {
-                [pos2(1.3, 0.75), pos2(1.0, 0.5), pos2(1.3, 0.25)] // Left
-            };
-            let points = points
-                .into_iter()
-                .map(|p| transformer(p + center_off))
-                .collect();
-            ctx.paint.add(PathShape {
-                points,
-                closed: true,
-                fill: state.color(),
-                stroke: Stroke::NONE,
-            });
-        }
-        ctx.paint
-            .circle_filled(center, 0.3 * scale, outside_state.color());
-        ctx.paint.circle_stroke(
-            center,
-            0.45 * scale,
-            Stroke::new(0.1 * scale, state.color()),
-        );
-
-        if let Some((ctl_dir, ctl_state)) = ctl {
-            let ctl_angle = match ctl_dir {
-                ControlPinPosition::Left => TAU * 0.5,
-                ControlPinPosition::Behind => TAU * 0.25,
-                ControlPinPosition::Right => 0.0,
-            };
-
-            let ctl_transformer = |p: Pos2| {
-                transformer(Pos2::from(Vec2f::from(p).rotated_xy(ctl_angle, 0.5)) + center_off)
-            };
-
-            ctx.paint.line_segment(
-                [
-                    ctl_transformer(pos2(0.5, 1.5)),
-                    ctl_transformer(pos2(0.5, 1.24)),
-                ],
-                Stroke::new(
-                    ActiveCircuitBoard::WIRE_THICKNESS * scale,
-                    ctl_state.color(),
-                ),
-            );
-
-            ctx.paint.add(PathShape {
-                points: vec![
-                    ctl_transformer(pos2(0.25, 1.25)),
-                    ctl_transformer(pos2(0.5, 1.0)),
-                    ctl_transformer(pos2(0.75, 1.25)),
-                ],
-                closed: true,
-                fill: ctl_state.color(),
-                stroke: Stroke::NONE,
-            });
-        }
-
-        center
     }
 
     fn describe_props(props: &CircuitPropertyStore) -> CircuitDescription<2> {
@@ -259,7 +159,13 @@ impl CircuitImpl for Pin {
                     board.resolve_inner_to_outer(state_ctx.circuit.id)
                 })??;
                 let outer_state = CircuitStateContext::new(p.state.clone(), p.circuit.clone());
-                let state = p.circuit.info.read().pins.get(outer)?.get_state(&outer_state);
+                let state = p
+                    .circuit
+                    .info
+                    .read()
+                    .pins
+                    .get(outer)?
+                    .get_state(&outer_state);
                 Some(state)
             })
             .map(|s| s.unwrap_or(WireState::None));
@@ -282,7 +188,14 @@ impl CircuitImpl for Pin {
         let is_pico = self.is_pico(state_ctx);
         let angle = self.dir.inverted_ud().angle_to_right();
 
-        let center = Pin::draw(cpos, outside_state, state, Some(is_pico), angle, paint_ctx);
+        let center = crate::graphics::inside_pin(
+            cpos,
+            outside_state,
+            state,
+            Some(is_pico),
+            angle,
+            paint_ctx,
+        );
 
         // TODO: don't interact if this state has parent state
 
@@ -358,13 +271,15 @@ impl CircuitImpl for Pin {
 
             let parent = state_ctx.global_state.parent.read();
             if let Some(parent) = parent.deref() {
-                let outer = parent.circuit
+                let outer = parent
+                    .circuit
                     .read_imp::<super::board::Board, _>(|board| {
                         board.resolve_inner_to_outer(state_ctx.circuit.id)
                     })
                     .flatten();
                 let outer = unwrap_option_or_return!(outer);
-                let outer_state = CircuitStateContext::new(parent.state.clone(), parent.circuit.clone());
+                let outer_state =
+                    CircuitStateContext::new(parent.state.clone(), parent.circuit.clone());
                 let info = parent.circuit.info.read();
                 let outer_pin = info.pins.get(outer);
                 let outer_pin = unwrap_option_or_return!(outer_pin);
@@ -382,7 +297,8 @@ impl CircuitImpl for Pin {
             let parent = state_ctx.global_state.parent.read();
             match parent.as_ref() {
                 Some(parent) => 'm: {
-                    let outer = parent.circuit
+                    let outer = parent
+                        .circuit
                         .read_imp::<super::board::Board, _>(|board| {
                             board.resolve_inner_to_outer(state_ctx.circuit.id)
                         })
@@ -477,7 +393,7 @@ impl CircuitImpl for Pin {
         &self,
         _: &CircuitStateContext,
         data: &serde_intermediate::Intermediate,
-        _: bool
+        _: bool,
     ) -> Option<Box<dyn InternalCircuitState>> {
         serde_intermediate::de::intermediate::deserialize::<PinState>(data)
             .ok()
@@ -492,11 +408,7 @@ impl CircuitImpl for Pin {
         let uid = format!("{:x}:{:x}:{}{}", hex_x.len(), hex_y.len(), hex_x, hex_y);
         let uid_arc: Arc<str> = uid.into();
 
-        circ
-            .board
-            .pins
-            .write()
-            .insert(uid_arc.clone(), circ.id);
+        circ.board.pins.write().insert(uid_arc.clone(), circ.id);
 
         if first_init {
             let name_empty = circ.props.read("name", |s: &ArcString| s.is_empty());
@@ -516,11 +428,7 @@ impl CircuitImpl for Pin {
     }
 
     fn circuit_remove(&mut self, circ: &Arc<Circuit>) {
-        circ
-            .board
-            .pins
-            .write()
-            .remove_by_right(&circ.id);
+        circ.board.pins.write().remove_by_right(&circ.id);
     }
 }
 
@@ -541,7 +449,7 @@ impl CircuitPreviewImpl for Preview {
         let cpos = ty.is_controlled().then_some((cpos, WireState::False));
         let angle = dir.inverted_ud().angle_to_right();
 
-        Pin::draw(
+        crate::graphics::inside_pin(
             cpos,
             WireState::False,
             WireState::False,

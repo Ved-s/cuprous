@@ -1,26 +1,24 @@
 use eframe::{
     egui::{ComboBox, Ui},
-    epaint::{PathShape, Stroke},
 };
-use emath::vec2;
 
-use crate::{circuits::*, describe_directional_custom_circuit, vector::Vec2f, Direction4};
+use crate::{circuits::*, describe_directional_custom_circuit, Direction4};
 
 use super::props::{CircuitProperty, CircuitPropertyImpl};
 
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
-enum Type {
+pub enum TransistorType {
     #[default]
     NPN,
     PNP,
 }
 
-struct Transistor {
+pub struct Transistor {
     collector: CircuitPinInfo,
     base: CircuitPinInfo,
     emitter: CircuitPinInfo,
-    ty: Type,
+    ty: TransistorType,
     dir: Direction4,
     flip: bool,
 }
@@ -32,78 +30,10 @@ impl Transistor {
             collector: description.pins[0].to_info(),
             base: description.pins[1].to_info(),
             emitter: description.pins[2].to_info(),
-            ty: Type::NPN,
+            ty: TransistorType::NPN,
             dir: Direction4::Left,
             flip: false,
         }
-    }
-
-    fn draw(
-        ty: Type,
-        state: Option<(&CircuitStateContext, [WireState; 3])>,
-        ctx: &PaintContext,
-        angle: f32,
-        flip: bool,
-    ) {
-        let collector_color = state
-            .map(|s| s.1[0].color())
-            .unwrap_or_else(|| WireState::False.color());
-        let base_color = state
-            .map(|s| s.1[1].color())
-            .unwrap_or_else(|| WireState::False.color());
-        let emitter_color = state
-            .map(|s| s.1[2].color())
-            .unwrap_or_else(|| WireState::False.color());
-        let middle_color = state
-            .map(|s| match Self::is_open_state(ty, s.1[1]) {
-                true => s.1[0].color(),
-                false => s.1[1].color(),
-            })
-            .unwrap_or_else(|| WireState::False.color());
-
-        let thickness = ActiveCircuitBoard::WIRE_THICKNESS * ctx.screen.scale;
-
-        let collector_stroke = Stroke::new(thickness, collector_color);
-        let base_stroke = Stroke::new(thickness, base_color);
-        let emitter_stroke = Stroke::new(thickness, emitter_color);
-        let middle_stroke = Stroke::new(thickness, middle_color);
-
-        let size = vec2(2.0, 3.0);
-        let trf = |x: f32, y: f32| {
-            let y = y / size.y;
-            let y = if flip { 1.0 - y } else { y };
-            ctx.rect
-                .lerp_inside(Vec2f::from([x / size.x, y]).rotated_xy(angle, 0.5).into())
-        };
-
-        let painter = ctx.paint;
-
-        painter.line_segment([trf(0.5, 1.5), trf(0.9, 1.5)], base_stroke);
-
-        painter.line_segment([trf(1.5, 0.5), trf(1.5, 0.8)], collector_stroke);
-        painter.line_segment([trf(0.92, 1.33), trf(1.526, 0.73)], collector_stroke);
-
-        painter.line_segment([trf(1.5, 2.5), trf(1.5, 2.2)], emitter_stroke);
-        painter.line_segment([trf(0.92, 1.66), trf(1.526, 2.27)], emitter_stroke);
-
-        painter.line_segment([trf(0.9, 1.0), trf(0.9, 2.0)], middle_stroke);
-
-        let verts = match ty {
-            Type::NPN => [trf(1.35, 1.70), trf(1.45, 2.19), trf(0.96, 2.09)],
-            Type::PNP => [trf(1.08, 0.78), trf(1.00, 1.26), trf(1.47, 1.17)],
-        };
-
-        let arrow_color = match ty {
-            Type::NPN => emitter_color,
-            Type::PNP => collector_color,
-        };
-
-        painter.add(PathShape {
-            points: verts.into(),
-            closed: true,
-            fill: arrow_color,
-            stroke: Stroke::NONE,
-        });
     }
 
     fn describe_props(props: &CircuitPropertyStore) -> CircuitDescription<3> {
@@ -127,10 +57,10 @@ impl Transistor {
         }
     }
 
-    fn is_open_state(ty: Type, base: WireState) -> bool {
+    pub fn is_open_state(ty: TransistorType, base: WireState) -> bool {
         matches!(
             (ty, base),
-            (Type::NPN, WireState::True) | (Type::PNP, WireState::False)
+            (TransistorType::NPN, WireState::True) | (TransistorType::PNP, WireState::False)
         )
     }
 }
@@ -146,12 +76,8 @@ impl CircuitImpl for Transistor {
 
         let angle = self.dir.inverted_ud().angle_to_left();
 
-        Self::draw(
-            self.ty,
-            Some((state_ctx, [collector, base, emitter])),
-            paint_ctx,
-            angle,
-            self.flip,
+        crate::graphics::transistor(
+            self.ty, angle, self.flip, collector, base, emitter, paint_ctx,
         );
     }
 
@@ -199,7 +125,7 @@ impl CircuitImpl for Transistor {
             self.flip = circ.props.read_clone("flip").unwrap_or(false);
         }
         if matches!(changed, None | Some("ty")) {
-            self.ty = circ.props.read_clone("ty").unwrap_or(Type::NPN);
+            self.ty = circ.props.read_clone("ty").unwrap_or(TransistorType::NPN);
         }
     }
 
@@ -227,8 +153,16 @@ impl CircuitPreviewImpl for TransistorPreview {
             .inverted_ud()
             .angle_to_left();
         let flip = props.read_clone("flip").unwrap_or(false);
-        let ty = props.read_clone("ty").unwrap_or(Type::NPN);
-        Transistor::draw(ty, None, ctx, angle, flip);
+        let ty = props.read_clone("ty").unwrap_or(TransistorType::NPN);
+        crate::graphics::transistor(
+            ty,
+            angle,
+            flip,
+            WireState::False,
+            WireState::False,
+            WireState::False,
+            ctx,
+        );
     }
 
     fn create_impl(&self) -> Box<dyn CircuitImpl> {
@@ -248,7 +182,7 @@ impl CircuitPreviewImpl for TransistorPreview {
         CircuitPropertyStore::new([
             CircuitProperty::new("dir", "Direction", Direction4::Left),
             CircuitProperty::new("flip", "Flip", false),
-            CircuitProperty::new("ty", "Type", Type::NPN),
+            CircuitProperty::new("ty", "Type", TransistorType::NPN),
         ])
     }
 
@@ -261,7 +195,7 @@ impl CircuitPreviewImpl for TransistorPreview {
     }
 }
 
-impl CircuitPropertyImpl for Type {
+impl CircuitPropertyImpl for TransistorType {
     fn equals(&self, other: &dyn CircuitPropertyImpl) -> bool {
         other.is_type_and(|o: &Self| o == self)
     }
@@ -274,15 +208,15 @@ impl CircuitPropertyImpl for Type {
                 Default::default()
             } else {
                 match *self {
-                    Type::NPN => "NPN",
-                    Type::PNP => "PNP",
+                    TransistorType::NPN => "NPN",
+                    TransistorType::PNP => "PNP",
                 }
             })
             .show_ui(ui, |ui| {
-                for ty in [Type::NPN, Type::PNP] {
+                for ty in [TransistorType::NPN, TransistorType::PNP] {
                     let name = match ty {
-                        Type::NPN => "NPN",
-                        Type::PNP => "PNP",
+                        TransistorType::NPN => "NPN",
+                        TransistorType::PNP => "PNP",
                     };
                     let res = ui.selectable_value(self, ty, name);
                     if res.changed() || res.clicked() {
@@ -314,26 +248,26 @@ impl CircuitPropertyImpl for Type {
     }
 }
 
-impl<'de> Deserialize<'de> for Type {
+impl<'de> Deserialize<'de> for TransistorType {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
         Ok(match char::deserialize(deserializer)? {
-            'n' => Type::PNP,
-            _ => Type::NPN,
+            'n' => TransistorType::PNP,
+            _ => TransistorType::NPN,
         })
     }
 }
 
-impl Serialize for Type {
+impl Serialize for TransistorType {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
         match *self {
-            Type::NPN => 'p'.serialize(serializer),
-            Type::PNP => 'n'.serialize(serializer),
+            TransistorType::NPN => 'p'.serialize(serializer),
+            TransistorType::PNP => 'n'.serialize(serializer),
         }
     }
 }

@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     app::SimulationContext,
-    board::{ActiveCircuitBoard, CircuitBoard},
+    board::CircuitBoard,
     io::CircuitCopyData,
     state::{CircuitState, InternalCircuitState, State, StateCollection, WireState},
     time::Instant,

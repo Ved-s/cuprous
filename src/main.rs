@@ -59,6 +59,7 @@ mod debug;
 mod app;
 mod cache;
 mod ext;
+mod graphics;
 mod io;
 mod path;
 mod time;
@@ -940,10 +941,11 @@ impl PastePreview {
                             for state in board.board.states.states.read().iter() {
                                 let ctx = CircuitStateContext::new(state.clone(), circuit.clone());
                                 state.write_circuit(id, |state| {
-                                    state.internal = circuit
-                                        .imp
-                                        .write()
-                                        .load_internal(&ctx, &circuit_data.internal, true);
+                                    state.internal = circuit.imp.write().load_internal(
+                                        &ctx,
+                                        &circuit_data.internal,
+                                        true,
+                                    );
                                 });
                             }
                         }
