@@ -2,8 +2,8 @@ use std::{f32::consts::TAU, ops::Deref, sync::Arc};
 
 use eframe::{
     egui::{
-        self, CollapsingHeader, Frame, Grid, Key, Label, Margin, PointerButton, Sense, SidePanel,
-        Slider, TextStyle, Ui, Widget,
+        self, CollapsingHeader, ComboBox, Frame, Grid, Key, Label, Margin, PointerButton, Sense,
+        SidePanel, Slider, TextStyle, Ui, Widget,
     },
     epaint::{Color32, FontId, RectShape, Rounding, Shape, Stroke},
 };
@@ -361,6 +361,17 @@ impl Designer {
             self.draw_pin(pin.dir, pin.display_dir, pin.pos, &ctx);
         }
 
+        crate::ui::drawing::draw_pin_names(
+            [0, 0].into(),
+            design
+                .pins
+                .iter()
+                .map(|p| (p.pos, p.display_name.deref(), p.display_dir)),
+            1.0,
+            0.5,
+            &ctx,
+        );
+
         self.selection.update_selection(design, &ctx);
 
         #[allow(clippy::collapsible_match)] // More items todo
@@ -390,10 +401,6 @@ impl Designer {
 
                     let info = self.provider.get_pin(id);
                     let info = unwrap_option_or_break!(info, 'm);
-
-                    if self.selected_pin_dir.is_none() {
-                        self.selected_pin_dir = info.display_dir;
-                    }
 
                     self.draw_pin(info.dir, self.selected_pin_dir, mouse_tile_pos_i, &ctx);
 
@@ -558,7 +565,7 @@ impl Designer {
                                             true => None,
                                             false => Some(SelectedItemId::Pin(id.clone())),
                                         };
-                                        self.selected_pin_dir = None;
+                                        self.selected_pin_dir = info.display_dir;
                                     }
                                 });
                             }
@@ -596,22 +603,15 @@ impl Designer {
             .show(ui, |ui| {
                 if !self.selection.selection.is_empty() {
                     let same_type = self
-                        .selection
-                        .selection
-                        .iter()
-                        .filter(|v| {
-                            matches!(self.selection.mode, SelectionMode::Include)
-                                || !self.selection.change.contains(v)
-                        })
+                        .selection.iter_selection()
                         .filter_map(|o| match o {
                             SelectedDesignObject::Decoration(id) => design
                                 .decorations
                                 .get(*id)
                                 .map(|d| SelectedDesignObjectType::Decoration(d.ty())),
-                            SelectedDesignObject::Pin(id) => design
-                                .decorations
-                                .get(*id)
-                                .map(|_| SelectedDesignObjectType::Pin),
+                            SelectedDesignObject::Pin(id) => {
+                                design.pins.get(*id).map(|_| SelectedDesignObjectType::Pin)
+                            }
                         })
                         .same();
                     match same_type {
@@ -621,15 +621,25 @@ impl Designer {
                             });
                         }
                         Some(SelectedDesignObjectType::Decoration(DecorationType::Rect)) => {
-                            let iter = design.decorations.iter_mut().filter_map(|d| match d {
-                                Decoration::Rect { rect: _, visuals } => Some(visuals),
-                                _ => None,
+                            let iter = design.decorations.iter_mut().enumerate().filter_map(|(i, d)| {
+                                let key = SelectedDesignObject::Decoration(i);
+                                if !self.selection.is_selected(&key) {
+                                    return None;
+                                }
+                                match d {
+                                    Decoration::Rect { rect: _, visuals } => Some(visuals),
+                                }
                             });
 
                             Self::rect_properties(iter, ui);
                         }
                         Some(SelectedDesignObjectType::Pin) => {
-                            todo!();
+                            let iter = design.pins.iter_mut().enumerate().filter_map(|(i, p)| {
+                                let key = SelectedDesignObject::Pin(i);
+                                self.selection.is_selected(&key).then_some(&mut p.display_dir)
+                            });
+
+                            Self::pin_properties(iter, ui);
                         }
                     };
                 }
@@ -679,6 +689,46 @@ impl Designer {
                 if stroke_color_changed {
                     rect.stroke.color = value.stroke.color;
                 }
+            }
+        }
+    }
+
+    fn pin_properties<'a, I>(mut iter: I, ui: &mut Ui)
+    where
+        I: Iterator<Item = &'a mut Option<Direction4>>,
+    {
+        let value = unwrap_option_or_return!(iter.next());
+        let mut changed = false;
+
+        fn dir_name(dir: Option<Direction4>) -> &'static str {
+            match dir {
+                Some(dir) => dir.name(),
+                None => "None",
+            }
+        }
+
+        Grid::new("pin_props").show(ui, |ui| {
+            ui.label("Direction");
+            ComboBox::from_id_source(ui.next_auto_id())
+                .selected_text(dir_name(*value))
+                .show_ui(ui, |ui| {
+
+                    let iter = [None].into_iter().chain(Direction4::iter_all().map(Some));
+
+                    for dir in iter {
+                        let res = ui.selectable_value(value, dir, dir_name(dir));
+                        if res.changed() || res.clicked() {
+                            changed = true;
+                        }
+                    }
+                });
+            ui.end_row();
+        });
+        if changed {
+            let value = *value;
+
+            for v in iter {
+                *v = value;
             }
         }
     }

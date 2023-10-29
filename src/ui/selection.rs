@@ -1,15 +1,12 @@
 use std::{collections::HashSet, hash::Hash, marker::PhantomData};
 
 use eframe::{
-    egui::{self, Sense, layers::ShapeIdx},
-    epaint::{Color32, Rounding, Stroke, Shape},
+    egui::{self, layers::ShapeIdx, Sense},
+    epaint::{Color32, Rounding, Shape, Stroke},
 };
 use emath::Rect;
 
-use crate::{
-    vector::Vec2f,
-    PaintContext,
-};
+use crate::{vector::Vec2f, PaintContext};
 
 use super::InventoryItem;
 
@@ -22,8 +19,22 @@ pub enum SelectionMode {
 pub trait SelectionImpl<O, P> {
     fn collect_changes(&mut self, pass: &P, changes: &mut HashSet<O>, rect: Rect);
 
-    fn draw_object_selection(&mut self, pass: &P, object: &O, ctx: &PaintContext, shapes: &mut Vec<Shape>);
-    fn post_draw_selection(&mut self, pass: &P, ctx: &PaintContext, mode: SelectionMode, selected: &HashSet<O>, change: &HashSet<O>, shapes: &mut Vec<Shape>) {
+    fn draw_object_selection(
+        &mut self,
+        pass: &P,
+        object: &O,
+        ctx: &PaintContext,
+        shapes: &mut Vec<Shape>,
+    );
+    fn post_draw_selection(
+        &mut self,
+        pass: &P,
+        ctx: &PaintContext,
+        mode: SelectionMode,
+        selected: &HashSet<O>,
+        change: &HashSet<O>,
+        shapes: &mut Vec<Shape>,
+    ) {
         let _ = (pass, ctx, mode, selected, change, shapes);
     }
 }
@@ -179,25 +190,33 @@ where
     }
 
     pub fn update_selection(&mut self, pass: &P, ctx: &PaintContext) {
-
         self.shapes.clear();
 
         for object in self.selection.iter() {
             if matches!(self.mode, SelectionMode::Exclude) && self.change.contains(object) {
                 continue;
             }
-            self.imp.draw_object_selection(pass, object, ctx, &mut self.shapes);
+            self.imp
+                .draw_object_selection(pass, object, ctx, &mut self.shapes);
         }
         if matches!(self.mode, SelectionMode::Include) {
             for object in self.change.iter() {
                 if self.selection.contains(object) {
                     continue;
                 }
-                self.imp.draw_object_selection(pass, object, ctx, &mut self.shapes);
+                self.imp
+                    .draw_object_selection(pass, object, ctx, &mut self.shapes);
             }
         }
 
-        self.imp.post_draw_selection(pass, ctx, self.mode, &self.selection, &self.change, &mut self.shapes);
+        self.imp.post_draw_selection(
+            pass,
+            ctx,
+            self.mode,
+            &self.selection,
+            &self.change,
+            &mut self.shapes,
+        );
 
         self.prev_frame_shapes = self.shapes.len();
 
@@ -208,6 +227,22 @@ where
         if let Some(rect) = self.rect {
             ctx.paint
                 .rect_stroke(rect, Rounding::ZERO, Stroke::new(1.0, Color32::WHITE));
+        }
+    }
+
+    pub fn iter_selection(&self) -> impl Iterator<Item = &O> {
+        self.selection
+            .iter()
+            .filter(|o| !matches!(self.mode, SelectionMode::Exclude) || !self.change.contains(o))
+            .chain(self.change.iter().filter(|_| matches!(self.mode, SelectionMode::Include)))
+    }
+
+    pub fn is_selected(&self, obj: &O) -> bool {
+        let selected = self.selection.contains(obj);
+        let change = self.change.contains(obj);
+        match self.mode {
+            SelectionMode::Include => selected || change,
+            SelectionMode::Exclude => selected && !change,
         }
     }
 }
@@ -223,11 +258,13 @@ where
 }
 
 pub struct SelectionInventoryItem<I: Clone> {
-    id: I
+    id: I,
 }
 
 impl<I: Clone> SelectionInventoryItem<I> {
-    pub fn new(id: I) -> Self { Self { id } }
+    pub fn new(id: I) -> Self {
+        Self { id }
+    }
 }
 
 impl<I: Clone> InventoryItem<I> for SelectionInventoryItem<I> {

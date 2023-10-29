@@ -237,8 +237,8 @@ impl Board {
 
 impl CircuitImpl for Board {
     fn draw(&self, ctx: &CircuitStateContext, paint_ctx: &PaintContext) {
-        let data = ctx
-            .read_circuit_internal_state(|s: &BoardState| (s.state.clone(), s.parent_error));
+        let data =
+            ctx.read_circuit_internal_state(|s: &BoardState| (s.state.clone(), s.parent_error));
 
         Board::draw(
             self.board.as_ref(),
@@ -351,7 +351,6 @@ impl CircuitImpl for Board {
                     if let Some(state) = state {
                         let mut parent = state.parent.write();
                         if parent.is_some() {
-
                             // If circuit was pasted and there's a state conflict, create new state instead
                             if s.pasted {
                                 return true;
@@ -521,6 +520,10 @@ impl CircuitPreviewImpl for BoardPreview {
     }
 
     fn describe(&self, props: &CircuitPropertyStore) -> DynCircuitDescription {
-        Board::describe_props(self.design.as_deref(), props)
+        let design = self
+            .design
+            .clone()
+            .or_else(|| self.board.as_ref().map(|b| b.designs.read().current()));
+        Board::describe_props(design.as_deref(), props)
     }
 }

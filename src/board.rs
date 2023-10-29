@@ -609,100 +609,15 @@ impl ActiveCircuitBoard {
         let info = unwrap_option_or_return!(info);
 
         let info = info.read();
-        ActiveCircuitBoard::draw_pin_names(
+        crate::ui::drawing::draw_pin_names(
             pos,
             info.pins
                 .iter()
                 .map(|pin| (pin.pos, pin.display_name.deref(), pin.display_dir)),
+            0.5,
+            0.5,
             ctx,
         );
-    }
-
-    fn draw_pin_names<'a>(
-        pos: Vec2isize,
-        pins: impl Iterator<Item = (Vec2u, &'a str, Option<Direction4>)>,
-        ctx: &PaintContext,
-    ) {
-        fn draw_pin_name(
-            name: &str,
-            dir: Option<Direction4>,
-            circ_pos: Vec2isize,
-            pin_pos: Vec2u,
-            ctx: &PaintContext,
-        ) {
-            if name.is_empty() {
-                return;
-            }
-            let textoffset = ctx.screen.scale * 0.5;
-
-            let galley = WidgetText::from(name).into_galley(
-                ctx.ui,
-                Some(false),
-                f32::INFINITY,
-                FontSelection::FontId(FontId::monospace(ctx.screen.scale * 0.5)),
-            );
-
-            //         n|
-            //         i|
-            //         P|
-            //      +--*--+
-            //      |  *  * Pin
-            //  Pin * Pin |
-            //      +--*--+
-            //        |P
-            //        |i          | marks text bottom
-            //        |n
-
-            let textsize = galley.size();
-            let (dtx, dty, angle) = match dir {
-                Some(Direction4::Up) => (-textsize.y * 0.5, -textoffset, TAU * 0.75),
-                Some(Direction4::Left) => (-textsize.x - textoffset, -textsize.y * 0.5, 0.0),
-                Some(Direction4::Down) => (textsize.y * 0.5, textoffset, TAU * 0.25),
-                Some(Direction4::Right) => (textoffset, -textsize.y * 0.5, 0.0),
-
-                None => (-textsize.x * 0.5, textoffset, 0.0),
-            };
-
-            let (drx, dry, vertical) = match dir {
-                Some(Direction4::Up) => (-textsize.y * 0.5, -textoffset - textsize.x, true),
-                Some(Direction4::Left) => (-textsize.x - textoffset, -textsize.y * 0.5, false),
-                Some(Direction4::Down) => (-textsize.y * 0.5, textoffset, true),
-                Some(Direction4::Right) => (textoffset, -textsize.y * 0.5, false),
-
-                None => (-textsize.x * 0.5, textoffset, false),
-            };
-
-            let centerpos = Pos2::from(ctx.screen.world_to_screen(
-                circ_pos.convert(|v| v as f32) + pin_pos.convert(|v| v as f32) + 0.5,
-            ));
-
-            let textpos = centerpos + vec2(dtx, dty);
-            let rectpos = centerpos + vec2(drx, dry);
-            let rectsize = match vertical {
-                true => vec2(textsize.y, textsize.x),
-                false => textsize,
-            };
-            let rect = Rect::from_min_size(rectpos, rectsize).expand(ctx.screen.scale * 0.1);
-
-            let visual = &ctx.ui.style().visuals;
-            ctx.paint.rect(
-                rect,
-                Rounding::same(ctx.screen.scale * 0.15),
-                visual.window_fill.linear_multiply(0.6),
-                visual.window_stroke,
-            );
-            ctx.paint.add(TextShape {
-                pos: textpos,
-                galley: galley.galley,
-                underline: Stroke::NONE,
-                override_text_color: Some(visual.text_color()),
-                angle,
-            });
-        }
-
-        for (pin_pos, pin_name, pin_dir) in pins {
-            draw_pin_name(pin_name, pin_dir, pos, pin_pos, ctx);
-        }
     }
 
     /* #region Drawing nodes */
@@ -1134,13 +1049,15 @@ impl ActiveCircuitBoard {
                 );
             }
 
-            Self::draw_pin_names(
+            crate::ui::drawing::draw_pin_names(
                 place_pos.convert(|v| v as isize),
                 description
                     .pins
                     .iter()
                     .filter(|p| p.active)
                     .map(|i| (i.pos, i.display_name.deref(), i.display_dir)),
+                0.5,
+                0.5,
                 ctx,
             );
 

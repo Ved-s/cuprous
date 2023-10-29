@@ -1,9 +1,22 @@
-use eframe::{egui, epaint::{Stroke, Color32}};
-use emath::{Rect, pos2, Pos2, Vec2, vec2};
+use std::f32::consts::TAU;
 
-use crate::{vector::{Vec2f, Vec2u}, Screen};
+use eframe::{
+    egui::{self, FontSelection, WidgetText},
+    epaint::{Color32, FontId, Rounding, Stroke, TextShape},
+};
+use emath::{pos2, vec2, Pos2, Rect, Vec2};
 
-pub fn draw_dynamic_grid(screen: &Screen, cell_size: f32, highlight_lines: Vec2u, paint: &egui::Painter) {
+use crate::{
+    vector::{Vec2f, Vec2isize, Vec2u},
+    Direction4, PaintContext, Screen,
+};
+
+pub fn draw_dynamic_grid(
+    screen: &Screen,
+    cell_size: f32,
+    highlight_lines: Vec2u,
+    paint: &egui::Painter,
+) {
     let mut grid_ds_cell_size = screen.scale;
     while grid_ds_cell_size < cell_size * 0.5 {
         grid_ds_cell_size *= cell_size;
@@ -59,11 +72,15 @@ pub fn draw_grid(
     }
 
     let hightlight_cells =
-        visible_cells.combine_with(highlight_lines, |v, m| if m == 0 { 0 } else { v / m as i32 + 2 });
+        visible_cells.combine_with(
+            highlight_lines,
+            |v, m| if m == 0 { 0 } else { v / m as i32 + 2 },
+        );
     let highlight_off = pos % (cell_size * highlight_lines.convert(|v| v as f32));
 
     for i in 0..hightlight_cells.x() {
-        let pos = rect.left() + cell_size.x() * i as f32 * highlight_lines.x() as f32 - highlight_off.x();
+        let pos =
+            rect.left() + cell_size.x() * i as f32 * highlight_lines.x() as f32 - highlight_off.x();
         paint.line_segment(
             [pos2(pos, rect.top()), pos2(pos, rect.bottom())],
             highlight_stroke,
@@ -71,7 +88,8 @@ pub fn draw_grid(
     }
 
     for i in 0..hightlight_cells.y() {
-        let pos = rect.top() + cell_size.y() * i as f32 * highlight_lines.y() as f32 - highlight_off.y();
+        let pos =
+            rect.top() + cell_size.y() * i as f32 * highlight_lines.y() as f32 - highlight_off.y();
         paint.line_segment(
             [pos2(rect.left(), pos), pos2(rect.right(), pos)],
             highlight_stroke,
@@ -96,8 +114,7 @@ pub fn draw_grid(
 }
 
 pub fn draw_cross(screen: &Screen, bounds: Rect, paint: &egui::Painter) {
-    let mut cross_pos = screen
-        .world_to_screen(0.0.into());
+    let mut cross_pos = screen.world_to_screen(0.0.into());
 
     *cross_pos.x_mut() = cross_pos.x().clamp(bounds.left(), bounds.right());
     *cross_pos.y_mut() = cross_pos.y().clamp(bounds.top(), bounds.bottom());
@@ -127,4 +144,103 @@ pub fn align_rect_scaled(pos: Pos2, size: Vec2, rect_size: Vec2) -> (Rect, f32) 
     let new_size = rect_size * scale;
     let offset = vec2((size.x - new_size.x) * 0.5, (size.y - new_size.y) * 0.5);
     (Rect::from_min_size(pos + offset, new_size), scale)
+}
+
+pub fn draw_pin_names<'a>(
+    pos: Vec2isize,
+    pins: impl Iterator<Item = (Vec2u, &'a str, Option<Direction4>)>,
+    directional_offset: f32,
+    directionless_offset: f32,
+    ctx: &PaintContext,
+) {
+    fn draw_pin_name(
+        name: &str,
+        dir: Option<Direction4>,
+        circ_pos: Vec2isize,
+        pin_pos: Vec2u,
+        directional_offset: f32,
+        directionless_offset: f32,
+        ctx: &PaintContext,
+    ) {
+        if name.is_empty() {
+            return;
+        }
+
+        let galley = WidgetText::from(name).into_galley(
+            ctx.ui,
+            Some(false),
+            f32::INFINITY,
+            FontSelection::FontId(FontId::monospace(ctx.screen.scale * 0.5)),
+        );
+
+        //         n|
+        //         i|
+        //         P|
+        //      +--*--+
+        //      |  *  * Pin
+        //  Pin * Pin |
+        //      +--*--+
+        //        |P
+        //        |i          | marks text bottom
+        //        |n
+
+        let textsize = galley.size();
+        let (dtx, dty, angle) = match dir {
+            Some(Direction4::Up) => (-textsize.y * 0.5, -directional_offset, TAU * 0.75),
+            Some(Direction4::Left) => (-textsize.x - directional_offset, -textsize.y * 0.5, 0.0),
+            Some(Direction4::Down) => (textsize.y * 0.5, directional_offset, TAU * 0.25),
+            Some(Direction4::Right) => (directional_offset, -textsize.y * 0.5, 0.0),
+
+            None => (-textsize.x * 0.5, directionless_offset, 0.0),
+        };
+
+        let (drx, dry, vertical) = match dir {
+            Some(Direction4::Up) => (-textsize.y * 0.5, -directional_offset - textsize.x, true),
+            Some(Direction4::Left) => (-textsize.x - directional_offset, -textsize.y * 0.5, false),
+            Some(Direction4::Down) => (-textsize.y * 0.5, directional_offset, true),
+            Some(Direction4::Right) => (directional_offset, -textsize.y * 0.5, false),
+
+            None => (-textsize.x * 0.5, directionless_offset, false),
+        };
+
+        let centerpos =
+            Pos2::from(ctx.screen.world_to_screen(
+                circ_pos.convert(|v| v as f32) + pin_pos.convert(|v| v as f32) + 0.5,
+            ));
+
+        let textpos = centerpos + vec2(dtx, dty);
+        let rectpos = centerpos + vec2(drx, dry);
+        let rectsize = match vertical {
+            true => vec2(textsize.y, textsize.x),
+            false => textsize,
+        };
+        let rect = Rect::from_min_size(rectpos, rectsize).expand(ctx.screen.scale * 0.1);
+
+        let visual = &ctx.ui.style().visuals;
+        ctx.paint.rect(
+            rect,
+            Rounding::same(ctx.screen.scale * 0.15),
+            visual.window_fill.linear_multiply(0.6),
+            visual.window_stroke,
+        );
+        ctx.paint.add(TextShape {
+            pos: textpos,
+            galley: galley.galley,
+            underline: Stroke::NONE,
+            override_text_color: Some(visual.text_color()),
+            angle,
+        });
+    }
+
+    for (pin_pos, pin_name, pin_dir) in pins {
+        draw_pin_name(
+            pin_name,
+            pin_dir,
+            pos,
+            pin_pos,
+            directional_offset * ctx.screen.scale,
+            directionless_offset * ctx.screen.scale,
+            ctx,
+        );
+    }
 }

@@ -428,7 +428,16 @@ impl CircuitImpl for Pin {
     }
 
     fn circuit_remove(&mut self, circ: &Arc<Circuit>) {
-        circ.board.pins.write().remove_by_right(&circ.id);
+        let kv = circ.board.pins.write().remove_by_right(&circ.id);
+        let id = unwrap_option_or_return!(kv).0;
+
+        let mut designs = circ.board.designs.write();
+        let design = designs.current_mut();
+        let index = design.pins.iter().enumerate().find_map(|(i, p)| (p.id.deref() == id.deref()).then_some(i));
+
+        if let Some(index) = index {
+            design.pins.remove(index);
+        }
     }
 }
 
