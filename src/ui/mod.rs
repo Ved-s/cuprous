@@ -574,6 +574,7 @@ impl PropertyEditor {
 
                 let equal = props.windows(2).all(|w| w[0].1.imp().equals(w[1].1.imp()));
 
+                
                 ui.label(id.name.deref());
 
                 if let Some(old) = props[0].1.imp_mut().ui(ui, !equal) {
