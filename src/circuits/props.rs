@@ -18,7 +18,7 @@ impl Default for CircuitPropertyStore {
 impl CircuitPropertyStore {
     pub fn new(props: impl IntoIterator<Item = CircuitProperty>) -> Self {
         Self(RwLock::new(HashMap::from_iter(
-            Self::default_props().chain(props.into_iter()).map(|p| (p.id(), p)),
+            Self::default_props().chain(props).map(|p| (p.id(), p)),
         )))
     }
 

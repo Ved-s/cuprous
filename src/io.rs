@@ -4,17 +4,13 @@ use serde::{Deserialize, Serialize};
 use serde_intermediate::Intermediate;
 
 use crate::{
-    circuits::{PinDirection, CircuitPreview},
+    circuits::PinDirection,
     state::{UpdateTask, WireState},
-    vector::{Vec2i, Vec2u}, DynStaticStr, Direction2,
+    vector::{Vec2i, Vec2u}, DynStaticStr, Direction2, board::{Decoration, CircuitDesignPin, CircuitDesignStorage, CircuitDesign}, random_u128,
 };
 
 #[cfg(all(not(web_sys_unstable_apis), feature = "wasm"))]
 pub static GLOBAL_CLIPBOARD: crate::Mutex<Option<crate::io::CopyPasteData>> = crate::Mutex::new(None); 
-
-pub trait LoadingContext {
-    fn get_circuit_preview<'a>(&'a self, ty: &str) -> Option<&'a CircuitPreview>;
-}
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct NamedCircuitPinIdData {
@@ -37,6 +33,7 @@ pub struct WirePointData {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct WireData {
+    #[serde(default = "Vec::new")]
     pub points: Vec<(Vec2i, WirePointData)>,
 }
 
@@ -66,17 +63,53 @@ pub struct CircuitStateData {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct StateData {
+    #[serde(default = "Vec::new")]
     pub wires: Vec<Option<WireState>>,
+    #[serde(default = "Vec::new")]
     pub circuits: Vec<Option<CircuitStateData>>,
+    #[serde(default = "Vec::new")]
     pub queue: Vec<UpdateTask>,
+    #[serde(default = "Vec::new")]
     pub updates: Vec<(usize, Option<Duration>)>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+pub struct CircuitDesignStoreData {
+    pub current: usize,
+    pub designs: Vec<Option<CircuitDesignData>>
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct CircuitDesignData {
+    #[serde(default = "default_design_size")]
+    pub size: Vec2u,
+
+    #[serde(default = "Vec::new")]
+    pub pins: Vec<CircuitDesignPin>,
+    #[serde(default = "Vec::new")]
+    pub decorations: Vec<Decoration>
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 pub struct CircuitBoardData {
+
+    #[serde(default)]
+    pub name: String,
+
+    #[serde(default = "random_u128")]
+    pub uid: u128,
+
+    #[serde(default)]
     pub wires: Vec<Option<WireData>>,
+
+    #[serde(default)]
     pub circuits: Vec<Option<CircuitData>>,
+
+    #[serde(default)]
     pub states: Vec<Option<StateData>>,
+
+    #[serde(default = "default_design")]
+    pub designs: CircuitDesignStoreData,
 
     #[serde(default)]
     pub ordered: bool
@@ -135,4 +168,12 @@ fn is_unit(v: &Intermediate) -> bool {
 
 fn is_false(v: &bool) -> bool {
     !v
+}
+
+fn default_design() -> CircuitDesignStoreData {
+    CircuitDesignStorage::new(CircuitDesign::default_board_design()).save()
+}
+
+fn default_design_size() -> Vec2u {
+    2.into()
 }

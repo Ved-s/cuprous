@@ -1,9 +1,17 @@
-use std::{sync::Arc, time::Duration};
+use std::{
+    any::{Any, TypeId},
+    ops::{Deref, DerefMut},
+    sync::Arc,
+    time::Duration,
+};
 
 use serde::{Deserialize, Serialize};
+use serde_intermediate::Intermediate;
 
 use crate::{
-    board::ActiveCircuitBoard,
+    app::SimulationContext,
+    board::CircuitBoard,
+    io::CircuitCopyData,
     state::{CircuitState, InternalCircuitState, State, StateCollection, WireState},
     time::Instant,
     vector::{Vec2i, Vec2u, Vector},
@@ -12,24 +20,32 @@ use crate::{
 
 use self::props::CircuitPropertyStore;
 
+pub mod board;
 pub mod button;
 pub mod freq_meter;
 pub mod gates;
+pub mod pin;
 pub mod props;
 pub mod pullup;
 pub mod transistor;
 
-// so template is always valid
+// so templates are always valid
+
 #[cfg(test)]
 #[path = "../../templates/circuit_template.rs"]
 mod circuit_template;
 
+#[cfg(test)]
+#[path = "../../templates/directional_circuit_template.rs"]
+mod directional_circuit_template;
+
+#[derive(Default)]
 pub struct CircuitInfo {
     pub size: Vec2u,
     pub pins: Box<[CircuitPinInfo]>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InternalPinDirection {
     StateDependent { default: PinDirection },
     Inside,
@@ -73,13 +89,8 @@ impl CircuitPin {
             InternalPinDirection::Outside => PinDirection::Outside,
             InternalPinDirection::Custom => PinDirection::Custom,
             InternalPinDirection::StateDependent { default } => state
-                .read_circuit(self.id.circuit_id)
-                .map(|cs| {
-                    cs.read()
-                        .pin_dirs
-                        .get(self.id.id)
-                        .cloned()
-                        .unwrap_or(default)
+                .read_circuit(self.id.circuit_id, |cs| {
+                    cs.pin_dirs.get(self.id.id).cloned().unwrap_or(default)
                 })
                 .unwrap_or(default),
         }
@@ -87,30 +98,30 @@ impl CircuitPin {
 
     pub fn get_state(&self, state: &State) -> WireState {
         state
-            .read_circuit(self.id.circuit_id)
-            .map(|cs| cs.read().pins.get(self.id.id).copied().unwrap_or_default())
+            .read_circuit(self.id.circuit_id, |cs| {
+                cs.pins.get(self.id.id).copied().unwrap_or_default()
+            })
             .unwrap_or_default()
     }
 
-    pub fn set_input(&self, state: &State, value: WireState, update_state: bool) {
-        let circuit = state.get_circuit(self.id.circuit_id);
-        let mut circuit = circuit.write();
-
-        let current = circuit.pins.get_clone(self.id.id).unwrap_or_default();
-        if current == value {
-            return;
-        }
-
-        circuit.pins.set(value, self.id.id);
-        if update_state {
-            match self.dir {
-                InternalPinDirection::Custom => {
-                    state.update_pin_input(self.id.circuit_id, self.id.id)
-                }
-
-                _ => state.update_circuit_signals(self.id.circuit_id, Some(self.id.id)),
+    pub fn set_input(&self, state: &Arc<State>, value: WireState, update_state: bool) {
+        state.write_circuit(self.id.circuit_id, |circuit| {
+            let current = circuit.pins.get_clone(self.id.id).unwrap_or_default();
+            if current == value {
+                return;
             }
-        }
+
+            circuit.pins.set(value, self.id.id);
+            if update_state {
+                match self.dir {
+                    InternalPinDirection::Custom => {
+                        state.update_pin_input(self.id.circuit_id, self.id.id)
+                    }
+
+                    _ => state.update_circuit_signals(self.id.circuit_id, Some(self.id.id)),
+                }
+            }
+        });
     }
 
     pub fn name(&self) -> DynStaticStr {
@@ -173,13 +184,7 @@ pub struct CircuitPinInfo {
 impl CircuitPinInfo {
     pub fn get_state(&self, state_ctx: &CircuitStateContext) -> WireState {
         state_ctx
-            .read_circuit_state()
-            .map(|cs| {
-                cs.read()
-                    .pins
-                    .get_clone(self.pin.read().id.id)
-                    .unwrap_or_default()
-            })
+            .read_circuit_state(|cs| cs.pins.get_clone(self.pin.read().id.id).unwrap_or_default())
             .unwrap_or_default()
     }
 
@@ -187,28 +192,29 @@ impl CircuitPinInfo {
         self.pin
             .read()
             .connected_wire()
-            .map(|wire| state_ctx.global_state.read_wire(wire))
+            .map(|wire| state_ctx.global_state.get_wire(wire))
     }
 
     pub fn set_state(&self, state_ctx: &CircuitStateContext, value: WireState) {
         let pin = self.pin.read();
 
         let current = state_ctx
-            .read_circuit_state()
-            .map(|arc| arc.read().pins.get_clone(pin.id.id).unwrap_or_default())
+            .read_circuit_state(|cs| cs.pins.get_clone(pin.id.id).unwrap_or_default())
             .unwrap_or_default();
         if current == value {
             return;
         }
 
-        state_ctx
-            .get_circuit_state()
-            .write()
-            .pins
-            .set(value, pin.id.id);
+        state_ctx.write_circuit_state(|cs| {
+            cs.pins.set(value, pin.id.id);
+        });
         if let Some(wire) = pin.wire {
             state_ctx.global_state.update_wire(wire, false)
         }
+    }
+
+    pub fn get_direction(&self, state_ctx: &CircuitStateContext) -> PinDirection {
+        self.pin.read().direction(&state_ctx.global_state)
     }
 
     pub fn set_direction(&self, state_ctx: &CircuitStateContext, dir: PinDirection) {
@@ -217,33 +223,34 @@ impl CircuitPinInfo {
             (pin.id, pin.wire)
         };
         {
-            let state = state_ctx.get_circuit_state();
-            let mut state = state.write();
+            state_ctx.write_circuit_state(|cs| {
+                if cs.pin_dirs.get(pin_id.id).is_some_and(|d| *d == dir) {
+                    return;
+                }
 
-            if state.pin_dirs.get(pin_id.id).is_some_and(|d| *d == dir) {
-                return;
-            }
-
-            state.pin_dirs.set(dir, pin_id.id);
+                cs.pin_dirs.set(dir, pin_id.id);
+            });
         }
 
         match dir {
             PinDirection::Inside => match wire {
                 Some(wire) => state_ctx.global_state.update_wire(wire, true),
-                None => self
-                    .pin
-                    .read()
-                    .set_input(state_ctx.global_state, Default::default(), true),
+                None => {
+                    self.pin
+                        .read()
+                        .set_input(&state_ctx.global_state, Default::default(), true)
+                }
             },
             PinDirection::Outside => state_ctx
                 .global_state
                 .update_circuit_signals(pin_id.circuit_id, Some(pin_id.id)),
             PinDirection::Custom => match wire {
                 Some(wire) => state_ctx.global_state.update_wire(wire, true),
-                None => self
-                    .pin
-                    .read()
-                    .set_input(state_ctx.global_state, Default::default(), true),
+                None => {
+                    self.pin
+                        .read()
+                        .set_input(&state_ctx.global_state, Default::default(), true)
+                }
             },
         }
     }
@@ -278,6 +285,7 @@ pub struct Circuit {
     pub id: usize,
     pub pos: Vec2i,
 
+    pub board: Arc<CircuitBoard>,
     pub info: Arc<RwLock<CircuitInfo>>,
     pub imp: Arc<RwLock<Box<dyn CircuitImpl>>>,
     pub props: CircuitPropertyStore,
@@ -288,31 +296,42 @@ impl Circuit {
         id: usize,
         pos: Vec2i,
         preview: &CircuitPreview,
+        board: Arc<CircuitBoard>,
         props_override: Option<CircuitPropertyStore>,
-    ) -> Self {
-        let mut imp = preview.imp.create_impl();
+        imp_data: Option<&Intermediate>
+    ) -> Arc<Self> {
+        let imp = preview.imp.create_impl();
         let props = props_override.unwrap_or_else(|| preview.props.clone());
-        imp.apply_props(&props, None);
-        let mut pins = imp.create_pins(&props);
-        for pin in pins.iter_mut().enumerate() {
-            pin.1.pin.write().id = CircuitPinId::new(pin.0, id);
-        }
-        let info = Arc::new(RwLock::new(CircuitInfo {
-            size: imp.size(&props),
-            pins,
-        }));
 
-        Self {
+        let circuit = Arc::new(Self {
             ty: preview.imp.type_name(),
             id,
             pos,
-            info,
+            board,
+            info: Default::default(),
             imp: Arc::new(RwLock::new(imp)),
             props,
+        });
+
+        let mut imp = circuit.imp.write();
+        if let Some(data) = imp_data {
+            imp.load(&circuit, data, false);
         }
+
+        imp.apply_props(&circuit, None);
+        let mut pins = imp.create_pins(&circuit);
+        for pin in pins.iter_mut().enumerate() {
+            pin.1.pin.write().id = CircuitPinId::new(pin.0, id);
+        }
+        *circuit.info.write() = CircuitInfo {
+            size: imp.size(&circuit),
+            pins,
+        };
+        drop(imp);
+        circuit
     }
 
-    pub fn save(&self) -> crate::io::CircuitData {
+    pub fn save(self: &Arc<Self>) -> crate::io::CircuitData {
         let info = self.info.read();
         crate::io::CircuitData {
             ty: self.ty.clone(),
@@ -325,20 +344,18 @@ impl Circuit {
                     pin.connected_wire().map(|w| (pin.name(), w))
                 })
                 .collect(),
-            imp: self.imp.read().save(),
+            imp: self.imp.read().save(self, false),
             props: self.props.save(),
         }
     }
 
-    pub fn copy(&self, pos: Vec2u, state: &State) -> crate::io::CircuitCopyData {
+    pub fn copy(self: &Arc<Self>, pos: Vec2u, state: &State) -> crate::io::CircuitCopyData {
         let internal = state
-            .read_circuit(self.id)
-            .map(|c| {
-                let circuit = c.read();
+            .read_circuit(self.id, |circuit| {
                 circuit
                     .internal
                     .as_ref()
-                    .map(|i| i.serialize())
+                    .map(|i| i.serialize(true))
                     .unwrap_or_default()
             })
             .unwrap_or_default();
@@ -346,7 +363,7 @@ impl Circuit {
         crate::io::CircuitCopyData {
             ty: self.ty.clone(),
             pos,
-            imp: self.imp.read().save(),
+            imp: self.imp.read().save(self, true),
             internal,
             update: state
                 .updates
@@ -359,56 +376,92 @@ impl Circuit {
             props: self.props.save(),
         }
     }
+
+    pub fn read_imp<T: CircuitImpl, R>(&self, reader: impl FnOnce(&T) -> R) -> Option<R> {
+        let imp = self.imp.read();
+        let imp = imp.deref();
+        if TypeId::of::<T>() != imp.deref().type_id() {
+            None
+        } else {
+            let imp = unsafe { &*(imp.deref() as *const dyn CircuitImpl as *const T) };
+            let res = reader(imp);
+            Some(res)
+        }
+    }
+
+    pub fn write_imp<T: CircuitImpl, R>(&self, writer: impl FnOnce(&mut T) -> R) -> Option<R> {
+        let mut imp = self.imp.write();
+        let ty = imp.deref().deref().type_id();
+        if TypeId::of::<T>() != ty {
+            None
+        } else {
+            let imp =
+                unsafe { &mut *(imp.deref_mut().deref_mut() as *mut dyn CircuitImpl as *mut T) };
+            let res = writer(imp);
+            Some(res)
+        }
+    }
 }
 
-pub struct CircuitStateContext<'a> {
-    pub global_state: &'a State,
-    pub circuit: &'a Circuit,
+#[derive(Clone)]
+pub struct CircuitStateContext {
+    pub global_state: Arc<State>,
+    pub circuit: Arc<Circuit>,
 }
 
-impl<'a> CircuitStateContext<'a> {
-    pub fn new(state: &'a State, circuit: &'a Circuit) -> Self {
+impl CircuitStateContext {
+    pub fn new(state: Arc<State>, circuit: Arc<Circuit>) -> Self {
         Self {
             global_state: state,
             circuit,
         }
     }
 
-    pub fn read_circuit_state(&self) -> Option<Arc<RwLock<CircuitState>>> {
-        self.global_state.read_circuit(self.circuit.id)
+    pub fn read_circuit_state<R>(&self, reader: impl FnOnce(&CircuitState) -> R) -> Option<R> {
+        self.global_state.read_circuit(self.circuit.id, reader)
     }
 
-    pub fn get_circuit_state(&self) -> Arc<RwLock<CircuitState>> {
-        self.global_state.get_circuit(self.circuit.id)
+    pub fn write_circuit_state<R>(&self, writer: impl FnOnce(&mut CircuitState) -> R) -> R {
+        self.global_state.write_circuit(self.circuit.id, writer)
+    }
+
+    pub fn clone_circuit_internal_state<T: InternalCircuitState + Clone>(&self) -> Option<T> {
+        self.global_state
+            .read_circuit(self.circuit.id, |c| c.get_internal::<T>().cloned())
+            .flatten()
     }
 
     pub fn read_circuit_internal_state<T: InternalCircuitState, R>(
         &self,
         reader: impl FnOnce(&T) -> R,
     ) -> Option<R> {
-        Some(reader(
-            self.global_state
-                .read_circuit(self.circuit.id)?
-                .read()
-                .get_internal()?,
-        ))
+        self.global_state
+            .read_circuit(self.circuit.id, |c| c.get_internal().map(reader))
+            .flatten()
     }
 
     pub fn write_circuit_internal_state<T: InternalCircuitState + Default, R>(
         &self,
         writer: impl FnOnce(&mut T) -> R,
     ) -> R {
-        writer(
-            self.global_state
-                .get_circuit(self.circuit.id)
-                .write()
-                .get_internal_mut(),
-        )
+        self.global_state
+            .write_circuit(self.circuit.id, |c| writer(c.get_internal_mut()))
+    }
+
+    pub fn set_circuit_internal_state<T: InternalCircuitState>(&self, value: Option<T>) {
+        self.global_state
+            .write_circuit(self.circuit.id, |c| c.set_internal(value));
     }
 
     pub fn set_update_interval(&self, interval: Option<Duration>) {
-        self.global_state
-            .set_circuit_update_interval(self.circuit.id, interval);
+        match interval {
+            Some(dur) => self
+                .global_state
+                .set_circuit_update_interval(self.circuit.id, dur),
+            None => self
+                .global_state
+                .reset_circuit_update_interval(self.circuit.id),
+        }
     }
 
     pub fn props(&self) -> &CircuitPropertyStore {
@@ -417,40 +470,59 @@ impl<'a> CircuitStateContext<'a> {
 }
 
 #[allow(unused_variables)]
-pub trait CircuitImpl: Send + Sync {
-    fn draw(&self, state_ctx: &CircuitStateContext, paint_ctx: &PaintContext);
+pub trait CircuitImpl: Any + Send + Sync {
+    fn draw(&self, ctx: &CircuitStateContext, paint_ctx: &PaintContext);
 
     /// After calling this, consider all connected pins invalid
-    fn create_pins(&mut self, props: &CircuitPropertyStore) -> Box<[CircuitPinInfo]>;
+    fn create_pins(&mut self, circ: &Arc<Circuit>) -> Box<[CircuitPinInfo]>;
 
-    fn update_signals(&self, state_ctx: &CircuitStateContext, changed_pin: Option<usize>);
+    fn update_signals(&self, ctx: &CircuitStateContext, changed_pin: Option<usize>);
 
     /// Called once every period determined by `Self::update_interval`
-    fn update(&self, state_ctx: &CircuitStateContext) {}
+    fn update(&self, ctx: &CircuitStateContext) {}
 
-    /// Called once on circuit creation, use for update interval setup
-    fn init_state(&self, state_ctx: &CircuitStateContext) {}
+    /// Called once on circuit state creation or load<br>
+    /// Called after `circuit_init`<br>
+    /// `first_init`: `true` on new state creation, `false` on loaded state
+    fn state_init(&self, ctx: &CircuitStateContext, first_init: bool) {}
+
+    /// Called once on circuit placement or load<br>
+    /// Called before all calls to `state_init`<br>
+    /// `first_init`: `true` on placement, `false` on load
+    fn circuit_init(&mut self, circ: &Arc<Circuit>, first_init: bool) {}
+
+    /// Called once on circuit removal for each active state<br>
+    /// Called before `remove_circuit`<br>
+    fn state_remove(&self, ctx: &CircuitStateContext) {}
+
+    /// Called once on circuit removal<br>
+    /// Called after all calls to `remove_state`<br>
+    fn circuit_remove(&mut self, circ: &Arc<Circuit>) {}
 
     /// Called after `Self::update` to determine next update timestamp
-    fn update_interval(&self, state_ctx: &CircuitStateContext) -> Option<Duration> {
+    fn update_interval(&self, ctx: &CircuitStateContext) -> Option<Duration> {
         None
     }
 
-    /// Whether to automatically draw pins as small circuits
+    /// Whether to automatically draw pins before call to `Self::draw`
     fn draw_pin_points(&self) -> bool {
         true
     }
 
-    /// Serialize circuit parameters. NOT for circuit state
-    fn save(&self) -> serde_intermediate::Intermediate {
+    /// Serialize circuit parameters. NOT for circuit state<br>
+    /// `copy`: `true` if data is saved for copying
+    fn save(&self, circ: &Arc<Circuit>, copy: bool) -> serde_intermediate::Intermediate {
         ().into()
     }
 
-    fn load(&mut self, data: &serde_intermediate::Intermediate) {}
+    fn load(&mut self, circ: &Arc<Circuit>, data: &serde_intermediate::Intermediate, paste: bool) {}
 
+    /// Load data for internal state. Global states may not be loaded yet.
     fn load_internal(
         &self,
+        ctx: &CircuitStateContext,
         data: &serde_intermediate::Intermediate,
+        paste: bool,
     ) -> Option<Box<dyn InternalCircuitState>> {
         None
     }
@@ -458,7 +530,7 @@ pub trait CircuitImpl: Send + Sync {
     /// Custom handler for [`PinDirection::Custom`]
     fn custom_pin_mutate_state(
         &self,
-        state_ctx: &CircuitStateContext,
+        ctx: &CircuitStateContext,
         pin: usize,
         state: &mut WireState,
     ) {
@@ -468,9 +540,9 @@ pub trait CircuitImpl: Send + Sync {
     fn prop_changed(&self, prop_id: &str, resize: &mut bool, recreate_pins: &mut bool) {}
 
     /// Called after all circuit parameters were successfully updated
-    fn apply_props(&mut self, props: &CircuitPropertyStore, changed: Option<&str>) {}
+    fn apply_props(&mut self, circ: &Arc<Circuit>, changed: Option<&str>) {}
 
-    fn size(&self, props: &CircuitPropertyStore) -> Vec2u;
+    fn size(&self, circ: &Arc<Circuit>) -> Vec2u;
 }
 
 pub struct CircuitPreview {
@@ -482,7 +554,11 @@ pub struct CircuitPreview {
 impl CircuitPreview {
     pub fn new(imp: Box<dyn CircuitPreviewImpl>, props: CircuitPropertyStore) -> Self {
         let description = RwLock::new(imp.describe(&props));
-        Self { imp, props, description  }
+        Self {
+            imp,
+            props,
+            description,
+        }
     }
 
     pub fn load_with_data(
@@ -494,22 +570,26 @@ impl CircuitPreview {
         Self::new(imp, props)
     }
 
-    pub fn load_new(
-        &self,
-        imp: &serde_intermediate::Intermediate,
-        props_data: &crate::io::CircuitPropertyStoreData,
-    ) -> Option<Self> {
-        let imp = self.imp.load_impl_data(imp)?;
+    pub fn load_copy(&self, data: &CircuitCopyData, ctx: &Arc<SimulationContext>) -> Option<Self> {
+        let imp = self.imp.load_copy_data(&data.imp, &data.internal, ctx)?;
         let props = imp.default_props();
-        props.load(props_data);
+        props.load(&data.props);
         let description = RwLock::new(imp.describe(&props));
-        Some(Self { imp, props, description })
+        Some(Self {
+            imp,
+            props,
+            description,
+        })
     }
 
     pub fn from_impl(imp: Box<dyn CircuitPreviewImpl>) -> Self {
         let props = imp.default_props();
         let description = RwLock::new(imp.describe(&props));
-        Self { imp, props, description }
+        Self {
+            imp,
+            props,
+            description,
+        }
     }
 
     pub fn draw(&self, ctx: &PaintContext, in_world: bool) {
@@ -527,7 +607,7 @@ impl CircuitPreview {
         }
     }
 
-    pub fn prop_changed(&self) {
+    pub fn redescribe(&self) {
         *self.description.write() = self.imp.describe(&self.props);
     }
 
@@ -536,15 +616,19 @@ impl CircuitPreview {
     }
 }
 
-pub trait CircuitPreviewImpl {
+pub trait CircuitPreviewImpl: Send + Sync {
     fn type_name(&self) -> DynStaticStr;
     fn display_name(&self) -> DynStaticStr;
     fn draw_preview(&self, props: &CircuitPropertyStore, ctx: &PaintContext, in_world: bool);
     fn describe(&self, props: &CircuitPropertyStore) -> DynCircuitDescription;
     fn create_impl(&self) -> Box<dyn CircuitImpl>;
-    fn load_impl_data(
+
+    /// For loading data created with `CircuidImpl::save(circuit, true)` and `InternalCircuitState::serialize(true)`
+    fn load_copy_data(
         &self,
-        data: &serde_intermediate::Intermediate,
+        imp: &serde_intermediate::Intermediate,
+        internal: &serde_intermediate::Intermediate,
+        ctx: &Arc<SimulationContext>,
     ) -> Option<Box<dyn CircuitPreviewImpl>>;
     fn default_props(&self) -> CircuitPropertyStore;
 }
@@ -557,6 +641,7 @@ pub struct CircuitNode {
 
 #[derive(Clone)]
 pub struct CircuitPinDescription {
+    pub active: bool,
     pub display_name: DynStaticStr,
     pub display_dir: Option<Direction4>,
     pub dir: InternalPinDirection,
@@ -586,6 +671,19 @@ impl CircuitPinDescription {
             self.display_dir,
         )
     }
+
+    pub fn to_active_info(&self) -> Option<CircuitPinInfo> {
+        match self.active {
+            false => None,
+            true => Some(CircuitPinInfo::new(
+                self.pos,
+                self.dir,
+                self.name.clone(),
+                self.display_name.clone(),
+                self.display_dir,
+            )),
+        }
+    }
 }
 
 impl<const P: usize> CircuitDescription<P> {
@@ -614,18 +712,29 @@ const fn rotate_pos(pos: [u32; 2], size: [u32; 2], dir: Direction4) -> [u32; 2] 
 }
 
 #[macro_export]
+macro_rules! expr_or_default {
+    ($e:expr, $def:expr) => {
+        $e
+    };
+    (, $def:expr) => {
+        $def
+    };
+}
+
+#[macro_export]
 macro_rules! describe_directional_circuit {
     (
         default_dir: $default_dir:expr,
         dir: $dir:expr,
-        size: [$width:literal, $height: literal],
+        size: [$width:expr, $height: expr],
 
         $(
             $pin_name:literal:
                 $pin_dir:expr,
                 $pin_dname:literal,
                 $pin_ddir:expr,
-                [$pin_x:literal, $pin_y: literal]
+                [$pin_x:expr, $pin_y: expr]
+                $(, active: $active:expr)?
         ),*
         $(,)?
     ) => {
@@ -643,12 +752,14 @@ macro_rules! describe_directional_circuit {
 
             {
                 use InternalPinDirection::*;
+                use $crate::expr_or_default;
 
                 $crate::circuits::CircuitDescription {
                     size: size_rotated.into(),
                     pins: [
                         $(
                             $crate::circuits::CircuitPinDescription {
+                                active: expr_or_default!($($active)?, true),
                                 name: $pin_name.into(),
                                 dir: $pin_dir,
                                 display_name: $pin_dname.into(),
@@ -664,21 +775,21 @@ macro_rules! describe_directional_circuit {
     };
 }
 
-
 #[macro_export]
 macro_rules! describe_directional_custom_circuit {
     (
         default_dir: $default_dir:expr,
         dir: $dir:expr,
         flip: $flip:expr,
-        size: [$width:literal, $height: literal],
+        size: [$width:expr, $height: expr],
 
         $(
             $pin_name:literal:
                 $pin_dir:expr,
                 $pin_dname:literal,
                 $pin_ddir:expr,
-                [$pin_x:literal, $pin_y: literal],
+                [$pin_x:expr, $pin_y: expr],
+                $(active: $active:expr,)?
         )*
 
         dir_proc: |$dir_proc_param:ident| $dir_proc_body:expr,
@@ -699,12 +810,14 @@ macro_rules! describe_directional_custom_circuit {
 
             {
                 use InternalPinDirection::*;
+                use $crate::expr_or_default;
 
                 $crate::circuits::CircuitDescription {
                     size: size_rotated.into(),
                     pins: [
                         $(
                             $crate::circuits::CircuitPinDescription {
+                                active: expr_or_default!($($active)?, true),
                                 name: $pin_name.into(),
                                 dir: $pin_dir,
                                 display_name: $pin_dname.into(),

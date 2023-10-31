@@ -1,41 +1,50 @@
-use std::{any::TypeId, collections::HashSet, f32::consts::TAU, ops::Deref, sync::Arc};
+use std::{any::TypeId, collections::HashSet, f32::consts::TAU, hash::Hash, ops::Deref, sync::Arc};
 
 use eframe::{
     egui::{
         panel::{self, PanelState},
-        FontSelection, Grid, Id, InnerResponse, Key, Label, Margin, PointerButton, Response, Sense,
-        SidePanel, TextStyle, Ui, Widget, WidgetText,
+        CursorIcon, FontSelection, Grid, Id, InnerResponse, Key, Label, Margin, PointerButton,
+        Response, Sense, SidePanel, TextStyle, Ui, Widget, WidgetInfo, WidgetText, WidgetType,
     },
     epaint::{Color32, PathShape, Rounding, Stroke, TextShape},
 };
 use emath::{pos2, vec2, Rect, Rot2, Vec2};
+use serde::{Deserialize, Serialize};
+
+pub mod designer;
+pub mod drawing;
+pub mod editor;
+pub mod selection;
 
 use crate::{
     circuits::props::{CircuitProperty, CircuitPropertyImpl, CircuitPropertyStore},
     DynStaticStr, PaintContext, RwLock,
 };
 
-pub enum InventoryItemGroup {
-    SingleItem(Box<dyn InventoryItem>),
-    Group(Vec<Box<dyn InventoryItem>>),
+pub enum InventoryItemGroup<I> {
+    SingleItem(Box<dyn InventoryItem<I>>),
+    Group(Vec<Box<dyn InventoryItem<I>>>),
 }
 
-pub trait InventoryItem {
-    fn id(&self) -> DynStaticStr;
+pub trait InventoryItem<I> {
+    fn id(&self) -> I;
     fn draw(&self, ctx: &PaintContext);
 }
 
-pub struct Inventory<'a> {
-    pub selected: &'a mut Option<DynStaticStr>,
-    pub groups: &'a Vec<InventoryItemGroup>,
-    pub item_size: Vec2,
-    pub item_margin: Margin,
-    pub margin: Margin,
+pub struct Inventory<'a, I>
+where
+    I: Eq + Clone + Hash + Send + Sync + 'static,
+{
+    selected: &'a mut Option<I>,
+    groups: &'a [InventoryItemGroup<I>],
+    item_size: Vec2,
+    item_margin: Margin,
+    margin: Margin,
 }
 
-#[derive(Clone, Default)]
-struct InventoryMemory {
-    last_group_items: Arc<RwLock<HashSet<DynStaticStr>>>,
+#[derive(Clone)]
+struct InventoryMemory<I> {
+    last_group_items: Arc<RwLock<HashSet<I>>>,
 }
 
 const NUMBER_KEYS: [Key; 10] = [
@@ -51,15 +60,28 @@ const NUMBER_KEYS: [Key; 10] = [
     Key::Num9,
 ];
 
-impl Inventory<'_> {
+impl<'a, I> Inventory<'a, I>
+where
+    I: Eq + Clone + Hash + Send + Sync + 'static,
+{
+    pub fn new(selected: &'a mut Option<I>, groups: &'a [InventoryItemGroup<I>]) -> Self {
+        Self {
+            selected,
+            groups,
+            item_size: vec2(28.0, 28.0),
+            item_margin: Margin::same(6.0),
+            margin: Margin::default(),
+        }
+    }
+
     fn get_group_icon_item_id(
-        group: &[Box<dyn InventoryItem>],
+        group: &[Box<dyn InventoryItem<I>>],
         ui: &Ui,
         self_id: Id,
     ) -> Option<usize> {
         ui.memory(|mem| {
             mem.data
-                .get_temp::<InventoryMemory>(self_id)
+                .get_temp::<InventoryMemory<I>>(self_id)
                 .and_then(|mem| {
                     let last_group_items = mem.last_group_items.read();
                     for (i, item) in group.iter().enumerate() {
@@ -78,7 +100,6 @@ impl Inventory<'_> {
         current_index: Option<usize>,
         current_sub_index: Option<usize>,
     ) -> (Option<usize>, Option<usize>) {
-
         if ui.ctx().wants_keyboard_input() {
             return (current_index, current_sub_index);
         }
@@ -144,11 +165,13 @@ impl Inventory<'_> {
         }
         (current_index, current_sub_index)
     }
-}
 
-impl Widget for Inventory<'_> {
-    fn ui(mut self, ui: &mut eframe::egui::Ui) -> eframe::egui::Response {
-        let (selected_item, selected_sub_item) = match self.selected {
+    fn ui(
+        mut self,
+        ui: &mut eframe::egui::Ui,
+        name_resolver: impl Fn(&I) -> Option<DynStaticStr>,
+    ) -> eframe::egui::Response {
+        let (selected_item, selected_sub_item) = match &self.selected {
             None => (None, None),
             Some(selected) => self
                 .groups
@@ -199,7 +222,7 @@ impl Widget for Inventory<'_> {
         let (id, rect) = ui.allocate_space(vec2(width, full_item_size.y) + self.margin.sum());
         let rect = apply_margin_to_rect(rect, self.margin);
 
-        let response = ui.interact(rect, id, Sense::click());
+        let mut response = ui.interact(rect, id, Sense::click());
 
         let paint = ui.painter_at(rect);
         let rounding = Rounding::same(3.0);
@@ -209,6 +232,48 @@ impl Widget for Inventory<'_> {
             Color32::from_gray(32),
             Stroke::new(1.0, Color32::from_gray(100)),
         );
+
+        if let Some(selected) = &self.selected {
+            let name = name_resolver(selected);
+
+            if let Some(name) = name {
+                let galley = WidgetText::from(name.deref())
+                    .fallback_text_style(TextStyle::Monospace)
+                    .into_galley(
+                        ui,
+                        Some(false),
+                        f32::INFINITY,
+                        FontSelection::Style(TextStyle::Monospace),
+                    )
+                    .galley;
+                let inv_width = rect.width();
+                let size = galley.rect.size() + vec2(12.0, 6.0);
+                let width_diff = size.x - (inv_width - 3.0);
+
+                let rect = Rect::from_min_size(rect.left_bottom() + vec2(3.0, 0.0), size);
+                ui.allocate_rect(rect, Sense::hover());
+                let paint = ui.painter();
+                paint.rect(
+                    rect,
+                    Rounding {
+                        nw: 0.0,
+                        ne: width_diff.clamp(0.0, 3.0),
+                        sw: 3.0,
+                        se: 3.0,
+                    },
+                    ui.style().visuals.panel_fill,
+                    ui.style().visuals.window_stroke,
+                );
+
+                paint.add(TextShape {
+                    pos: rect.min + vec2(6.0, 3.0),
+                    galley,
+                    underline: Stroke::NONE,
+                    override_text_color: Some(ui.style().visuals.text_color()),
+                    angle: 0.0,
+                });
+            }
+        }
 
         let paint_ctx = PaintContext::new_on_ui(ui, rect, 1.0);
 
@@ -243,11 +308,17 @@ impl Widget for Inventory<'_> {
 
                         if click_pos.is_some_and(|pos| rect.contains(pos)) {
                             let id = item.id();
-                            if self.selected.as_ref().is_some_and(|sel| *sel == id) {
-                                *self.selected = None;
-                            } else {
-                                *self.selected = Some(id);
-                            }
+
+                            *self.selected = match &self.selected {
+                                Some(sel) => {
+                                    if *sel == id {
+                                        None
+                                    } else {
+                                        Some(id)
+                                    }
+                                }
+                                None => Some(id),
+                            };
                             selected_changed = true;
                         }
                         let rect = apply_margin_to_rect(rect, self.item_margin);
@@ -281,11 +352,16 @@ impl Widget for Inventory<'_> {
                             }
                             if click_pos.is_some_and(|pos| rect.contains(pos)) {
                                 let id = item.id();
-                                if self.selected.as_ref().is_some_and(|sel| *sel == id) {
-                                    *self.selected = None;
-                                } else {
-                                    *self.selected = Some(id);
-                                }
+                                *self.selected = match &self.selected {
+                                    Some(sel) => {
+                                        if *sel == id {
+                                            None
+                                        } else {
+                                            Some(id)
+                                        }
+                                    }
+                                    None => Some(id),
+                                };
                                 selected_changed = true;
                             }
                             let rect = apply_margin_to_rect(rect, self.item_margin);
@@ -307,11 +383,16 @@ impl Widget for Inventory<'_> {
                     }
                     if click_pos.is_some_and(|pos| rect.contains(pos)) {
                         let id = item.id();
-                        if self.selected.as_ref().is_some_and(|sel| *sel == id) {
-                            *self.selected = None;
-                        } else {
-                            *self.selected = Some(id);
-                        }
+                        *self.selected = match &self.selected {
+                            Some(sel) => {
+                                if *sel == id {
+                                    None
+                                } else {
+                                    Some(id)
+                                }
+                            }
+                            None => Some(id),
+                        };
                     }
                     let rect = apply_margin_to_rect(rect, self.item_margin);
                     let item_ctx = paint_ctx.with_rect(rect);
@@ -322,21 +403,61 @@ impl Widget for Inventory<'_> {
         }
 
         if selected_changed {
-            if let Some(selected_id) = self.selected.as_ref() {
+            response.mark_changed();
+            if let Some(selected) = &self.selected {
                 if let Some(group) = selected_group {
                     ui.memory_mut(|mem| {
-                        let m = mem.data.get_temp_mut_or_default::<InventoryMemory>(id);
+                        let m =
+                            mem.data
+                                .get_temp_mut_or_insert_with::<InventoryMemory<I>>(id, || {
+                                    InventoryMemory {
+                                        last_group_items: Default::default(),
+                                    }
+                                });
                         let mut last_group_items = m.last_group_items.write();
                         for item in group {
-                            last_group_items.remove(item.id().deref());
+                            last_group_items.remove(&item.id());
                         }
-                        last_group_items.insert(selected_id.clone());
+                        last_group_items.insert(selected.clone());
                     });
                 }
             }
         }
 
         response
+    }
+}
+
+pub struct PaintableInventoryItem<I, F>
+where
+    I: Clone,
+    F: Fn(&PaintContext),
+{
+    id: I,
+    painter: F,
+}
+
+impl<I, F> PaintableInventoryItem<I, F>
+where
+    I: Clone,
+    F: Fn(&PaintContext),
+{
+    pub fn new(id: I, painter: F) -> Self {
+        Self { id, painter }
+    }
+}
+
+impl<I, F> InventoryItem<I> for PaintableInventoryItem<I, F>
+where
+    I: Clone,
+    F: Fn(&PaintContext),
+{
+    fn id(&self) -> I {
+        self.id.clone()
+    }
+
+    fn draw(&self, ctx: &PaintContext) {
+        (self.painter)(ctx);
     }
 }
 
@@ -424,7 +545,7 @@ impl PropertyEditor {
                             }),
                     );
                 for str in self.ids_cache_remove.iter() {
-                    self.ids_cache.remove(str.deref());
+                    self.ids_cache.remove(str);
                 }
             }
             stores.push(store);
@@ -453,7 +574,6 @@ impl PropertyEditor {
 
                 let equal = props.windows(2).all(|w| w[0].1.imp().equals(w[1].1.imp()));
 
-                
                 ui.label(id.name.deref());
 
                 if let Some(old) = props[0].1.imp_mut().ui(ui, !equal) {
@@ -569,150 +689,539 @@ impl CollapsibleSidePanel {
             side,
         } = self;
 
-        ui.push_id(id, |ui| {
-            let open_id = ui.id().with("_collapsed");
-            let open = ui.ctx().data(|mem| mem.get_temp(open_id).unwrap_or(true));
+        let resp = ui
+            .push_id(id, |ui| {
+                let open_id = ui.id().with("_collapsed");
+                let open = ui.ctx().data(|mem| mem.get_temp(open_id).unwrap_or(true));
 
-            let panel_id = ui.id().with("_panel");
-            let animation = ui
-                .ctx()
-                .animate_bool(ui.id().with("_open-anim"), open && self.active);
+                let panel_id = ui.id().with("_panel");
+                let animation = ui
+                    .ctx()
+                    .animate_bool(ui.id().with("_open-anim"), open && self.active);
 
-            let expanded_width = PanelState::load(ui.ctx(), panel_id)
-                .map(|state| state.rect.width())
-                .unwrap_or_default();
+                let expanded_width = PanelState::load(ui.ctx(), panel_id)
+                    .map(|state| state.rect.width())
+                    .unwrap_or_default();
 
-            let offset = if animation > 0.0 {
-                expanded_width * animation
-            } else {
-                0.0
-            };
-
-            let painter = ui.painter();
-            let header_text = text
-                .fallback_text_style(TextStyle::Monospace)
-                .into_galley(
-                    ui,
-                    Some(false),
-                    f32::INFINITY,
-                    FontSelection::Style(TextStyle::Monospace),
-                )
-                .galley;
-
-            let size = vec2(
-                header_text.rect.height() + 10.0,
-                header_text.rect.width() + header_text.rect.height() + 20.0,
-            );
-            let pos = match side {
-                panel::Side::Left => pos2(offset, header_offset),
-                panel::Side::Right => pos2(ui.max_rect().width() - size.x - offset, header_offset),
-            };
-
-            let text_color =
-                ui.style()
-                    .visuals
-                    .text_color()
-                    .gamma_multiply(if active { 1.0 } else { 0.6 });
-            let arrow_rect = Rect::from_center_size(
-                pos + vec2(size.x / 2.0, size.x / 2.0),
-                vec2(size.x / 3.0, size.x / 3.0),
-            );
-
-            let mut points = vec![
-                arrow_rect.right_top(),
-                arrow_rect.left_center(),
-                arrow_rect.right_bottom(),
-            ];
-            let rotation = match side {
-                panel::Side::Left => Rot2::from_angle((1.0 - animation) * TAU * 0.5),
-                panel::Side::Right => Rot2::from_angle(animation * TAU * 0.5),
-            };
-            for p in &mut points {
-                *p = arrow_rect.center() + rotation * (*p - arrow_rect.center());
-            }
-
-            let rect = Rect::from_min_size(pos, size);
-
-            let rounding = match side {
-                panel::Side::Left => Rounding {
-                    ne: 5.0,
-                    se: 5.0,
-                    ..Default::default()
-                },
-                panel::Side::Right => Rounding {
-                    nw: 5.0,
-                    sw: 5.0,
-                    ..Default::default()
-                },
-            };
-
-            painter.rect(
-                rect,
-                rounding,
-                ui.style().visuals.panel_fill,
-                ui.style().visuals.window_stroke,
-            );
-
-            painter.add(PathShape {
-                points,
-                closed: true,
-                fill: text_color,
-                stroke: Stroke::NONE,
-            });
-
-            let (text_pos, text_angle) = match side {
-                panel::Side::Left => (vec2(size.x - 5.0, size.x), TAU * 0.25),
-                panel::Side::Right => (vec2(5.0, size.y - 10.0), TAU * 0.75),
-            };
-
-            painter.add(TextShape {
-                pos: pos + text_pos,
-                galley: header_text,
-                underline: Stroke::NONE,
-                override_text_color: Some(text_color),
-                angle: text_angle,
-            });
-
-            let response = ui.interact(rect, ui.id().with("_header"), Sense::click_and_drag());
-            if response.clicked() {
-                ui.ctx().data_mut(|data| {
-                    let open = data.get_temp_mut_or(open_id, true);
-                    *open = !*open;
-                })
-            }
-
-            let clip = ui.clip_rect();
-            let full_rect = match side {
-                panel::Side::Left => Rect::from_min_size(pos2(0.0, 0.0), vec2(rect.right(), clip.height())),
-                panel::Side::Right => Rect::from_min_size(pos2(rect.left(), 0.0), vec2(clip.width() - rect.left(), clip.height())),
-            };
-
-            let panel = if animation > 0.0 {
-                let panel_offset = match side {
-                    panel::Side::Left => (1.0 - animation) * -expanded_width,
-                    panel::Side::Right => (1.0 - animation) * expanded_width,
+                let panel_width = if animation > 0.0 {
+                    expanded_width * animation
+                } else {
+                    0.0
                 };
 
-                let rect = Rect::from_min_size(clip.min + vec2(panel_offset, 0.0), clip.size());
+                let painter = ui.painter();
+                let header_text = text
+                    .fallback_text_style(TextStyle::Monospace)
+                    .into_galley(
+                        ui,
+                        Some(false),
+                        f32::INFINITY,
+                        FontSelection::Style(TextStyle::Monospace),
+                    )
+                    .galley;
 
-                let mut panel_ui = ui.child_ui(rect, *ui.layout());
-
-                let p = SidePanel::new(side, panel_id).resizable(false);
-                let p = match panel_transformer {
-                    Some(pt) => pt(p),
-                    None => p,
+                let size = vec2(
+                    header_text.rect.height() + 10.0,
+                    header_text.rect.width() + header_text.rect.height() + 20.0,
+                );
+                let pos = match side {
+                    panel::Side::Left => pos2(panel_width, header_offset),
+                    panel::Side::Right => {
+                        pos2(ui.max_rect().width() - size.x - panel_width, header_offset)
+                    }
                 };
-                Some(p.show_inside(&mut panel_ui, add_content))
+
+                let text_color =
+                    ui.style()
+                        .visuals
+                        .text_color()
+                        .gamma_multiply(if active { 1.0 } else { 0.6 });
+                let arrow_rect = Rect::from_center_size(
+                    pos + vec2(size.x / 2.0, size.x / 2.0),
+                    vec2(size.x / 3.0, size.x / 3.0),
+                );
+
+                let mut points = vec![
+                    arrow_rect.right_top(),
+                    arrow_rect.left_center(),
+                    arrow_rect.right_bottom(),
+                ];
+                let rotation = match side {
+                    panel::Side::Left => Rot2::from_angle((1.0 - animation) * TAU * 0.5),
+                    panel::Side::Right => Rot2::from_angle(animation * TAU * 0.5),
+                };
+                for p in &mut points {
+                    *p = arrow_rect.center() + rotation * (*p - arrow_rect.center());
+                }
+
+                let rect = Rect::from_min_size(pos, size);
+
+                let rounding = match side {
+                    panel::Side::Left => Rounding {
+                        ne: 5.0,
+                        se: 5.0,
+                        ..Default::default()
+                    },
+                    panel::Side::Right => Rounding {
+                        nw: 5.0,
+                        sw: 5.0,
+                        ..Default::default()
+                    },
+                };
+
+                painter.rect(
+                    rect,
+                    rounding,
+                    ui.style().visuals.panel_fill,
+                    ui.style().visuals.window_stroke,
+                );
+
+                painter.add(PathShape {
+                    points,
+                    closed: true,
+                    fill: text_color,
+                    stroke: Stroke::NONE,
+                });
+
+                let (text_pos, text_angle) = match side {
+                    panel::Side::Left => (vec2(size.x - 5.0, size.x), TAU * 0.25),
+                    panel::Side::Right => (vec2(5.0, size.y - 10.0), TAU * 0.75),
+                };
+
+                painter.add(TextShape {
+                    pos: pos + text_pos,
+                    galley: header_text,
+                    underline: Stroke::NONE,
+                    override_text_color: Some(text_color),
+                    angle: text_angle,
+                });
+
+                let response = ui.interact(rect, ui.id().with("_header"), Sense::click_and_drag());
+                if response.clicked() {
+                    ui.ctx().data_mut(|data| {
+                        let open = data.get_temp_mut_or(open_id, true);
+                        *open = !*open;
+                    })
+                }
+
+                let clip = ui.clip_rect();
+                let full_rect = match side {
+                    panel::Side::Left => {
+                        Rect::from_min_size(pos2(0.0, 0.0), vec2(rect.right(), clip.height()))
+                    }
+                    panel::Side::Right => Rect::from_min_size(
+                        pos2(rect.left(), 0.0),
+                        vec2(clip.width() - rect.left(), clip.height()),
+                    ),
+                };
+
+                let panel = if animation > 0.0 {
+                    let panel_offset = match side {
+                        panel::Side::Left => (1.0 - animation) * -expanded_width,
+                        panel::Side::Right => (1.0 - animation) * expanded_width,
+                    };
+
+                    let panel_rect = match side {
+                        panel::Side::Left => {
+                            Rect::from_min_size(pos2(0.0, 0.0), vec2(panel_width, clip.height()))
+                        }
+                        panel::Side::Right => Rect::from_min_size(
+                            pos2(ui.max_rect().width() - panel_width, 0.0),
+                            vec2(panel_width, clip.height()),
+                        ),
+                    };
+
+                    ui.interact(panel_rect, id, Sense::click_and_drag());
+
+                    let rect = Rect::from_min_size(clip.min + vec2(panel_offset, 0.0), clip.size());
+
+                    let mut panel_ui = ui.child_ui(rect, *ui.layout());
+
+                    let p = SidePanel::new(side, panel_id).resizable(false);
+                    let p = match panel_transformer {
+                        Some(pt) => pt(p),
+                        None => p,
+                    };
+                    Some(p.show_inside(&mut panel_ui, add_content))
+                } else {
+                    None
+                };
+
+                CollapsibleSidePanelResponse {
+                    header: response,
+                    full_rect,
+                    panel,
+                }
+            })
+            .inner;
+
+        resp
+    }
+}
+
+#[must_use = "You should put this widget in an ui with `ui.add(widget);`"]
+pub struct DoubleSelectableLabel {
+    selected: bool,
+    outline: bool,
+    text: WidgetText,
+    hover_color: Color32,
+    fill_color: Option<Color32>,
+    outline_stroke: Stroke,
+}
+
+impl DoubleSelectableLabel {
+    pub fn new(
+        selected: bool,
+        outline: bool,
+        text: impl Into<WidgetText>,
+        hover_color: Color32,
+        fill_color: Option<Color32>,
+        outline_stroke: Stroke,
+    ) -> Self {
+        Self {
+            selected,
+            outline,
+            text: text.into(),
+            hover_color,
+            fill_color,
+            outline_stroke,
+        }
+    }
+}
+
+impl Widget for DoubleSelectableLabel {
+    fn ui(self, ui: &mut Ui) -> Response {
+        let Self {
+            selected,
+            text,
+            outline,
+            hover_color,
+            fill_color,
+            outline_stroke,
+        } = self;
+
+        let button_padding = ui.spacing().button_padding;
+        let total_extra = button_padding + button_padding;
+
+        let wrap_width = ui.available_width() - total_extra.x;
+        let text = text.into_galley(ui, None, wrap_width, TextStyle::Button);
+
+        let mut desired_size = total_extra + text.size();
+        desired_size.y = desired_size.y.max(ui.spacing().interact_size.y);
+        let (rect, response) = ui.allocate_at_least(desired_size, Sense::click());
+        response.widget_info(|| {
+            WidgetInfo::selected(WidgetType::SelectableLabel, selected, text.text())
+        });
+
+        if ui.is_rect_visible(response.rect) {
+            let text_pos = ui
+                .layout()
+                .align_size_within_rect(text.size(), rect.shrink2(button_padding))
+                .min;
+
+            let visuals = ui.style().interact_selectable(&response, selected);
+
+            let hover = response.hovered() || response.highlighted() || response.has_focus();
+
+            let fill = if selected {
+                fill_color.unwrap_or(visuals.weak_bg_fill)
+            } else if hover {
+                hover_color
             } else {
-                None
+                Color32::TRANSPARENT
             };
 
-            CollapsibleSidePanelResponse {
-                header: response,
-                full_rect,
-                panel,
+            let stroke = if outline {
+                outline_stroke
+            } else {
+                Stroke::NONE
+            };
+
+            if fill != Color32::default() || stroke != Stroke::default() {
+                let rect = rect.expand(visuals.expansion);
+
+                ui.painter().rect(rect, visuals.rounding, fill, stroke);
             }
-        })
-        .inner
+
+            text.paint_with_visuals(ui.painter(), text_pos, &visuals);
+        }
+
+        response
+    }
+}
+
+#[derive(Default, Debug, Clone, Copy)]
+pub struct Sides {
+    pub top: bool,
+    pub left: bool,
+    pub right: bool,
+    pub bottom: bool,
+    pub center: bool,
+}
+
+impl Sides {
+    pub const ALL: Self = Self {
+        top: true,
+        left: true,
+        right: true,
+        bottom: true,
+        center: true,
+    };
+
+    pub const CENTER: Self = Self {
+        top: false,
+        left: false,
+        right: false,
+        bottom: false,
+        center: true,
+    };
+
+    pub fn any(self) -> bool {
+        self.top || self.left || self.right || self.bottom || self.center
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct RectVisuals {
+    pub rounding: Rounding,
+    pub fill: Color32,
+    pub stroke: Stroke,
+}
+impl RectVisuals {
+    fn scaled_by(self, scale: f32) -> Self {
+        Self {
+            rounding: Rounding {
+                nw: self.rounding.nw * scale,
+                ne: self.rounding.ne * scale,
+                sw: self.rounding.sw * scale,
+                se: self.rounding.se * scale,
+            },
+            fill: self.fill,
+            stroke: Stroke {
+                width: self.stroke.width * scale,
+                color: self.stroke.color,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum DragState {
+    None,
+    Started(Sides),
+    Dragging(Sides),
+    Ended(Sides),
+}
+
+pub fn rect_editor(
+    rect: &mut Rect,
+    sides: Sides,
+    ui: &Ui,
+    id: Id,
+    constrain: impl FnOnce(Sides, &mut Rect),
+    visuals: RectVisuals,
+) -> DragState {
+    #[derive(Default, Clone, Copy)]
+    struct State {
+        pos: Vec2,
+        sides: Sides,
+        drag: bool,
+    }
+
+    let editing = ui.memory(|mem| mem.is_being_dragged(id));
+    let grab = ui.style().interaction.resize_grab_radius_side;
+
+    let state = if editing {
+        ui.memory(|mem| mem.data.get_temp(id).unwrap_or_default())
+    } else if let Some(pointer) = ui.ctx().pointer_latest_pos() {
+        let on_top = ui
+            .ctx()
+            .layer_id_at(pointer)
+            .map_or(true, |top_layer_id| top_layer_id == ui.layer_id());
+
+        let draggable = rect.expand(grab).contains(pointer);
+
+        if draggable {
+            let right = sides.right && on_top && rect.right() - grab <= pointer.x;
+            let bottom = sides.bottom && on_top && rect.bottom() - grab <= pointer.y;
+
+            let top = !bottom && sides.top && on_top && pointer.y <= rect.top() + grab;
+            let left = !right && sides.left && on_top && pointer.x <= rect.left() + grab;
+
+            State {
+                sides: Sides {
+                    top,
+                    left,
+                    right,
+                    bottom,
+                    center: sides.center && !top && !left && !right && !bottom,
+                },
+                pos: pointer - rect.left_top(),
+                drag: false,
+            }
+        } else {
+            State::default()
+        }
+    } else {
+        State::default()
+    };
+
+    if ui.input(|i| i.pointer.primary_pressed()) && state.sides.any() {
+        ui.memory_mut(|mem| {
+            mem.set_dragged_id(id);
+            mem.data.insert_temp(
+                id,
+                State {
+                    drag: true,
+                    ..state
+                },
+            );
+        });
+    }
+
+    let any_drag = ui.memory(|mem| mem.is_anything_being_dragged());
+    let editing = ui.memory(|mem| mem.is_being_dragged(id));
+
+    if state.drag && !editing {
+        ui.memory_mut(|mem| {
+            mem.data.insert_temp(id, State::default());
+        });
+    }
+
+    let state = if state.sides.any() && any_drag && !editing {
+        Default::default()
+    } else {
+        state
+    };
+
+    let sides = state.sides;
+
+    if sides.top && sides.left {
+        ui.ctx().set_cursor_icon(CursorIcon::ResizeNorthWest);
+    } else if sides.top && sides.right {
+        ui.ctx().set_cursor_icon(CursorIcon::ResizeNorthEast);
+    } else if sides.bottom && sides.left {
+        ui.ctx().set_cursor_icon(CursorIcon::ResizeSouthWest);
+    } else if sides.bottom && sides.right {
+        ui.ctx().set_cursor_icon(CursorIcon::ResizeSouthEast);
+    } else if sides.top {
+        ui.ctx().set_cursor_icon(CursorIcon::ResizeNorth);
+    } else if sides.left {
+        ui.ctx().set_cursor_icon(CursorIcon::ResizeWest);
+    } else if sides.right {
+        ui.ctx().set_cursor_icon(CursorIcon::ResizeEast);
+    } else if sides.bottom {
+        ui.ctx().set_cursor_icon(CursorIcon::ResizeSouth);
+    } else if sides.center {
+        ui.ctx().set_cursor_icon(CursorIcon::Move);
+    }
+
+    if editing {
+        if let Some(pointer) = ui.ctx().pointer_latest_pos() {
+            if state.sides.center {
+                let size = rect.size();
+                *rect = Rect::from_min_size(pointer - state.pos, size);
+            }
+
+            if state.sides.top {
+                rect.min.y = pointer.y.min(rect.max.y);
+            }
+            if state.sides.left {
+                rect.min.x = pointer.x.min(rect.max.x);
+            }
+            if state.sides.right {
+                rect.max.x = pointer.x.max(rect.min.x);
+            }
+            if state.sides.bottom {
+                rect.max.y = pointer.y.max(rect.min.y);
+            }
+            constrain(state.sides, rect);
+        }
+    }
+
+    let paint = ui.painter();
+
+    paint.rect(*rect, visuals.rounding, visuals.fill, visuals.stroke);
+
+    let hover_rounding = Rounding::same(grab / 2.0);
+    let hover_color = Color32::WHITE.linear_multiply(0.3);
+
+    let top = ui
+        .ctx()
+        .animate_bool(id.with("__hover_top"), state.sides.top);
+    if top > 0.0 {
+        paint.rect(
+            Rect::from_min_size(
+                rect.left_top() - vec2(grab, grab),
+                vec2(rect.width() + grab * 2.0, grab * 2.0),
+            ),
+            hover_rounding,
+            hover_color.linear_multiply(top),
+            Stroke::NONE,
+        )
+    }
+
+    let left = ui
+        .ctx()
+        .animate_bool(id.with("__hover_left"), state.sides.left);
+    if left > 0.0 {
+        paint.rect(
+            Rect::from_min_size(
+                rect.left_top() - vec2(grab, grab),
+                vec2(grab * 2.0, rect.height() + grab * 2.0),
+            ),
+            hover_rounding,
+            hover_color.linear_multiply(left),
+            Stroke::NONE,
+        )
+    }
+
+    let bottom = ui
+        .ctx()
+        .animate_bool(id.with("__hover_bottom"), state.sides.bottom);
+    if bottom > 0.0 {
+        paint.rect(
+            Rect::from_min_size(
+                rect.left_bottom() - vec2(grab, grab),
+                vec2(rect.width() + grab * 2.0, grab * 2.0),
+            ),
+            hover_rounding,
+            hover_color.linear_multiply(bottom),
+            Stroke::NONE,
+        )
+    }
+
+    let right = ui
+        .ctx()
+        .animate_bool(id.with("__hover_right"), state.sides.right);
+    if right > 0.0 {
+        paint.rect(
+            Rect::from_min_size(
+                rect.right_top() - vec2(grab, grab),
+                vec2(grab * 2.0, rect.height() + grab * 2.0),
+            ),
+            hover_rounding,
+            hover_color.linear_multiply(right),
+            Stroke::NONE,
+        )
+    }
+
+    let center = ui
+        .ctx()
+        .animate_bool(id.with("__hover_center"), state.sides.center);
+    if center > 0.0 {
+        paint.rect(
+            rect.expand(2.0),
+            visuals.rounding,
+            Color32::TRANSPARENT,
+            Stroke::new(2.0, hover_color.linear_multiply(center)),
+        )
+    }
+
+    match (state.drag, editing) {
+        (true, true) => DragState::Dragging(state.sides),
+        (true, false) => DragState::Ended(state.sides),
+        (false, true) => DragState::Started(state.sides),
+        (false, false) => DragState::None,
     }
 }

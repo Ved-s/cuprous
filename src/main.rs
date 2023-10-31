@@ -2,30 +2,31 @@
 #![feature(generic_const_exprs)]
 #![feature(int_roundings)]
 #![feature(lazy_cell)]
-#![feature(thread_id_value)]
 
 use std::{
     borrow::Borrow,
-    collections::{HashMap, HashSet},
-    f32::consts::{PI, TAU},
+    collections::HashSet,
+    f32::consts::TAU,
     hash::Hash,
     num::NonZeroU32,
-    ops::{Deref, Range},
+    ops::{Deref, Range, Not},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
 };
 
-use board::{selection::Selection, ActiveCircuitBoard};
+use app::SimulationContext;
+use board::ActiveCircuitBoard;
 use cache::GLOBAL_STR_CACHE;
 use eframe::{
-    egui::{self, Context, Sense, Ui},
-    epaint::{Color32, PathShape, Rounding, Shape, Stroke},
+    egui::{self, Sense, Ui},
+    epaint::{Color32, Rounding},
 };
-use emath::{pos2, vec2, Pos2, Rect};
+use emath::{vec2, Rect};
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde_intermediate::Intermediate;
 #[cfg(feature = "wasm")]
 use wasm_bindgen::{prelude::*, JsValue};
 
@@ -33,7 +34,7 @@ mod r#const;
 
 mod vector;
 
-use ui::InventoryItem;
+use ui::editor::TileDrawBounds;
 use vector::{Vec2f, Vec2i, Vec2u};
 use wires::WirePart;
 
@@ -41,12 +42,12 @@ mod containers;
 use crate::containers::*;
 
 mod circuits;
-use circuits::CircuitPreview;
+use circuits::{CircuitPreview, CircuitStateContext};
 
 mod wires;
 
 mod state;
-use state::{State, WireState};
+use state::State;
 
 mod board;
 
@@ -58,6 +59,8 @@ mod debug;
 
 mod app;
 mod cache;
+mod ext;
+mod graphics;
 mod io;
 mod path;
 mod time;
@@ -72,16 +75,6 @@ type Mutex<T> = debug::DebugMutex<T>;
 type RwLock<T> = parking_lot::RwLock<T>;
 #[cfg(any(not(feature = "deadlock_detection"), feature = "single_thread"))]
 type Mutex<T> = parking_lot::Mutex<T>;
-
-struct BasicLoadingContext<'a, K: Borrow<str> + Eq + Hash> {
-    previews: &'a HashMap<K, Arc<CircuitPreview>>,
-}
-
-impl<K: Borrow<str> + Eq + Hash> io::LoadingContext for BasicLoadingContext<'_, K> {
-    fn get_circuit_preview<'a>(&'a self, ty: &str) -> Option<&'a CircuitPreview> {
-        self.previews.get(ty).map(|b| b.deref())
-    }
-}
 
 fn main() {
     #[cfg(all(feature = "deadlock_detection", not(feature = "single_thread")))]
@@ -110,53 +103,25 @@ pub async fn web_main(canvas_id: &str) -> Result<(), JsValue> {
         .await
 }
 
-#[allow(unused)]
-#[derive(Debug, Clone, Copy)]
-struct TileDrawBounds {
-    pub screen_tl: Vec2f,
-    pub screen_br: Vec2f,
-
-    pub tiles_tl: Vec2i,
-    pub tiles_br: Vec2i,
-
-    pub chunks_tl: Vec2i,
-    pub chunks_br: Vec2i,
-}
-
-impl TileDrawBounds {
-    pub const EVERYTHING: TileDrawBounds = TileDrawBounds {
-        screen_tl: Vec2f::single_value(f32::NEG_INFINITY),
-        screen_br: Vec2f::single_value(f32::INFINITY),
-        tiles_tl: Vec2i::single_value(i32::MIN),
-        tiles_br: Vec2i::single_value(i32::MAX),
-        chunks_tl: Vec2i::single_value(i32::MIN),
-        chunks_br: Vec2i::single_value(i32::MAX),
-    };
-}
-
 #[allow(clippy::redundant_allocation)]
 pub struct PaintContext<'a> {
     screen: Screen,
     paint: &'a egui::Painter,
     rect: Rect,
-    bounds: TileDrawBounds,
     ui: &'a Ui,
-    egui_ctx: &'a Context,
 }
 
 impl<'a> PaintContext<'a> {
     pub fn new_on_ui(ui: &'a Ui, rect: Rect, scale: f32) -> Self {
         Self {
             screen: Screen {
-                offset: rect.left_top().into(),
-                pos: 0.0.into(),
+                scr_rect: rect,
+                wld_pos: 0.0.into(),
                 scale,
             },
             paint: ui.painter(),
             rect,
-            bounds: TileDrawBounds::EVERYTHING,
             ui,
-            egui_ctx: ui.ctx(),
         }
     }
 
@@ -170,6 +135,7 @@ impl<'a> PaintContext<'a> {
 
     fn draw_chunks<const CHUNK_SIZE: usize, T: Default, P>(
         &self,
+        bounds: TileDrawBounds,
         chunks: &Chunks2D<CHUNK_SIZE, T>,
         pass: &P,
         draw_tester: impl Fn(&T) -> bool,
@@ -182,7 +148,7 @@ impl<'a> PaintContext<'a> {
             tiles_br,
             chunks_tl,
             chunks_br,
-        } = self.bounds;
+        } = bounds;
 
         let screen = &self.screen;
 
@@ -245,7 +211,7 @@ impl<'a> PaintContext<'a> {
 
 #[derive(Debug, Clone, Copy)]
 pub struct PanAndZoom {
-    pos: Vec2f,
+    center_pos: Vec2f,
     scale: f32,
 }
 
@@ -267,12 +233,12 @@ impl PanAndZoom {
                 })
         });
 
-        let interaction = ui.interact(rect, ui.id(), Sense::drag());
+        let interaction = ui.interact(rect, ui.id(), Sense::click_and_drag());
 
         if interaction.dragged_by(egui::PointerButton::Secondary)
             || (allow_primary_button_drag && interaction.dragged_by(egui::PointerButton::Primary))
         {
-            self.pos -= interaction.drag_delta() / self.scale;
+            self.center_pos -= interaction.drag_delta() / self.scale;
         }
 
         if zoom != 1.0 {
@@ -281,10 +247,13 @@ impl PanAndZoom {
                     .unwrap_or_else(|| rect.center())
                     - rect.left_top(),
             );
-            let world_before = self.pos + pointer_screen / self.scale;
+
+            let pointer_center = pointer_screen - (rect.size() / 2.0);
+
+            let world_before = self.center_pos + pointer_center / self.scale;
             self.scale *= zoom;
-            let world_after = self.pos + pointer_screen / self.scale;
-            self.pos -= world_after - world_before;
+            let world_after = self.center_pos + pointer_center / self.scale;
+            self.center_pos -= world_after - world_before;
         }
     }
 }
@@ -292,21 +261,22 @@ impl PanAndZoom {
 impl Default for PanAndZoom {
     fn default() -> Self {
         Self {
-            scale: 1.0,
-            pos: Default::default(),
+            scale: 16.0,
+            center_pos: Default::default(),
         }
     }
 }
 
 impl PanAndZoom {
-    pub fn new(pos: Vec2f, scale: f32) -> Self {
-        Self { pos, scale }
+    pub fn new(center_pos: Vec2f, scale: f32) -> Self {
+        Self { center_pos, scale }
     }
 
-    pub fn to_screen(self, offset: Vec2f) -> Screen {
+    pub fn to_screen(self, screen_rect: Rect) -> Screen {
+        let tl_pos = self.center_pos - (screen_rect.size() / 2.0 / self.scale);
         Screen {
-            offset,
-            pos: self.pos,
+            scr_rect: screen_rect,
+            wld_pos: tl_pos,
             scale: self.scale,
         }
     }
@@ -314,19 +284,18 @@ impl PanAndZoom {
 
 #[derive(Clone, Copy)]
 pub struct Screen {
-    offset: Vec2f,
-    pos: Vec2f,
+    scr_rect: Rect,
+    wld_pos: Vec2f,
     scale: f32,
 }
 
-#[allow(unused)]
 impl Screen {
     pub fn screen_to_world(&self, v: Vec2f) -> Vec2f {
-        self.pos + (v - self.offset) / self.scale
+        self.wld_pos + (v - self.scr_rect.left_top()) / self.scale
     }
 
     pub fn world_to_screen(&self, v: Vec2f) -> Vec2f {
-        (v - self.pos) * self.scale + self.offset
+        (v - self.wld_pos) * self.scale + self.scr_rect.left_top()
     }
 
     pub fn screen_to_world_tile(&self, v: Vec2f) -> Vec2i {
@@ -336,128 +305,21 @@ impl Screen {
     pub fn world_to_screen_tile(&self, v: Vec2i) -> Vec2f {
         self.world_to_screen(v.convert(|v| v as f32))
     }
-}
 
-struct SelectionInventoryItem {}
-impl InventoryItem for SelectionInventoryItem {
-    fn id(&self) -> DynStaticStr {
-        "selection".into()
+    pub fn screen_to_world_rect(&self, r: Rect) -> Rect {
+        Rect::from_min_size(
+            self.screen_to_world(r.left_top().into()).into(),
+            r.size() / self.scale,
+        )
     }
 
-    fn draw(&self, ctx: &PaintContext) {
-        let rect = ctx.rect.shrink2(ctx.rect.size() / 5.0);
-        ctx.paint
-            .rect_filled(rect, Rounding::none(), Selection::fill_color());
-        let rect_corners = [
-            rect.left_top(),
-            rect.right_top(),
-            rect.right_bottom(),
-            rect.left_bottom(),
-            rect.left_top(),
-        ];
-
-        let mut shapes = vec![];
-        Shape::dashed_line_many(
-            &rect_corners,
-            Stroke::new(1.0, Selection::border_color()),
-            3.0,
-            2.0,
-            &mut shapes,
-        );
-
-        shapes.into_iter().for_each(|s| {
-            ctx.paint.add(s);
-        });
+    pub fn world_to_screen_rect(&self, r: Rect) -> Rect {
+        Rect::from_min_size(
+            self.world_to_screen(r.left_top().into()).into(),
+            r.size() * self.scale,
+        )
     }
 }
-
-struct WireInventoryItem {}
-impl InventoryItem for WireInventoryItem {
-    fn id(&self) -> DynStaticStr {
-        "wire".into()
-    }
-
-    fn draw(&self, ctx: &PaintContext) {
-        let color = WireState::False.color();
-
-        let rect1 = Rect::from_center_size(
-            ctx.rect.lerp_inside([0.2, 0.2].into()),
-            ctx.rect.size() * 0.2,
-        );
-        let rect2 = Rect::from_center_size(
-            ctx.rect.lerp_inside([0.8, 0.8].into()),
-            ctx.rect.size() * 0.2,
-        );
-
-        ctx.paint
-            .line_segment([rect1.center(), rect2.center()], Stroke::new(2.5, color));
-
-        ctx.paint.add(Shape::Path(PathShape {
-            points: rotated_rect_shape(rect1, PI * 0.25, rect1.center()),
-            closed: true,
-            fill: color,
-            stroke: Stroke::NONE,
-        }));
-
-        ctx.paint.add(Shape::Path(PathShape {
-            points: rotated_rect_shape(rect2, PI * 0.25, rect2.center()),
-            closed: true,
-            fill: color,
-            stroke: Stroke::NONE,
-        }));
-    }
-}
-
-struct CircuitInventoryItem {
-    preview: Arc<CircuitPreview>,
-    id: DynStaticStr,
-}
-impl InventoryItem for CircuitInventoryItem {
-    fn id(&self) -> DynStaticStr {
-        self.id.clone()
-    }
-
-    fn draw(&self, ctx: &PaintContext) {
-        let size = self.preview.describe().size.convert(|v| v as f32);
-        let scale = Vec2f::from(ctx.rect.size()) / size;
-        let scale = scale.x().min(scale.y());
-        let size = size * scale;
-        let rect = Rect::from_center_size(ctx.rect.center(), size.into());
-
-        let circ_ctx = PaintContext {
-            screen: Screen {
-                scale,
-                ..ctx.screen
-            },
-            rect,
-            ..*ctx
-        };
-        self.preview.draw(&circ_ctx, false);
-    }
-}
-
-fn rotated_rect_shape(rect: Rect, angle: f32, origin: Pos2) -> Vec<Pos2> {
-    let mut points = vec![
-        rect.left_top(),
-        rect.right_top(),
-        rect.right_bottom(),
-        rect.left_bottom(),
-    ];
-
-    let cos = angle.cos();
-    let sin = angle.sin();
-
-    for p in points.iter_mut() {
-        let pl = *p - origin;
-
-        let x = cos * pl.x - sin * pl.y;
-        let y = sin * pl.x + cos * pl.y;
-        *p = pos2(x, y) + origin.to_vec2();
-    }
-
-    points
-}
-
 trait Intersect {
     fn intersect(&self, other: &Self) -> Self;
 }
@@ -552,6 +414,24 @@ macro_rules! impl_optional_int {
                     None => Self::NONE_VALUE,
                     Some(v) => v,
                 }
+            }
+        }
+
+        impl<T: Serialize + Integer> Serialize for $name<T> {
+            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: Serializer,
+            {
+                self.0.serialize(serializer)
+            }
+        }
+
+        impl<'de, T: Deserialize<'de> + Integer> Deserialize<'de> for $name<T> {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                Ok(Self(T::deserialize(deserializer)?))
             }
         }
     };
@@ -953,14 +833,15 @@ pub struct PastePreview {
 }
 
 impl PastePreview {
-    pub fn new(data: crate::io::CopyPasteData, ctx: &impl io::LoadingContext) -> Self {
+    pub fn new(data: crate::io::CopyPasteData, ctx: &Arc<SimulationContext>) -> Self {
         let wires = data.wires;
         let circuits: Vec<_> = data
             .circuits
             .into_iter()
             .filter_map(|d| {
-                ctx.get_circuit_preview(&d.ty)
-                    .and_then(|p| p.load_new(&d.imp, &d.props).map(|b| (d, b)))
+                ctx.previews
+                    .get(&d.ty)
+                    .and_then(|p| p.load_copy(&d, ctx).map(|b| (d, b)))
             })
             .collect();
 
@@ -994,7 +875,7 @@ impl PastePreview {
         );
         ctx.paint.rect_filled(
             rect,
-            Rounding::none(),
+            Rounding::ZERO,
             Color32::from_rgba_unmultiplied(0, 120, 120, 120),
         );
 
@@ -1030,7 +911,7 @@ impl PastePreview {
             return;
         }
 
-        let sim_lock = { board.board.read().sim_lock.clone() };
+        let sim_lock = { board.board.sim_lock.clone() };
         let sim_lock = sim_lock.write();
 
         let mut wire_ids: HashSet<usize> = HashSet::new();
@@ -1047,44 +928,42 @@ impl PastePreview {
             }
         }
         for (circuit_data, preview) in self.circuits.iter() {
+            let data = matches!(circuit_data.imp, Intermediate::Unit).not().then_some(&circuit_data.imp);
             let id = board.place_circuit(
                 pos + circuit_data.pos.convert(|v| v as i32),
                 false,
                 preview,
                 None,
+                data,
                 &|board, id| {
-                    let board = board.board.read();
-                    if let Some(circuit) = board.circuits.get(id) {
+                    if let Some(circuit) = board.board.circuits.read().get(id).cloned() {
                         if !matches!(
                             circuit_data.internal,
                             serde_intermediate::Intermediate::Unit
                         ) {
-                            for state in board.states.states().read().iter() {
-                                let state = state.get_circuit(id);
-                                let mut state = state.write();
-
-                                state.internal =
-                                    circuit.imp.write().load_internal(&circuit_data.internal);
+                            for state in board.board.states.states.read().iter() {
+                                let ctx = CircuitStateContext::new(state.clone(), circuit.clone());
+                                state.write_circuit(id, |state| {
+                                    state.internal = circuit.imp.write().load_internal(
+                                        &ctx,
+                                        &circuit_data.internal,
+                                        true,
+                                    );
+                                });
                             }
-                        }
-
-                        if !matches!(circuit_data.imp, serde_intermediate::Intermediate::Unit) {
-                            circuit.imp.write().load(&circuit_data.imp)
                         }
                     }
                 },
             );
             if let (Some(id), Some(dur)) = (id, circuit_data.update) {
-                let board = board.board.read();
-                for state in board.states.states().read().iter() {
-                    state.set_circuit_update_interval(id, Some(dur))
+                for state in board.board.states.states.read().iter() {
+                    state.set_circuit_update_interval(id, dur)
                 }
             }
         }
 
-        let states = board.board.read().states.clone();
         for wire in wire_ids {
-            states.update_wire(wire, true);
+            board.board.states.update_wire(wire, true);
         }
         drop(sim_lock)
     }
@@ -1099,11 +978,9 @@ pub struct ArcString {
 
 impl Clone for ArcString {
     fn clone(&self) -> Self {
-
         if self.string.is_none() && self.arc.read().is_none() {
             return Default::default();
         }
-
 
         Self {
             string: None,
@@ -1159,19 +1036,28 @@ impl ArcString {
 
     pub fn get_mut(&mut self) -> &mut String {
         self.check_str.store(true, Ordering::Relaxed);
-        self.string.get_or_insert_with(|| self.arc.read().as_ref().map(|a| a.deref().into()).unwrap_or_default())
+        self.string.get_or_insert_with(|| {
+            self.arc
+                .read()
+                .as_ref()
+                .map(|a| a.deref().into())
+                .unwrap_or_default()
+        })
     }
 
     pub fn get_str(&self) -> ArcBorrowStr<'_> {
         if let Some(string) = &self.string {
             ArcBorrowStr::Borrow(string)
-        }
-        else if let Some(arc) = self.arc.read().as_ref() {
+        } else if let Some(arc) = self.arc.read().as_ref() {
             ArcBorrowStr::Arc(arc.clone())
-        }
-        else {
+        } else {
             ArcBorrowStr::Borrow("")
         }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        !self.string.as_ref().is_some_and(|s| !s.is_empty())
+            && !self.arc.read().as_ref().is_some_and(|a| !a.is_empty())
     }
 }
 
@@ -1187,7 +1073,7 @@ impl From<&str> for ArcString {
 
 pub enum ArcBorrowStr<'a> {
     Arc(Arc<str>),
-    Borrow(&'a str)
+    Borrow(&'a str),
 }
 
 impl<'a> Deref for ArcBorrowStr<'a> {
@@ -1199,4 +1085,43 @@ impl<'a> Deref for ArcBorrowStr<'a> {
             ArcBorrowStr::Borrow(b) => b,
         }
     }
+}
+
+enum MaybeResolvedType<I, T> {
+    Unresolved(I),
+    Resolved(T),
+}
+
+pub struct MaybeResolved<I, T: Clone>(RwLock<MaybeResolvedType<I, T>>);
+
+impl<I, T: Clone> MaybeResolved<I, T> {
+    pub fn new_unresolved(id: I) -> Self {
+        Self(RwLock::new(MaybeResolvedType::Unresolved(id)))
+    }
+
+    pub fn new_resolved(value: T) -> Self {
+        Self(RwLock::new(MaybeResolvedType::Resolved(value)))
+    }
+
+    pub fn resolve(&self, resolver: impl FnOnce(&I) -> T) -> T {
+        if let MaybeResolvedType::Resolved(value) = self.0.read().deref() {
+            return value.clone();
+        }
+
+        let mut ty = self.0.write();
+        let id = match ty.deref() {
+            MaybeResolvedType::Unresolved(id) => id,
+            MaybeResolvedType::Resolved(value) => return value.clone(),
+        };
+
+        let value = resolver(id);
+        *ty = MaybeResolvedType::Resolved(value.clone());
+        value
+    }
+}
+
+pub fn random_u128() -> u128 {
+    let mut buf = [0u8; 16];
+    getrandom::getrandom(&mut buf).unwrap();
+    u128::from_le_bytes(buf)
 }

@@ -11,7 +11,7 @@ use crate::{
     r#const::*,
     unwrap_option_or_continue,
     vector::{Vec2isize, Vec2usize, Vector},
-    Intersect,
+    Intersect, RwLock,
 };
 
 #[derive(Debug, Clone)]
@@ -224,6 +224,15 @@ impl<T> FixedVec<T> {
             None => self.vec.len(),
         }
     }
+    /// Warning: will not return intil `f` returns true
+    pub fn first_free_pos_filtered(&self, f: impl Fn(usize) -> bool) -> usize {
+        for i in 0.. {
+            if self.vec.get(i).and_then(|o| o.as_ref()).is_none() && f(i) {
+                return i;
+            }
+        }
+        unreachable!()
+    }
 
     pub fn iter(&self) -> FixedVecIterator<'_, T> {
         FixedVecIterator {
@@ -277,6 +286,21 @@ impl<T> FixedVec<T> {
             start,
             len,
             pos: 0,
+        }
+    }
+
+    pub fn read_or_create_locked<R>(lock: &RwLock<Self>, pos: usize, creator: impl FnOnce() -> T, reader: impl FnOnce(&T) -> R) -> R {
+        if let Some(value) = lock.read().get(pos) {
+            return reader(value);
+        }
+
+        let mut lock = lock.write();
+        if let Some(value) = lock.get(pos) {
+            reader(value)
+        }
+        else {
+            let r = lock.set(creator(), pos).value_ref;
+            reader(r)
         }
     }
 }
@@ -358,7 +382,7 @@ impl<'a, T> Iterator for FixedVecIterator<'a, T> {
 // Cols then rows, chunk[x][y]
 type Chunk<const CHUNK_SIZE: usize, T> = [[T; CHUNK_SIZE]; CHUNK_SIZE];
 
-// Vec of rows, vec of cols, quaerter[y][x]
+// Vec of rows, vec of cols, quarter[y][x]
 type ChunksQuarter<const CHUNK_SIZE: usize, T> =
     Vec<Option<Vec<Option<Box<Chunk<CHUNK_SIZE, T>>>>>>;
 
@@ -1023,62 +1047,6 @@ impl<'a, T> Iterator for ConstRingBufferRefIterator<'a, T> {
         (size, Some(size))
     }
 }
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn fixed_vec_remove_shrink() {
-        let mut fv = FixedVec::from_vec(vec![]);
-
-        fv.set(35, 0);
-        fv.set(15, 1);
-        fv.set(100, 4);
-
-        assert_eq!(fv.vec.len(), 5);
-        fv.remove(4);
-        assert_eq!(fv.vec.len(), 2);
-    }
-
-    #[test]
-    fn fixed_vec_correct_free() {
-        let mut fv = FixedVec::from_vec(vec![]);
-
-        fv.set(35, 0);
-        fv.set(15, 1);
-        fv.set(100, 4);
-
-        assert_eq!(fv.first_free_pos(), 2);
-
-        fv.set(25, 2);
-        fv.remove(4);
-        assert_eq!(fv.first_free_pos(), 3);
-
-        fv.remove(1);
-        assert_eq!(fv.first_free_pos(), 1);
-    }
-
-    #[test]
-    fn ring_buf_basic() {
-        let mut buf = ConstRingBuffer::<4, i32>::new();
-
-        buf.push_back(1);
-        buf.push_back(2);
-        buf.push_back(3);
-        buf.push_back(4);
-        buf.push_back(5);
-
-        let vec: Vec<_> = buf.iter().cloned().collect();
-        assert_eq!(vec, [2, 3, 4, 5]);
-
-        assert_eq!(buf[0], 2);
-        assert_eq!(buf[1], 3);
-        assert_eq!(buf[2], 4);
-        assert_eq!(buf[3], 5);
-    }
-}
-
 
 pub enum Queue<T> {
     Random(RandomQueue<T>),

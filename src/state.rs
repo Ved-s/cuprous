@@ -1,23 +1,24 @@
 use std::{
     any::{Any, TypeId},
-    sync::Arc,
+    borrow::BorrowMut,
+    ops::Deref,
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc,
+    },
     time::Duration,
 };
 
 #[cfg(not(feature = "single_thread"))]
 use std::thread::{self, JoinHandle};
 
-use crate::{time::Instant, containers::Queue};
+use crate::{containers::Queue, time::Instant, unwrap_option_or_continue};
 use eframe::epaint::Color32;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
-    board::CircuitBoard,
-    circuits::*,
-    containers::FixedVec,
-    unwrap_option_or_break, unwrap_option_or_return,
-    wires::*,
-    Mutex, RwLock,
+    board::CircuitBoard, circuits::*, containers::FixedVec, unwrap_option_or_break,
+    unwrap_option_or_return, wires::*, Mutex, RwLock,
 };
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -60,16 +61,16 @@ impl WireState {
         Color32::from_rgb(rgb[0], rgb[1], rgb[2])
     }
 
-    pub fn combine_boolean(self, state: WireState, combiner: impl FnOnce(bool, bool) -> bool) -> WireState {
+    pub fn combine_boolean(self, state: Self, combiner: impl FnOnce(bool, bool) -> bool) -> Self {
         match (self, state) {
-            (WireState::None, other) | (other, WireState::None) => other,
-            (WireState::Error, _) | (_, WireState::Error) => WireState::Error,
+            (Self::None, other) | (other, Self::None) => other,
+            (Self::Error, _) | (_, Self::Error) => Self::Error,
 
-            (WireState::True, WireState::False) => combiner(true, false).into(),
-            (WireState::False, WireState::True) => combiner(false, true).into(),
+            (Self::True, Self::False) => combiner(true, false).into(),
+            (Self::False, Self::True) => combiner(false, true).into(),
 
-            (WireState::True, WireState::True) => combiner(true, true).into(),
-            (WireState::False, WireState::False) => combiner(false, false).into(),
+            (Self::True, Self::True) => combiner(true, true).into(),
+            (Self::False, Self::False) => combiner(false, false).into(),
         }
     }
 }
@@ -83,8 +84,57 @@ impl From<bool> for WireState {
     }
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+
+/// Safe versoion of `WireState` that can be passed through `serde_intermediate`
+pub struct SafeWireState(pub WireState);
+
+impl<'de> Deserialize<'de> for SafeWireState {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Ok(Self(
+            match char::deserialize(deserializer)?.to_ascii_lowercase() {
+                'f' => WireState::False,
+                't' => WireState::True,
+                'e' => WireState::Error,
+                _ => WireState::None,
+            },
+        ))
+    }
+}
+
+impl Serialize for SafeWireState {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self.0 {
+            WireState::None => 'n',
+            WireState::True => 't',
+            WireState::False => 'f',
+            WireState::Error => 'e',
+        }
+        .serialize(serializer)
+    }
+}
+
+impl From<WireState> for SafeWireState {
+    fn from(value: WireState) -> Self {
+        Self(value)
+    }
+}
+
+impl From<SafeWireState> for WireState {
+    fn from(value: SafeWireState) -> Self {
+        value.0
+    }
+}
+
 pub trait InternalCircuitState: Any + Send + Sync {
-    fn serialize(&self) -> serde_intermediate::Intermediate {
+    fn serialize(&self, copy: bool) -> serde_intermediate::Intermediate {
+        let _ = copy;
         ().into()
     }
 }
@@ -111,6 +161,10 @@ impl CircuitState {
         unsafe { &mut *(b.as_mut() as *mut dyn InternalCircuitState as *mut T) }
     }
 
+    pub fn set_internal<T: InternalCircuitState>(&mut self, value: Option<T>) {
+        self.internal = value.map(|v| Box::new(v) as Box<dyn InternalCircuitState>);
+    }
+
     pub fn save(&self) -> crate::io::CircuitStateData {
         crate::io::CircuitStateData {
             pins: self.pins.inner().clone(),
@@ -118,29 +172,26 @@ impl CircuitState {
             internal: self
                 .internal
                 .as_ref()
-                .map(|s| s.serialize())
+                .map(|s| s.serialize(false))
                 .unwrap_or_default(),
         }
     }
 
-    fn load(data: &crate::io::CircuitStateData, id: usize, board: &CircuitBoard) -> Self {
+    fn load(data: &crate::io::CircuitStateData, circ: &CircuitStateContext) -> Self {
         Self {
             pins: FixedVec::from_option_vec(data.pins.clone()),
             pin_dirs: FixedVec::from_option_vec(data.pin_dirs.clone()),
             internal: match &data.internal {
                 serde_intermediate::Intermediate::Unit => None,
-                data => board
-                    .circuits
-                    .get(id)
-                    .and_then(|c| c.imp.read().load_internal(data)),
+                data => circ.circuit.imp.read().load_internal(circ, data, false),
             },
         }
     }
 }
 
-#[derive(Clone)]
 pub struct StateCollection {
-    states: Arc<RwLock<FixedVec<Arc<State>>>>,
+    /// State 0 should be always allocated for main [`ActiveCircuitBoard`]
+    pub states: RwLock<FixedVec<Arc<State>>>,
 }
 
 impl Default for StateCollection {
@@ -152,22 +203,22 @@ impl Default for StateCollection {
 impl StateCollection {
     pub fn new() -> Self {
         Self {
-            states: Arc::new(RwLock::new(vec![].into())),
+            states: RwLock::new(vec![].into()),
         }
     }
 
-    pub fn from_fixed_vec(vec: FixedVec<Arc<State>>) -> Self {
+    pub fn from_fixed_vec(states: FixedVec<Arc<State>>) -> Self {
         Self {
-            states: Arc::new(RwLock::new(vec)),
+            states: RwLock::new(states),
         }
     }
 
-    pub fn create_state(&self, board: Arc<RwLock<CircuitBoard>>) -> (usize, Arc<State>) {
-        let mut vec = self.states.write();
-        let id = vec.first_free_pos();
-        let state = Arc::new(State::new(board));
-        vec.set(state.clone(), id);
-        (id, state)
+    pub fn create_state(&self, board: Arc<CircuitBoard>) -> Arc<State> {
+        let mut states = self.states.write();
+        let id = states.first_free_pos_filtered(|i| i > 0); // id 0 reserved
+        let state = State::new(board, id);
+        states.set(state.clone(), id);
+        state
     }
 
     pub fn update_pin_input(&self, circuit_id: usize, id: usize) {
@@ -201,9 +252,9 @@ impl StateCollection {
         }
     }
 
-    pub fn reset_circuit(&self, circuit: usize) {
+    pub fn reset_circuit(&self, circuit: &Arc<Circuit>) {
         for state in self.states.read().iter() {
-            state.reset_circuit(circuit);
+            state.remove_circuit_state(circuit);
         }
     }
 
@@ -211,23 +262,40 @@ impl StateCollection {
         self.states.read().get(state).cloned()
     }
 
-    pub fn init_circuit(&self, circuit: &Circuit) {
+    /// Get or create state 0
+    pub fn get_or_create_main(&self, board: Arc<CircuitBoard>) -> Arc<State> {
+        self.get_or_create(board, 0)
+    }
+
+    pub fn get_or_create(&self, board: Arc<CircuitBoard>, id: usize) -> Arc<State> {
+        let state = self.states.read().get(id).cloned();
+        match state {
+            Some(v) => v,
+            None => self
+                .states
+                .write()
+                .get_or_create_mut(id, || State::new(board, id))
+                .clone(),
+        }
+    }
+
+    pub fn init_circuit_state(&self, circuit: &Arc<Circuit>, first_init: bool) {
         for state in self.states.read().iter() {
-            state.init_circuit(circuit);
+            state.init_circuit_state(circuit, first_init);
         }
     }
 
     #[cfg(single_thread)]
     pub fn update(&self) {}
-
-    pub fn states(&self) -> &RwLock<FixedVec<Arc<State>>> {
-        self.states.as_ref()
-    }
-
-    #[cfg(not(feature = "single_thread"))]
-    pub fn activate(&self) {
+    
+    pub fn initialize(&self) {
         for state in self.states.read().iter() {
-            state.poke_thread(false, false);
+            state.init_circuit_states(false);
+        }
+
+        #[cfg(not(feature = "single_thread"))]
+        for state in self.states.read().iter() {
+            state.wake_thread(false);
         }
     }
 
@@ -239,37 +307,53 @@ impl StateCollection {
 }
 
 #[derive(Clone)]
-pub struct State {
-    pub wires: Arc<RwLock<FixedVec<Arc<RwLock<WireState>>>>>,
-    pub circuits: Arc<RwLock<FixedVec<Arc<RwLock<CircuitState>>>>>,
+pub struct StateParent {
+    pub state: Arc<State>,
+    pub circuit: Arc<Circuit>,
+}
 
-    queue: Arc<Mutex<Queue<UpdateTask>>>,
+pub struct State {
+    pub id: usize,
+
+    pub wires: RwLock<FixedVec<RwLock<WireState>>>,
+    pub circuits: RwLock<FixedVec<RwLock<CircuitState>>>,
+
+    queue: Mutex<Queue<UpdateTask>>,
 
     #[cfg(not(feature = "single_thread"))]
-    thread: Arc<RwLock<Option<StateThreadHandle>>>,
+    thread: RwLock<Option<StateThreadHandle>>,
 
-    board: Arc<RwLock<CircuitBoard>>,
-    circuit_updates_removes: Arc<Mutex<Vec<usize>>>,
+    pub board: Arc<CircuitBoard>,
+    circuit_updates_removes: Mutex<Vec<usize>>,
 
-    pub updates: Arc<Mutex<Vec<(usize, Instant)>>>,
+    pub updates: Mutex<Vec<(usize, Instant)>>,
+    parent: RwLock<Option<StateParent>>,
+    children: AtomicUsize,
+    frozen: AtomicBool,
 }
 
 impl State {
-    pub fn new(board: Arc<RwLock<CircuitBoard>>) -> Self {
-        let ordered = board.read().is_ordered_queue();
-        Self {
+    pub fn new(board: Arc<CircuitBoard>, id: usize) -> Arc<Self> {
+        let ordered = board.is_ordered_queue();
+        let state = Arc::new(Self {
+            id,
+            parent: RwLock::new(None),
             wires: Default::default(),
             circuits: Default::default(),
-            queue: Arc::new(Mutex::new(Queue::new(vec![], ordered))),
+            queue: Mutex::new(Queue::new(vec![], ordered)),
             #[cfg(not(feature = "single_thread"))]
             thread: Default::default(),
             board,
             circuit_updates_removes: Default::default(),
             updates: Default::default(),
-        }
+            frozen: AtomicBool::new(false),
+            children: AtomicUsize::new(0),
+        });
+        state.init_circuit_states(true);
+        state
     }
 
-    pub fn read_wire(&self, id: usize) -> WireState {
+    pub fn get_wire(&self, id: usize) -> WireState {
         self.wires
             .read()
             .get(id)
@@ -277,51 +361,83 @@ impl State {
             .unwrap_or_default()
     }
 
-    pub fn get_wire(&self, id: usize) -> Arc<RwLock<WireState>> {
-        self.wires
-            .write()
-            .get_or_create_mut(id, Default::default)
-            .clone()
+    pub fn set_wire(&self, id: usize, state: WireState) {
+        FixedVec::read_or_create_locked(
+            &self.wires,
+            id,
+            || RwLock::new(WireState::None),
+            |lock| *lock.write() = state,
+        );
     }
 
-    pub fn read_circuit(&self, id: usize) -> Option<Arc<RwLock<CircuitState>>> {
-        self.circuits.read().get(id).cloned()
+    pub fn write_wire<R>(&self, id: usize, writer: impl FnOnce(&mut WireState) -> R) -> R {
+        FixedVec::read_or_create_locked(
+            &self.wires,
+            id,
+            || RwLock::new(WireState::None),
+            |lock| writer(lock.write().borrow_mut()),
+        )
     }
 
-    pub fn get_circuit(&self, id: usize) -> Arc<RwLock<CircuitState>> {
+    pub fn read_circuit<R>(&self, id: usize, reader: impl FnOnce(&CircuitState) -> R) -> Option<R> {
         self.circuits
-            .write()
-            .get_or_create_mut(id, Default::default)
-            .clone()
+            .read()
+            .get(id)
+            .map(|lock| reader(&lock.read()))
     }
 
-    pub fn set_circuit_update_interval(&self, id: usize, dur: Option<Duration>) {
+    // TODO: make conditional read/write
+    pub fn write_circuit<R>(&self, id: usize, writer: impl FnOnce(&mut CircuitState) -> R) -> R {
+        FixedVec::read_or_create_locked(&self.circuits, id, Default::default, |lock| {
+            writer(lock.write().borrow_mut())
+        })
+    }
+
+    pub fn set_circuit_update_interval(self: &Arc<Self>, id: usize, dur: Duration) {
         let mut updates = self.updates.lock();
-        match dur {
-            Some(dur) => {
-                let index = updates.iter_mut().find(|v| v.0 == id);
-                match index {
-                    Some(v) => v.1 = Instant::now() + dur,
-                    None => {
-                        let _i = updates.len();
-                        updates.push((id, Instant::now() + dur))
-                    }
-                }
-            }
+
+        let index = updates.iter_mut().find(|v| v.0 == id);
+        match index {
+            Some(v) => v.1 = Instant::now() + dur,
             None => {
-                let index = updates
-                    .iter()
-                    .enumerate()
-                    .find(|(_, t)| t.0 == id)
-                    .map(|(i, _)| i);
-                if let Some(index) = index {
-                    updates.remove(index);
-                }
+                let _i = updates.len();
+                updates.push((id, Instant::now() + dur))
             }
         }
 
         #[cfg(not(feature = "single_thread"))]
-        self.poke_thread(true, false);
+        self.wake_thread(true);
+    }
+
+    pub fn reset_circuit_update_interval(&self, id: usize) {
+        let mut updates = self.updates.lock();
+
+        let index = updates
+            .iter()
+            .enumerate()
+            .find(|(_, t)| t.0 == id)
+            .map(|(i, _)| i);
+        if let Some(index) = index {
+            updates.remove(index);
+        }
+    }
+
+    pub fn set_frozen(self: &Arc<Self>, frozen: bool) {
+        self.frozen.store(frozen, Ordering::Relaxed);
+
+        #[cfg(not(feature = "single_thread"))]
+        self.wake_thread(true);
+    }
+
+    pub fn is_frozen(&self) -> bool {
+        self.frozen.load(Ordering::Relaxed)
+    }
+
+    pub fn is_being_used(self: &Arc<Self>) -> bool {
+        self.get_parent().is_some_and(|p| p.state.is_being_used())
+            || self.id == 0
+            || Arc::strong_count(self) - self.children.load(Ordering::Relaxed) > 1
+            || Arc::weak_count(self) > 0
     }
 
     pub fn save(&self) -> crate::io::StateData {
@@ -351,26 +467,10 @@ impl State {
         }
     }
 
-    pub fn load(data: &crate::io::StateData, board: Arc<RwLock<CircuitBoard>>) -> State {
+    pub fn load(data: &crate::io::StateData, board: Arc<CircuitBoard>, id: usize) -> Arc<State> {
         let now = Instant::now();
 
-        let wires = data
-            .wires
-            .iter()
-            .map(|w| w.map(|w| Arc::new(RwLock::new(w))))
-            .collect();
-
-        let board_ref = board.read();
-        let circuits = data
-            .circuits
-            .iter()
-            .enumerate()
-            .map(|(i, c)| {
-                c.as_ref()
-                    .map(|c| Arc::new(RwLock::new(CircuitState::load(c, i, &board_ref))))
-            })
-            .collect();
-        drop(board_ref);
+        let wires = data.wires.iter().map(|w| w.map(RwLock::new)).collect();
 
         let updates = data
             .updates
@@ -378,31 +478,48 @@ impl State {
             .map(|(id, dur)| (*id, dur.map(|d| now + d).unwrap_or(now)))
             .collect();
 
-        let ordered = board.read().is_ordered_queue();
-        Self {
-            wires: Arc::new(RwLock::new(FixedVec::from_option_vec(wires))),
-            circuits: Arc::new(RwLock::new(FixedVec::from_option_vec(circuits))),
-            queue: Arc::new(Mutex::new(Queue::new(data.queue.clone(), ordered))),
+        let ordered = board.is_ordered_queue();
+        let state = Arc::new(Self {
+            id,
+            parent: RwLock::new(None),
+            wires: RwLock::new(FixedVec::from_option_vec(wires)),
+            circuits: RwLock::new(vec![].into()),
+            queue: Mutex::new(Queue::new(data.queue.clone(), ordered)),
             #[cfg(not(feature = "single_thread"))]
-            thread: Arc::new(RwLock::new(None)),
+            thread: RwLock::new(None),
             board,
             circuit_updates_removes: Default::default(),
-            updates: Arc::new(Mutex::new(updates)),
+            updates: Mutex::new(updates),
+            frozen: AtomicBool::new(false),
+            children: AtomicUsize::new(0)
+        });
+
+        let board_circuits = state.board.circuits.read();
+        let mut state_circuits = state.circuits.write();
+        for (i, c) in data.circuits.iter().enumerate() {
+            let c = unwrap_option_or_continue!(c);
+            let circuit = unwrap_option_or_continue!(board_circuits.get(i));
+            let ctx = CircuitStateContext::new(state.clone(), circuit.clone());
+            let loaded = RwLock::new(CircuitState::load(c, &ctx));
+            state_circuits.set(loaded, i);
         }
+        drop((board_circuits, state_circuits));
+
+        state
     }
 
-    pub fn update_wire(&self, wire: usize, skip_state_ckeck: bool) {
+    pub fn update_wire(self: &Arc<Self>, wire: usize, skip_state_ckeck: bool) {
         self.schedule_update(UpdateTask::WireState {
             id: wire,
             skip_state_ckeck,
         });
     }
 
-    pub fn update_circuit_signals(&self, circuit: usize, pin: Option<usize>) {
+    pub fn update_circuit_signals(self: &Arc<Self>, circuit: usize, pin: Option<usize>) {
         self.schedule_update(UpdateTask::CircuitSignals { id: circuit, pin });
     }
 
-    pub fn update_pin_input(&self, circuit: usize, id: usize) {
+    pub fn update_pin_input(self: &Arc<Self>, circuit: usize, id: usize) {
         self.schedule_update(UpdateTask::PinInput { circuit, id });
     }
 
@@ -410,31 +527,45 @@ impl State {
         self.wires.write().remove(wire);
     }
 
-    pub fn reset_circuit(&self, circuit: usize) {
-        self.circuits.write().remove(circuit);
-        self.set_circuit_update_interval(circuit, None);
+    pub fn remove_circuit_states(self: &Arc<Self>) {
+        let circuits = self.board.circuits.read();
+        for circuit in circuits.iter() {
+            self.remove_circuit_state(circuit);
+        }
+    }
+
+    pub fn remove_circuit_state(self: &Arc<Self>, circuit: &Arc<Circuit>) {
+        let state_ctx = CircuitStateContext::new(self.clone(), circuit.clone());
+        circuit.imp.read().state_remove(&state_ctx);
+
+        self.circuits.write().remove(circuit.id);
+        self.reset_circuit_update_interval(circuit.id);
     }
 
     pub fn set_ordered(&self, ordered: bool) {
         self.queue.lock().set_ordered(ordered);
     }
 
-    fn schedule_update(&self, task: UpdateTask) {
+    fn schedule_update(self: &Arc<Self>, task: UpdateTask) {
         let mut queue = self.queue.lock();
         queue.enqueue(task);
 
         #[cfg(not(feature = "single_thread"))]
-        self.poke_thread(true, false);
+        self.wake_thread(true);
     }
 
     #[cfg(feature = "single_thread")]
-    pub fn update(&self) {
+    pub fn update(self: &Arc<State>) {
         self.update_once(5000);
     }
 
-    fn update_once(&self, queue_limit: usize) -> Option<Instant> {
+    fn update_once(self: &Arc<State>, queue_limit: usize) -> Option<Instant> {
+        if self.frozen.load(Ordering::Relaxed) {
+            return None;
+        }
+
         // Lock shared simulation, so placing/deleting won't interrupt anything
-        let sim_lock = { self.board.read().sim_lock.clone() };
+        let sim_lock = { self.board.sim_lock.clone() };
         let sim_lock = sim_lock.read();
         let mut circuit_updates_removes = self.circuit_updates_removes.lock();
 
@@ -445,12 +576,11 @@ impl State {
             circuit_updates_removes.clear();
             for (i, upd) in updates.iter_mut().enumerate() {
                 if upd.1 <= now {
-                    let board = self.board.read();
-                    let circ = board.circuits.get(upd.0);
+                    let circ = self.board.circuits.read().get(upd.0).cloned();
                     if let Some(circ) = circ {
                         let imp = circ.imp.read();
 
-                        let state = CircuitStateContext::new(self, circ);
+                        let state = CircuitStateContext::new(self.clone(), circ.clone());
                         imp.update(&state);
                         match imp.update_interval(&state) {
                             Some(d) => {
@@ -481,7 +611,6 @@ impl State {
 
         while !nearest_update.is_some_and(|nu| nu <= Instant::now()) && queue_counter < queue_limit
         {
-            let board = self.board.read();
             let deq = { self.queue.lock().dequeue() };
             let task = unwrap_option_or_break!(deq);
 
@@ -490,17 +619,17 @@ impl State {
                     id,
                     skip_state_ckeck,
                 } => {
-                    if let Some(wire) = board.wires.get(id) {
+                    if let Some(wire) = self.board.wires.read().get(id) {
                         self.update_wire_now(wire, skip_state_ckeck);
                     }
                 }
                 UpdateTask::CircuitSignals { id, pin } => {
-                    if let Some(circuit) = board.circuits.get(id) {
+                    if let Some(circuit) = self.board.circuits.read().get(id) {
                         self.update_circuit_signals_now(circuit, pin);
                     }
                 }
                 UpdateTask::PinInput { circuit, id } => {
-                    if let Some(circuit) = board.circuits.get(circuit) {
+                    if let Some(circuit) = self.board.circuits.read().get(circuit) {
                         self.update_pin_input_now(circuit, id);
                     }
                 }
@@ -515,12 +644,20 @@ impl State {
         }
     }
 
-    fn init_circuit(&self, circuit: &Circuit) {
-        let state_ctx = CircuitStateContext::new(self, circuit);
-        circuit.imp.read().init_state(&state_ctx);
+    pub fn init_circuit_states(self: &Arc<Self>, first_init: bool) {
+        let circuits = self.board.circuits.read();
+        for circuit in circuits.iter() {
+            self.init_circuit_state(circuit, first_init);
+        }
     }
 
-    fn update_wire_now(&self, wire: &Wire, skip_state_ckeck: bool) {
+    pub fn init_circuit_state(self: &Arc<Self>, circuit: &Arc<Circuit>, first_init: bool) {
+        let state_ctx = CircuitStateContext::new(self.clone(), circuit.clone());
+        let imp = circuit.imp.read();
+        imp.state_init(&state_ctx, first_init);
+    }
+
+    fn update_wire_now(self: &Arc<State>, wire: &Wire, skip_state_ckeck: bool) {
         let mut state = WireState::None;
         let mut delayed_pins = vec![];
         for (_, point) in wire.points.iter() {
@@ -539,8 +676,8 @@ impl State {
             let pin = pin.read();
             // 2 locks, eugh
             if let PinDirection::Custom = pin.direction(self) {
-                if let Some(circuit) = self.board.read().circuits.get(pin.id.circuit_id) {
-                    let state_ctx = CircuitStateContext::new(self, circuit);
+                if let Some(circuit) = self.board.circuits.read().get(pin.id.circuit_id).cloned() {
+                    let state_ctx = CircuitStateContext::new(self.clone(), circuit.clone());
                     circuit
                         .imp
                         .read()
@@ -549,12 +686,18 @@ impl State {
             }
         }
 
-        let current = self.get_wire(wire.id);
-        if !skip_state_ckeck && *current.read() == state {
+        let skip = self.write_wire(wire.id, |current| {
+            if !skip_state_ckeck && *current == state {
+                true
+            } else {
+                *current = state;
+                false
+            }
+        });
+        if skip {
             return;
         }
 
-        *current.write() = state;
         for (_, point) in wire.points.iter() {
             if let Some(pin) = &point.pin {
                 let pin = pin.read();
@@ -568,18 +711,18 @@ impl State {
         }
     }
 
-    fn update_circuit_signals_now(&self, circuit: &Circuit, pin: Option<usize>) {
-        circuit
-            .imp
-            .read()
-            .update_signals(&CircuitStateContext::new(self, circuit), pin)
+    fn update_circuit_signals_now(self: &Arc<Self>, circuit: &Arc<Circuit>, pin: Option<usize>) {
+        circuit.imp.read().update_signals(
+            &CircuitStateContext::new(self.clone(), circuit.clone()),
+            pin,
+        )
     }
 
-    fn update_pin_input_now(&self, circuit: &Circuit, id: usize) {
+    fn update_pin_input_now(self: &Arc<Self>, circuit: &Arc<Circuit>, id: usize) {
         let info = circuit.info.read();
         let pin_info = unwrap_option_or_return!(info.pins.get(id));
 
-        let ctx = CircuitStateContext::new(self, circuit);
+        let ctx = CircuitStateContext::new(self.clone(), circuit.clone());
         let old_state = pin_info.get_state(&ctx);
 
         let pin = pin_info.pin.clone();
@@ -597,7 +740,7 @@ impl State {
 
         let new_state = match pin_wire {
             None => WireState::default(),
-            Some(id) => self.read_wire(id),
+            Some(id) => self.get_wire(id),
         };
 
         if old_state == new_state {
@@ -611,7 +754,7 @@ impl State {
     }
 
     #[cfg(not(feature = "single_thread"))]
-    fn poke_thread(&self, notify: bool, termination_req: bool) {
+    fn wake_thread(self: &Arc<Self>, notify: bool) {
         let thread_sync = {
             let handle = self.thread.read();
             match &*handle {
@@ -626,14 +769,13 @@ impl State {
             }
         };
         if let Some(sync) = thread_sync {
-            if notify || termination_req {
-                *sync.1.lock() = termination_req;
+            if notify {
+                *sync.1.lock() = false;
                 sync.0.notify_one();
             }
             return;
         }
-
-        if termination_req {
+        if self.frozen.load(Ordering::Relaxed) {
             return;
         }
 
@@ -647,28 +789,55 @@ impl State {
         *self.thread.write() = Some(handle);
     }
 
-    pub fn reset(&self) {
+    #[cfg(not(feature = "single_thread"))]
+    fn terminate_thread(&self) {
+        let thread_sync = {
+            let handle = self.thread.read();
+            match &*handle {
+                None => None,
+                Some(handle) => {
+                    if handle.handle.is_finished() {
+                        None
+                    } else {
+                        Some(handle.sync.clone())
+                    }
+                }
+            }
+        };
+        if let Some(sync) = thread_sync {
+            *sync.1.lock() = true;
+            sync.0.notify_one();
+        }
+    }
+
+    pub fn reset(self: &Arc<Self>) {
         // Important to lock everything, so thread won't do anything
         let mut queue = self.queue.lock();
-        let mut circuits = self.circuits.write();
+
+        self.remove_circuit_states();
+
         let mut wires = self.wires.write();
+        let mut circuits = self.circuits.write();
 
         queue.clear();
         circuits.clear();
         wires.clear();
+
+        drop((queue, circuits, wires));
+
+        self.init_circuit_states(true);
     }
 
-    pub fn update_everything(&self) {
+    pub fn update_everything(self: &Arc<Self>) {
         let mut queue = self.queue.lock();
 
-        let board = self.board.read();
-        for circuit in board.circuits.iter() {
+        for circuit in self.board.circuits.read().iter() {
             queue.enqueue(UpdateTask::CircuitSignals {
                 id: circuit.id,
                 pin: None,
             });
         }
-        for wire in board.wires.iter() {
+        for wire in self.board.wires.read().iter() {
             queue.enqueue(UpdateTask::WireState {
                 id: wire.id,
                 skip_state_ckeck: true,
@@ -676,18 +845,41 @@ impl State {
         }
         drop(queue);
         #[cfg(not(feature = "single_thread"))]
-        self.poke_thread(true, false);
+        self.wake_thread(true);
     }
 
     pub fn queue_len(&self) -> usize {
         self.queue.lock().len()
+    }
+
+    pub fn get_self_arc(&self) -> Arc<State> {
+        self.board
+            .states
+            .get(self.id)
+            .expect("this state must exist")
+    }
+
+    pub fn get_parent(&self) -> Option<StateParent> {
+        self.parent.read().clone()
+    }
+
+    pub fn set_parent(&self, new_parent: Option<StateParent>) {
+        let mut parent = self.parent.write();
+        if let Some(parent) = parent.deref() {
+            parent.state.children.fetch_sub(1, Ordering::Relaxed);
+        }
+
+        if let Some(parent) = &new_parent {
+            parent.state.children.fetch_add(1, Ordering::Relaxed);
+        }
+        *parent = new_parent;
     }
 }
 
 impl Drop for State {
     fn drop(&mut self) {
         #[cfg(not(feature = "single_thread"))]
-        self.poke_thread(true, true);
+        self.terminate_thread();
     }
 }
 
@@ -699,13 +891,16 @@ struct StateThreadHandle {
 
 #[cfg(not(feature = "single_thread"))]
 struct StateThread {
-    state: State,
+    state: Arc<State>,
     sync: Arc<(parking_lot::Condvar, parking_lot::Mutex<bool>)>,
 }
 
 #[cfg(not(feature = "single_thread"))]
 impl StateThread {
-    pub fn new(state: State, sync: Arc<(parking_lot::Condvar, parking_lot::Mutex<bool>)>) -> Self {
+    pub fn new(
+        state: Arc<State>,
+        sync: Arc<(parking_lot::Condvar, parking_lot::Mutex<bool>)>,
+    ) -> Self {
         Self { state, sync }
     }
 
@@ -715,6 +910,10 @@ impl StateThread {
                 if *self.sync.1.lock() {
                     return;
                 }
+            }
+
+            if self.state.frozen.load(Ordering::Relaxed) {
+                return;
             }
 
             let wait = self.state.update_once(200);
@@ -734,10 +933,7 @@ impl StateThread {
                 }
                 None => {
                     let mut lock = self.sync.1.lock();
-                    let result = self
-                        .sync
-                        .0
-                        .wait_for(&mut lock, Duration::from_secs(1));
+                    let result = self.sync.0.wait_for(&mut lock, Duration::from_secs(1));
                     if result.timed_out() || *lock {
                         return;
                     }

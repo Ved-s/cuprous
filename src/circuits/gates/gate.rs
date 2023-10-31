@@ -24,23 +24,20 @@ thread_local! {
     static INPUT_BOOLS: Mutex<Vec<bool>> = Default::default();
 }
 
-struct Circuit {
+struct Gate {
     template: GateTemplate,
     inputs: Box<[CircuitPinInfo]>,
     dir: Direction4,
     output: CircuitPinInfo,
 }
 
-impl Circuit {
+impl Gate {
     fn new(template: GateTemplate) -> Self {
         let description = Self::describe(Direction4::Right);
         Self {
             template,
-            inputs: vec![
-                description.pins[0].to_info(),
-                description.pins[1].to_info(),
-            ]
-            .into_boxed_slice(),
+            inputs: vec![description.pins[0].to_info(), description.pins[1].to_info()]
+                .into_boxed_slice(),
             output: description.pins[2].to_info(),
             dir: Direction4::Right,
         }
@@ -63,27 +60,24 @@ impl Circuit {
     }
 }
 
-impl CircuitImpl for Circuit {
+impl CircuitImpl for Gate {
     fn draw(&self, _: &CircuitStateContext, paint_ctx: &PaintContext) {
         let angle = self.dir.inverted_ud().angle_to_right();
         (self.template.drawer)(paint_ctx, angle, false);
     }
 
-    fn create_pins(&mut self, props: &CircuitPropertyStore) -> Box<[CircuitPinInfo]> {
-        let description = Self::describe_props(props);
-        self.inputs = vec![
-            description.pins[0].to_info(),
-            description.pins[1].to_info(),
-        ]
-        .into_boxed_slice();
+    fn create_pins(&mut self, circ: &Arc<Circuit>) -> Box<[CircuitPinInfo]> {
+        let description = Self::describe_props(&circ.props);
+        self.inputs =
+            vec![description.pins[0].to_info(), description.pins[1].to_info()].into_boxed_slice();
         self.output = description.pins[2].to_info();
         let mut vec = vec![self.output.clone()];
         vec.extend(self.inputs.iter().cloned());
         vec.into_boxed_slice()
     }
 
-    fn update_signals(&self, state_ctx: &CircuitStateContext, _: Option<usize>) {
-        let states = self.inputs.iter().map(|i| i.get_state(state_ctx));
+    fn update_signals(&self, ctx: &CircuitStateContext, _: Option<usize>) {
+        let states = self.inputs.iter().map(|i| i.get_state(ctx));
         INPUT_BOOLS.with(|b| {
             let mut b = b.lock();
 
@@ -94,22 +88,22 @@ impl CircuitImpl for Circuit {
                     WireState::True => b.push(true),
                     WireState::False => b.push(false),
                     WireState::Error => {
-                        self.output.set_state(state_ctx, WireState::Error);
+                        self.output.set_state(ctx, WireState::Error);
                         return;
                     }
                 }
             }
             if b.is_empty() {
-                self.output.set_state(state_ctx, WireState::None);
+                self.output.set_state(ctx, WireState::None);
             } else {
                 self.output
-                    .set_state(state_ctx, (self.template.process_inputs)(&b).into());
+                    .set_state(ctx, (self.template.process_inputs)(&b).into());
             }
         });
     }
 
-    fn size(&self, props: &CircuitPropertyStore) -> Vec2u {
-        Self::describe_props(props).size
+    fn size(&self, circ: &Arc<Circuit>) -> Vec2u {
+        Self::describe_props(&circ.props).size
     }
 
     fn prop_changed(&self, prop_id: &str, resize: &mut bool, recreate_pins: &mut bool) {
@@ -119,37 +113,37 @@ impl CircuitImpl for Circuit {
         }
     }
 
-    fn apply_props(&mut self, props: &CircuitPropertyStore, _: Option<&str>) {
-        self.dir = props.read_clone("dir").unwrap_or(Direction4::Right);
+    fn apply_props(&mut self, circ: &Arc<Circuit>, _: Option<&str>) {
+        self.dir = circ.props.read_clone("dir").unwrap_or(Direction4::Right);
     }
 }
 
-pub struct Preview {
+pub struct GatePreview {
     pub template: GateTemplate,
 }
 
-impl CircuitPreviewImpl for Preview {
+impl CircuitPreviewImpl for GatePreview {
     fn draw_preview(&self, props: &CircuitPropertyStore, ctx: &PaintContext, in_world: bool) {
         let dir = props.read_clone("dir").unwrap_or(Direction4::Right);
-        let angle = dir
-            .inverted_ud()
-            .angle_to_right();
+        let angle = dir.inverted_ud().angle_to_right();
         (self.template.drawer)(ctx, angle, in_world);
     }
 
     fn create_impl(&self) -> Box<dyn CircuitImpl> {
-        Box::new(Circuit::new(self.template.clone()))
+        Box::new(Gate::new(self.template.clone()))
     }
 
     fn type_name(&self) -> DynStaticStr {
         self.template.id.into()
     }
 
-    fn load_impl_data(
+    fn load_copy_data(
         &self,
         _: &serde_intermediate::Intermediate,
+        _: &serde_intermediate::Intermediate,
+        _: &Arc<SimulationContext>,
     ) -> Option<Box<dyn CircuitPreviewImpl>> {
-        Some(Box::new(Preview {
+        Some(Box::new(GatePreview {
             template: self.template.clone(),
         }))
     }
@@ -164,7 +158,7 @@ impl CircuitPreviewImpl for Preview {
 
     fn describe(&self, props: &CircuitPropertyStore) -> DynCircuitDescription {
         let dir = props.read_clone("dir").unwrap_or(Direction4::Right);
-        Circuit::describe(dir).to_dyn()
+        Gate::describe(dir).to_dyn()
     }
 }
 

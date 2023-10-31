@@ -5,9 +5,10 @@ edition = "2021"
 
 [dependencies]
 bezier-nd = "0.5.0"
+bimap = "0.6.3"
 cfg-if = "1.0.0"
-eframe = { version = "0.22.0", features = ["persistence"] }
-emath = "0.22.0"
+eframe = { version = "0.23.0", features = ["persistence"] }
+emath = "0.23.0"
 geo-nd = "0.5.0"
 parking_lot = { version = "0.12.1", features = ["serde"] }
 paste = "1.0.12"
@@ -15,7 +16,11 @@ ron = "0.8.0"
 serde = "1.0.183"
 serde-intermediate = { version = "1.6.0", default-features = false }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+getrandom = { version = "0.2" }
+
 [target.wasm32-unknown-unknown.dependencies]
+getrandom = { version = "0.2", features = ["js"] }
 js-sys = "0.3.64"
 web-sys = "0.3.64"
 wasm-bindgen = "0.2.87"
@@ -24,6 +29,12 @@ wasm-bindgen_rs = { package = "wasm-bindgen", version = "0.2", optional = true }
 
 [profile.release]
 lto = true
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
 
 [features]
 single_thread = []
