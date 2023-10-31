@@ -9,7 +9,7 @@ use std::{
     f32::consts::TAU,
     hash::Hash,
     num::NonZeroU32,
-    ops::{Deref, Range},
+    ops::{Deref, Range, Not},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -26,6 +26,7 @@ use eframe::{
 use emath::{vec2, Rect};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde_intermediate::Intermediate;
 #[cfg(feature = "wasm")]
 use wasm_bindgen::{prelude::*, JsValue};
 
@@ -927,11 +928,13 @@ impl PastePreview {
             }
         }
         for (circuit_data, preview) in self.circuits.iter() {
+            let data = matches!(circuit_data.imp, Intermediate::Unit).not().then_some(&circuit_data.imp);
             let id = board.place_circuit(
                 pos + circuit_data.pos.convert(|v| v as i32),
                 false,
                 preview,
                 None,
+                data,
                 &|board, id| {
                     if let Some(circuit) = board.board.circuits.read().get(id).cloned() {
                         if !matches!(
@@ -948,10 +951,6 @@ impl PastePreview {
                                     );
                                 });
                             }
-                        }
-
-                        if !matches!(circuit_data.imp, serde_intermediate::Intermediate::Unit) {
-                            circuit.imp.write().load(&circuit, &circuit_data.imp, true)
                         }
                     }
                 },

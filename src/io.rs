@@ -33,6 +33,7 @@ pub struct WirePointData {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct WireData {
+    #[serde(default = "Vec::new")]
     pub points: Vec<(Vec2i, WirePointData)>,
 }
 
@@ -62,9 +63,13 @@ pub struct CircuitStateData {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct StateData {
+    #[serde(default = "Vec::new")]
     pub wires: Vec<Option<WireState>>,
+    #[serde(default = "Vec::new")]
     pub circuits: Vec<Option<CircuitStateData>>,
+    #[serde(default = "Vec::new")]
     pub queue: Vec<UpdateTask>,
+    #[serde(default = "Vec::new")]
     pub updates: Vec<(usize, Option<Duration>)>,
 }
 
@@ -76,8 +81,12 @@ pub struct CircuitDesignStoreData {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct CircuitDesignData {
-    pub pins: Vec<CircuitDesignPin>,
+    #[serde(default = "default_design_size")]
     pub size: Vec2u,
+
+    #[serde(default = "Vec::new")]
+    pub pins: Vec<CircuitDesignPin>,
+    #[serde(default = "Vec::new")]
     pub decorations: Vec<Decoration>
 }
 
@@ -163,4 +172,8 @@ fn is_false(v: &bool) -> bool {
 
 fn default_design() -> CircuitDesignStoreData {
     CircuitDesignStorage::new(CircuitDesign::default_board_design()).save()
+}
+
+fn default_design_size() -> Vec2u {
+    2.into()
 }

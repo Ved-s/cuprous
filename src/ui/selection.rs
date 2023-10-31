@@ -1,4 +1,4 @@
-use std::{collections::HashSet, hash::Hash, marker::PhantomData};
+use std::{collections::HashSet, hash::Hash};
 
 use eframe::{
     egui::{self, layers::ShapeIdx, Sense},
@@ -6,7 +6,7 @@ use eframe::{
 };
 use emath::Rect;
 
-use crate::{vector::Vec2f, PaintContext};
+use crate::{ext::IteratorConditionExt, vector::Vec2f, PaintContext};
 
 use super::InventoryItem;
 
@@ -16,41 +16,48 @@ pub enum SelectionMode {
     Exclude,
 }
 
-pub trait SelectionImpl<O, P> {
-    fn collect_changes(&mut self, pass: &P, changes: &mut HashSet<O>, rect: Rect);
+pub trait SelectionImpl {
+    type Pass;
+    type Object;
+
+    fn collect_changes(
+        &mut self,
+        pass: &Self::Pass,
+        changes: &mut HashSet<Self::Object>,
+        rect: Rect,
+    );
 
     fn draw_object_selection(
         &mut self,
-        pass: &P,
-        object: &O,
+        pass: &Self::Pass,
+        object: &Self::Object,
         ctx: &PaintContext,
         shapes: &mut Vec<Shape>,
     );
     fn post_draw_selection(
         &mut self,
-        pass: &P,
+        pass: &Self::Pass,
         ctx: &PaintContext,
         mode: SelectionMode,
-        selected: &HashSet<O>,
-        change: &HashSet<O>,
+        selected: &HashSet<Self::Object>,
+        change: &HashSet<Self::Object>,
         shapes: &mut Vec<Shape>,
     ) {
         let _ = (pass, ctx, mode, selected, change, shapes);
     }
 }
 
-pub struct Selection<I, O, P>
+pub struct Selection<I>
 where
-    I: SelectionImpl<O, P>,
-    O: Hash + Eq,
+    I: SelectionImpl,
+    I::Object: Hash + Eq,
 {
     start_pos: Option<Vec2f>,
     pub rect: Option<Rect>,
-    pub change: HashSet<O>,
+    pub change: HashSet<I::Object>,
     pub mode: SelectionMode,
-    pub selection: HashSet<O>,
+    pub selection: HashSet<I::Object>,
     imp: I,
-    phantom: PhantomData<P>,
     prev_frame_shapes: usize,
 
     shape_indexes: Vec<ShapeIdx>,
@@ -65,10 +72,10 @@ pub fn selection_border_color() -> Color32 {
     Color32::WHITE
 }
 
-impl<I, O, P> Selection<I, O, P>
+impl<I> Selection<I>
 where
-    I: SelectionImpl<O, P>,
-    O: Hash + Eq,
+    I: SelectionImpl,
+    I::Object: Hash + Eq,
 {
     pub fn new(imp: I) -> Self {
         Self {
@@ -78,14 +85,13 @@ where
             change: HashSet::new(),
             mode: SelectionMode::Include,
             imp,
-            phantom: PhantomData,
             prev_frame_shapes: 0,
             shape_indexes: vec![],
             shapes: vec![],
         }
     }
 
-    pub fn pre_update_selection(&mut self, pass: &P, ctx: &PaintContext, selected: bool) {
+    pub fn pre_update_selection(&mut self, pass: &I::Pass, ctx: &PaintContext, selected: bool) {
         if !selected {
             self.start_pos = None;
             self.rect = None;
@@ -189,7 +195,7 @@ where
         }
     }
 
-    pub fn update_selection(&mut self, pass: &P, ctx: &PaintContext) {
+    pub fn update_selection(&mut self, pass: &I::Pass, ctx: &PaintContext) {
         self.shapes.clear();
 
         for object in self.selection.iter() {
@@ -230,14 +236,15 @@ where
         }
     }
 
-    pub fn iter_selection(&self) -> impl Iterator<Item = &O> {
-        self.selection
-            .iter()
-            .filter(|o| !matches!(self.mode, SelectionMode::Exclude) || !self.change.contains(o))
-            .chain(self.change.iter().filter(|_| matches!(self.mode, SelectionMode::Include)))
+    pub fn iter(&self) -> impl Iterator<Item = &I::Object> {
+        self.selection.iter().condition(
+            matches!(self.mode, SelectionMode::Include),
+            |s| s.chain(self.change.iter()),
+            |s| s.filter(|o| !self.change.contains(o)),
+        )
     }
 
-    pub fn is_selected(&self, obj: &O) -> bool {
+    pub fn contains(&self, obj: &I::Object) -> bool {
         let selected = self.selection.contains(obj);
         let change = self.change.contains(obj);
         match self.mode {
@@ -245,12 +252,17 @@ where
             SelectionMode::Exclude => selected && !change,
         }
     }
+
+    pub fn clear(&mut self) {
+        self.selection.clear();
+        self.change.clear();
+    }
 }
 
-impl<I, O, P> Default for Selection<I, O, P>
+impl<I> Default for Selection<I>
 where
-    I: SelectionImpl<O, P> + Default,
-    O: Hash + Eq,
+    I: SelectionImpl + Default,
+    I::Object: Hash + Eq,
 {
     fn default() -> Self {
         Self::new(I::default())

@@ -382,7 +382,7 @@ impl<'a, T> Iterator for FixedVecIterator<'a, T> {
 // Cols then rows, chunk[x][y]
 type Chunk<const CHUNK_SIZE: usize, T> = [[T; CHUNK_SIZE]; CHUNK_SIZE];
 
-// Vec of rows, vec of cols, quaerter[y][x]
+// Vec of rows, vec of cols, quarter[y][x]
 type ChunksQuarter<const CHUNK_SIZE: usize, T> =
     Vec<Option<Vec<Option<Box<Chunk<CHUNK_SIZE, T>>>>>>;
 

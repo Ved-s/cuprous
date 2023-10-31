@@ -3,7 +3,7 @@ use std::{
     collections::{HashMap, HashSet},
     f32::consts::TAU,
     num::NonZeroU32,
-    ops::Deref,
+    ops::{Deref, Not},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -17,6 +17,7 @@ use eframe::{
 };
 use emath::{pos2, vec2, Align2, Pos2, Rect, Vec2};
 use serde::{Deserialize, Serialize};
+use serde_intermediate::Intermediate;
 
 use crate::{
     app::SimulationContext,
@@ -37,7 +38,7 @@ use crate::{
         RectVisuals,
     },
     unwrap_option_or_continue, unwrap_option_or_return,
-    vector::{IsZero, Vec2f, Vec2i, Vec2isize, Vec2u},
+    vector::{IsZero, Vec2f, Vec2i, Vec2u},
     wires::{FoundWireNode, TileWires, Wire, WireNode, WirePart, WirePoint},
     ArcString, Direction2, Direction4, DynStaticStr, PaintContext, PastePreview, RwLock, Screen,
 };
@@ -96,10 +97,11 @@ impl CircuitBoard {
         pos: Vec2i,
         preview: &CircuitPreview,
         props_override: Option<CircuitPropertyStore>,
+        imp_data: Option<&Intermediate>
     ) -> usize {
         let mut circuits = self.circuits.write();
         let id = circuits.first_free_pos();
-        let circ = Circuit::create(id, pos, preview, self.clone(), props_override);
+        let circ = Circuit::create(id, pos, preview, self.clone(), props_override, imp_data);
         circuits.set(circ, id);
         id
     }
@@ -263,10 +265,10 @@ impl CircuitBoard {
             let preview = unwrap_option_or_continue!(preview); // TODO: Errors
             let props = preview.imp.default_props();
             props.load(&c.props);
-            let circ = Circuit::create(i, c.pos, preview, board.clone(), Some(props));
-            if !matches!(c.imp, serde_intermediate::Intermediate::Unit) {
-                circ.imp.write().load(&circ, &c.imp, false);
-            }
+
+            let data = matches!(c.imp, serde_intermediate::Intermediate::Unit).not().then_some(&c.imp);
+
+            let circ = Circuit::create(i, c.pos, preview, board.clone(), Some(props), data);
             {
                 let mut info = circ.info.write();
                 for (pin_name, wire) in c.pin_wires.iter() {
@@ -338,7 +340,7 @@ pub struct ActiveCircuitBoard {
     pub circuit_nodes: Chunks2D<16, CircuitNode>,
 
     wire_drag_pos: Option<Vec2i>,
-    pub selection: RefCell<Selection<BoardObjectSelectionImpl, SelectedBoardObject, Self>>,
+    pub selection: RefCell<Selection<BoardObjectSelectionImpl>>,
 }
 
 impl ActiveCircuitBoard {
@@ -511,7 +513,7 @@ impl ActiveCircuitBoard {
             cfg_if::cfg_if! {
                 if #[cfg(all(not(web_sys_unstable_apis), feature = "wasm"))] {
                     let delete_request = ctx
-                        .egui_ctx
+                        .ui
                         .input(|input| input.modifiers.ctrl && input.key_pressed(egui::Key::X)) ;
                 } else {
                     let delete_request = ctx
@@ -1065,7 +1067,7 @@ impl ActiveCircuitBoard {
 
             if interaction.clicked_by(eframe::egui::PointerButton::Primary) {
                 fn empty_handler(_: &mut ActiveCircuitBoard, _: usize) {}
-                self.place_circuit(place_pos, true, p.as_ref(), None, &empty_handler);
+                self.place_circuit(place_pos, true, p.as_ref(), None, None, &empty_handler);
             }
         } else if let SelectedItem::Paste(p) = selected {
             let size = p.size;
@@ -1902,6 +1904,7 @@ impl ActiveCircuitBoard {
         lock_sim: bool,
         preview: &CircuitPreview,
         props_override: Option<CircuitPropertyStore>,
+        imp_data: Option<&Intermediate>,
         handler: &dyn Fn(&mut ActiveCircuitBoard, usize),
     ) -> Option<usize> {
         let size = preview.describe().size;
@@ -1914,7 +1917,7 @@ impl ActiveCircuitBoard {
 
         let cid = {
             self.board
-                .create_circuit(place_pos, preview, props_override)
+                .create_circuit(place_pos, preview, props_override, imp_data)
         };
 
         self.set_circuit_nodes(size, place_pos, Some(cid));
@@ -2373,7 +2376,7 @@ pub struct CircuitDesignPin {
     pub display_name: DynStaticStr,
 }
 
-#[derive(Clone, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct CircuitDesign {
     pub id: usize,
 
@@ -2427,7 +2430,10 @@ pub struct BoardObjectSelectionImpl {
     possible_points: HashSet<Vec2i>,
 }
 
-impl SelectionImpl<SelectedBoardObject, ActiveCircuitBoard> for BoardObjectSelectionImpl {
+impl SelectionImpl for BoardObjectSelectionImpl {
+    type Pass = ActiveCircuitBoard;
+    type Object = SelectedBoardObject;
+    
     fn draw_object_selection(
         &mut self,
         pass: &ActiveCircuitBoard,

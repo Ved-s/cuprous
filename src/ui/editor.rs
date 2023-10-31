@@ -656,7 +656,7 @@ impl CircuitBoardEditor {
                                     Stroke::new(1.0, Color32::LIGHT_GREEN),
                                 ));
 
-                                if resp.clicked_by(egui::PointerButton::Primary) && !selected {
+                                if resp.clicked_by(egui::PointerButton::Primary) && !selected && !active {
                                     self.selected_id = Some(SelectedItemId::Board(board.board.uid));
 
                                     if let Some(preview) = board.preview.as_ref() {
@@ -666,6 +666,9 @@ impl CircuitBoardEditor {
 
                                 if resp.double_clicked_by(egui::PointerButton::Primary) && !active {
                                     self.board = ActiveCircuitBoard::new_main(board.board.clone());
+                                    if selected {
+                                        self.selected_id = None;
+                                    }
                                 }
 
                                 resp.context_menu(|ui| {

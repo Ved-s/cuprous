@@ -6,6 +6,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
+use serde_intermediate::Intermediate;
 
 use crate::{
     app::SimulationContext,
@@ -297,6 +298,7 @@ impl Circuit {
         preview: &CircuitPreview,
         board: Arc<CircuitBoard>,
         props_override: Option<CircuitPropertyStore>,
+        imp_data: Option<&Intermediate>
     ) -> Arc<Self> {
         let imp = preview.imp.create_impl();
         let props = props_override.unwrap_or_else(|| preview.props.clone());
@@ -312,6 +314,9 @@ impl Circuit {
         });
 
         let mut imp = circuit.imp.write();
+        if let Some(data) = imp_data {
+            imp.load(&circuit, data, false);
+        }
 
         imp.apply_props(&circuit, None);
         let mut pins = imp.create_pins(&circuit);

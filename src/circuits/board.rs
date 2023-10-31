@@ -1,11 +1,14 @@
-use std::{collections::HashSet, ops::Deref};
+use std::{
+    collections::{HashMap, HashSet},
+    ops::Deref,
+};
 
 use bimap::BiMap;
 use eframe::{
     egui::{TextStyle, WidgetText},
-    epaint::{Color32, Rounding, Stroke, TextShape},
+    epaint::{Color32, Rounding, Stroke, TextShape, FontId},
 };
-use emath::pos2;
+use emath::{pos2, Align2};
 
 use crate::{
     board::{CircuitBoard, CircuitDesign},
@@ -14,10 +17,13 @@ use crate::{
     unwrap_option_or_return,
 };
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct CircuitDataModel {
     board: u128,
     design: usize,
+
+    size: Vec2u,
+    pins: Vec<DynStaticStr>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -60,6 +66,9 @@ pub struct Board {
     unresolved_inner_pins: RwLock<HashSet<usize>>,
     unresolved_outer_pins: RwLock<HashSet<usize>>,
     pins: Box<[CircuitPinInfo]>,
+
+    saved_size: Option<Vec2u>,
+    saved_pin_ids: Option<Vec<DynStaticStr>>,
 }
 
 // TODO: handle state destruction on remove
@@ -252,6 +261,18 @@ impl CircuitImpl for Board {
     }
 
     fn create_pins(&mut self, circ: &Arc<Circuit>) -> Box<[CircuitPinInfo]> {
+        if self.design.is_none() {
+            if let Some(saved_pins) = &self.saved_pin_ids {
+                return saved_pins
+                    .iter()
+                    .map(|id| {
+                        CircuitPinInfo::new(0, InternalPinDirection::Custom, id.clone(), "", None)
+                    })
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice();
+            }
+        }
+
         let description = Self::describe_props(self.design.as_deref(), &circ.props);
         let pins = description
             .pins
@@ -326,7 +347,11 @@ impl CircuitImpl for Board {
     }
 
     fn size(&self, _: &Arc<Circuit>) -> Vec2u {
-        self.design.as_ref().map_or(2.into(), |d| d.size)
+        self.design
+            .as_ref()
+            .map(|d| d.size)
+            .or(self.saved_size)
+            .unwrap_or(2.into())
     }
 
     // Load board and design
@@ -339,6 +364,50 @@ impl CircuitImpl for Board {
         if let (true, Some(id), Some(board)) = (self.design.is_none(), self.design_id, &self.board)
         {
             self.design = board.designs.read().get(id);
+
+            if self.design.is_some() {
+                self.saved_size = None;
+                self.saved_pin_ids = None;
+            }
+        }
+
+        // Hackery
+        if let Some(design) = &self.design {
+            let mut info = circ.info.write();
+            let pins: HashMap<_, _> =
+                HashMap::from_iter(info.pins.iter().map(|i| (i.name.clone(), i.pin.clone())));
+
+            let desc = Board::describe(Some(design));
+            let pins: Vec<_> = desc
+                .pins
+                .iter()
+                .enumerate()
+                .map(|(i, p)| {
+                    let pin = pins.get(&p.name).cloned();
+                    match pin {
+                        None => p.to_info(),
+                        Some(pin) => {
+                            {
+                                let mut pin = pin.write();
+                                pin.id.id = i;
+                                pin.dir = p.dir;
+                            }
+
+                            CircuitPinInfo {
+                                display_name: p.display_name.clone(),
+                                display_dir: p.display_dir,
+                                name: p.name.clone(),
+                                pos: p.pos,
+                                pin,
+                            }
+                        }
+                    }
+                })
+                .collect();
+            info.pins = pins.into_boxed_slice();
+            info.size = design.size;
+
+            self.pins = info.pins.clone();
         }
     }
 
@@ -349,8 +418,7 @@ impl CircuitImpl for Board {
                 if let Some(id) = s.state_id {
                     let state = board.states.get(id);
                     if let Some(state) = state {
-                        let mut parent = state.parent.write();
-                        if parent.is_some() {
+                        if state.get_parent().is_some() {
                             // If circuit was pasted and there's a state conflict, create new state instead
                             if s.pasted {
                                 return true;
@@ -360,11 +428,10 @@ impl CircuitImpl for Board {
                             return false;
                         }
 
-                        *parent = Some(StateParent {
+                        state.set_parent(Some(StateParent {
                             state: ctx.global_state.clone(),
                             circuit: ctx.circuit.clone(),
-                        });
-                        drop(parent);
+                        }));
                         state.set_frozen(false);
                         s.state = Some(state);
                         return false;
@@ -375,10 +442,10 @@ impl CircuitImpl for Board {
 
             if create_new && first_init {
                 let state = board.states.create_state(board.clone());
-                *state.parent.write() = Some(StateParent {
+                state.set_parent(Some(StateParent {
                     state: ctx.global_state.clone(),
                     circuit: ctx.circuit.clone(),
-                });
+                }));
                 ctx.set_circuit_internal_state(Some(BoardState {
                     parent_error: false,
                     pasted: false,
@@ -392,7 +459,7 @@ impl CircuitImpl for Board {
     fn state_remove(&self, ctx: &CircuitStateContext) {
         ctx.write_circuit_internal_state(|s: &mut BoardState| {
             if let Some(state) = s.state.take() {
-                *state.parent.write() = None;
+                state.set_parent(None);
                 state.set_frozen(true);
             }
             s.state_id = None;
@@ -416,7 +483,7 @@ impl CircuitImpl for Board {
         None
     }
 
-    fn save(&self, _: &Arc<Circuit>, _: bool) -> serde_intermediate::Intermediate {
+    fn save(&self, circ: &Arc<Circuit>, _: bool) -> serde_intermediate::Intermediate {
         let board_id = self.board.as_ref().map(|b| b.uid).or(self.board_id);
 
         let design_id = self.design.as_ref().map(|d| d.id).or(self.design_id);
@@ -424,9 +491,13 @@ impl CircuitImpl for Board {
         let board_id = unwrap_option_or_return!(board_id, ().into());
         let design_id = unwrap_option_or_return!(design_id, ().into());
 
+        let info = circ.info.read();
+
         let model = CircuitDataModel {
             board: board_id,
             design: design_id,
+            size: info.size,
+            pins: info.pins.iter().map(|p| p.name.clone()).collect(),
         };
         serde_intermediate::to_intermediate(&model).unwrap_or_default()
     }
@@ -437,6 +508,9 @@ impl CircuitImpl for Board {
 
         self.board_id = Some(model.board);
         self.design_id = Some(model.design);
+
+        self.saved_size = Some(model.size);
+        self.saved_pin_ids = Some(model.pins);
     }
 }
 
@@ -475,6 +549,18 @@ impl CircuitPreviewImpl for BoardPreview {
             ctx,
             in_world,
         );
+
+        if let (Some(design), Some(board)) = (&design, &self.board) {
+            if in_world && board.pins.read().len() > design.pins.len() {
+                ctx.paint.text(
+                    ctx.rect.left_bottom(),
+                    Align2::LEFT_TOP, 
+                    "Some board pins aren't placed in its design.\nAdd them in the designer by right-clicking board name and choosing \"Design\"",
+                    FontId::monospace(ctx.screen.scale * 0.5),
+                    Color32::from_rgb(255, 128, 0)
+                );
+            }
+        }
     }
 
     fn create_impl(&self) -> Box<dyn CircuitImpl> {

@@ -1,7 +1,11 @@
 use std::{
     any::{Any, TypeId},
     borrow::BorrowMut,
-    sync::{Arc, atomic::{AtomicBool, Ordering}},
+    ops::Deref,
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc,
+    },
     time::Duration,
 };
 
@@ -130,7 +134,7 @@ impl From<SafeWireState> for WireState {
 
 pub trait InternalCircuitState: Any + Send + Sync {
     fn serialize(&self, copy: bool) -> serde_intermediate::Intermediate {
-        let _  = copy;
+        let _ = copy;
         ().into()
     }
 }
@@ -283,13 +287,13 @@ impl StateCollection {
 
     #[cfg(single_thread)]
     pub fn update(&self) {}
-
-    #[cfg(not(feature = "single_thread"))]
+    
     pub fn initialize(&self) {
         for state in self.states.read().iter() {
             state.init_circuit_states(false);
         }
 
+        #[cfg(not(feature = "single_thread"))]
         for state in self.states.read().iter() {
             state.wake_thread(false);
         }
@@ -302,6 +306,7 @@ impl StateCollection {
     }
 }
 
+#[derive(Clone)]
 pub struct StateParent {
     pub state: Arc<State>,
     pub circuit: Arc<Circuit>,
@@ -309,7 +314,6 @@ pub struct StateParent {
 
 pub struct State {
     pub id: usize,
-    pub parent: RwLock<Option<StateParent>>,
 
     pub wires: RwLock<FixedVec<RwLock<WireState>>>,
     pub circuits: RwLock<FixedVec<RwLock<CircuitState>>>,
@@ -323,6 +327,8 @@ pub struct State {
     circuit_updates_removes: Mutex<Vec<usize>>,
 
     pub updates: Mutex<Vec<(usize, Instant)>>,
+    parent: RwLock<Option<StateParent>>,
+    children: AtomicUsize,
     frozen: AtomicBool,
 }
 
@@ -341,8 +347,9 @@ impl State {
             circuit_updates_removes: Default::default(),
             updates: Default::default(),
             frozen: AtomicBool::new(false),
+            children: AtomicUsize::new(0),
         });
-        state.init_circuit_states(false);
+        state.init_circuit_states(true);
         state
     }
 
@@ -417,6 +424,8 @@ impl State {
 
     pub fn set_frozen(self: &Arc<Self>, frozen: bool) {
         self.frozen.store(frozen, Ordering::Relaxed);
+
+        #[cfg(not(feature = "single_thread"))]
         self.wake_thread(true);
     }
 
@@ -425,7 +434,10 @@ impl State {
     }
 
     pub fn is_being_used(self: &Arc<Self>) -> bool {
-        self.parent.read().is_some() || self.id == 0 || Arc::strong_count(self) > 1 || Arc::weak_count(self) > 0
+        self.get_parent().is_some_and(|p| p.state.is_being_used())
+            || self.id == 0
+            || Arc::strong_count(self) - self.children.load(Ordering::Relaxed) > 1
+            || Arc::weak_count(self) > 0
     }
 
     pub fn save(&self) -> crate::io::StateData {
@@ -479,6 +491,7 @@ impl State {
             circuit_updates_removes: Default::default(),
             updates: Mutex::new(updates),
             frozen: AtomicBool::new(false),
+            children: AtomicUsize::new(0)
         });
 
         let board_circuits = state.board.circuits.read();
@@ -514,8 +527,14 @@ impl State {
         self.wires.write().remove(wire);
     }
 
-    pub fn remove_circuit_state(self: &Arc<Self>, circuit: &Arc<Circuit>) {
+    pub fn remove_circuit_states(self: &Arc<Self>) {
+        let circuits = self.board.circuits.read();
+        for circuit in circuits.iter() {
+            self.remove_circuit_state(circuit);
+        }
+    }
 
+    pub fn remove_circuit_state(self: &Arc<Self>, circuit: &Arc<Circuit>) {
         let state_ctx = CircuitStateContext::new(self.clone(), circuit.clone());
         circuit.imp.read().state_remove(&state_ctx);
 
@@ -541,7 +560,6 @@ impl State {
     }
 
     fn update_once(self: &Arc<State>, queue_limit: usize) -> Option<Instant> {
-
         if self.frozen.load(Ordering::Relaxed) {
             return None;
         }
@@ -792,15 +810,22 @@ impl State {
         }
     }
 
-    pub fn reset(&self) {
+    pub fn reset(self: &Arc<Self>) {
         // Important to lock everything, so thread won't do anything
         let mut queue = self.queue.lock();
-        let mut circuits = self.circuits.write();
+
+        self.remove_circuit_states();
+
         let mut wires = self.wires.write();
+        let mut circuits = self.circuits.write();
 
         queue.clear();
         circuits.clear();
         wires.clear();
+
+        drop((queue, circuits, wires));
+
+        self.init_circuit_states(true);
     }
 
     pub fn update_everything(self: &Arc<Self>) {
@@ -832,6 +857,22 @@ impl State {
             .states
             .get(self.id)
             .expect("this state must exist")
+    }
+
+    pub fn get_parent(&self) -> Option<StateParent> {
+        self.parent.read().clone()
+    }
+
+    pub fn set_parent(&self, new_parent: Option<StateParent>) {
+        let mut parent = self.parent.write();
+        if let Some(parent) = parent.deref() {
+            parent.state.children.fetch_sub(1, Ordering::Relaxed);
+        }
+
+        if let Some(parent) = &new_parent {
+            parent.state.children.fetch_add(1, Ordering::Relaxed);
+        }
+        *parent = new_parent;
     }
 }
 

@@ -428,6 +428,39 @@ where
     }
 }
 
+pub struct PaintableInventoryItem<I, F>
+where
+    I: Clone,
+    F: Fn(&PaintContext),
+{
+    id: I,
+    painter: F,
+}
+
+impl<I, F> PaintableInventoryItem<I, F>
+where
+    I: Clone,
+    F: Fn(&PaintContext),
+{
+    pub fn new(id: I, painter: F) -> Self {
+        Self { id, painter }
+    }
+}
+
+impl<I, F> InventoryItem<I> for PaintableInventoryItem<I, F>
+where
+    I: Clone,
+    F: Fn(&PaintContext),
+{
+    fn id(&self) -> I {
+        self.id.clone()
+    }
+
+    fn draw(&self, ctx: &PaintContext) {
+        (self.painter)(ctx);
+    }
+}
+
 #[derive(PartialEq, Eq, Hash, Clone)]
 struct PropertyId {
     id: DynStaticStr,
@@ -954,13 +987,30 @@ pub struct RectVisuals {
     pub fill: Color32,
     pub stroke: Stroke,
 }
+impl RectVisuals {
+    fn scaled_by(self, scale: f32) -> Self {
+        Self {
+            rounding: Rounding {
+                nw: self.rounding.nw * scale,
+                ne: self.rounding.ne * scale,
+                sw: self.rounding.sw * scale,
+                se: self.rounding.se * scale,
+            },
+            fill: self.fill,
+            stroke: Stroke {
+                width: self.stroke.width * scale,
+                color: self.stroke.color,
+            },
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub enum DragState {
     None,
     Started(Sides),
     Dragging(Sides),
-    Ended(Sides)
+    Ended(Sides),
 }
 
 pub fn rect_editor(
@@ -1032,7 +1082,6 @@ pub fn rect_editor(
     let any_drag = ui.memory(|mem| mem.is_anything_being_dragged());
     let editing = ui.memory(|mem| mem.is_being_dragged(id));
 
-    let drag_changed = state.drag != editing;
     if state.drag && !editing {
         ui.memory_mut(|mem| {
             mem.data.insert_temp(id, State::default());
@@ -1097,7 +1146,9 @@ pub fn rect_editor(
     let hover_rounding = Rounding::same(grab / 2.0);
     let hover_color = Color32::WHITE.linear_multiply(0.3);
 
-    let top = ui.ctx().animate_bool(id.with("__hover_top"), state.sides.top);
+    let top = ui
+        .ctx()
+        .animate_bool(id.with("__hover_top"), state.sides.top);
     if top > 0.0 {
         paint.rect(
             Rect::from_min_size(
@@ -1110,7 +1161,9 @@ pub fn rect_editor(
         )
     }
 
-    let left = ui.ctx().animate_bool(id.with("__hover_left"), state.sides.left);
+    let left = ui
+        .ctx()
+        .animate_bool(id.with("__hover_left"), state.sides.left);
     if left > 0.0 {
         paint.rect(
             Rect::from_min_size(
@@ -1138,7 +1191,9 @@ pub fn rect_editor(
         )
     }
 
-    let right = ui.ctx().animate_bool(id.with("__hover_right"), state.sides.right);
+    let right = ui
+        .ctx()
+        .animate_bool(id.with("__hover_right"), state.sides.right);
     if right > 0.0 {
         paint.rect(
             Rect::from_min_size(

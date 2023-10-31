@@ -1,4 +1,8 @@
-use std::{f32::consts::TAU, ops::Deref, sync::Arc};
+use std::{
+    f32::consts::TAU,
+    ops::{Deref, DerefMut},
+    sync::Arc,
+};
 
 use eframe::{
     egui::{
@@ -12,7 +16,7 @@ use emath::{pos2, vec2, Align2, Pos2, Rect};
 use crate::{
     board::{CircuitDesign, CircuitDesignPin, CircuitDesignStorage, Decoration, DecorationType},
     circuits::InternalPinDirection,
-    ext::IteratorSameExt,
+    ext::{IteratorEqExt, IteratorExt},
     state::WireState,
     vector::{Vec2f, Vec2u},
     Direction4, DynStaticStr, PaintContext, PanAndZoom, RwLock,
@@ -22,9 +26,10 @@ use super::{
     drawing, rect_editor,
     selection::{
         selection_border_color, selection_fill_color, Selection, SelectionImpl,
-        SelectionInventoryItem, SelectionMode,
+        SelectionInventoryItem,
     },
-    CollapsibleSidePanel, DragState, Inventory, InventoryItemGroup, RectVisuals, Sides,
+    CollapsibleSidePanel, DragState, Inventory, InventoryItemGroup, PaintableInventoryItem,
+    RectVisuals, Sides,
 };
 
 pub struct DesignerResponse {
@@ -35,6 +40,7 @@ pub struct DesignerResponse {
 enum SelectedItemId {
     Selection,
     Pin(DynStaticStr),
+    Rect,
 }
 
 #[derive(PartialEq, Eq, Hash)]
@@ -64,7 +70,10 @@ pub trait DesignProvider {
 #[derive(Default)]
 struct DesignerSelectionImpl {}
 
-impl SelectionImpl<SelectedDesignObject, CircuitDesign> for DesignerSelectionImpl {
+impl SelectionImpl for DesignerSelectionImpl {
+    type Pass = CircuitDesign;
+    type Object = SelectedDesignObject;
+
     fn collect_changes(
         &mut self,
         pass: &CircuitDesign,
@@ -138,9 +147,11 @@ pub struct Designer {
     selected_id: Option<SelectedItemId>,
 
     inventory: Box<[InventoryItemGroup<SelectedItemId>]>,
-    selection: Selection<DesignerSelectionImpl, SelectedDesignObject, CircuitDesign>,
+    selection: Selection<DesignerSelectionImpl>,
 
     selected_pin_dir: Option<Direction4>,
+    default_rect_visuals: Arc<RwLock<RectVisuals>>,
+    rect_drag_start: Option<Vec2f>,
 }
 
 impl Designer {
@@ -150,17 +161,44 @@ impl Designer {
         let size = storage.read().current().size;
         let pan_zoom = PanAndZoom::new(size.convert(|v| v as f32) / 2.0, 16.0);
 
+        let rect_visuals = Arc::new(RwLock::new(RectVisuals {
+            rounding: Rounding::ZERO,
+            fill: Color32::WHITE,
+            stroke: Stroke::new(0.1, Color32::BLACK),
+        }));
+
+        let rect_visuals_clone = rect_visuals.clone();
+        let rect_painter = move |ctx: &PaintContext| {
+            let rect_visuals = rect_visuals_clone.read().scaled_by(ctx.rect.width() * 0.20);
+            let rect = ctx.rect.shrink2(ctx.rect.size() / 5.0);
+
+            ctx.paint.rect(
+                rect,
+                rect_visuals.rounding,
+                rect_visuals.fill,
+                rect_visuals.stroke,
+            );
+        };
+
         Self {
             storage,
             provider,
             pan_zoom,
             selected_id: None,
-            inventory: vec![InventoryItemGroup::SingleItem(Box::new(
-                SelectionInventoryItem::new(SelectedItemId::Selection),
-            ))]
+            inventory: vec![
+                InventoryItemGroup::SingleItem(Box::new(SelectionInventoryItem::new(
+                    SelectedItemId::Selection,
+                ))),
+                InventoryItemGroup::SingleItem(Box::new(PaintableInventoryItem::new(
+                    SelectedItemId::Rect,
+                    rect_painter,
+                ))),
+            ]
             .into_boxed_slice(),
             selection: Default::default(),
             selected_pin_dir: None,
+            default_rect_visuals: rect_visuals,
+            rect_drag_start: None,
         }
     }
 
@@ -169,6 +207,10 @@ impl Designer {
 
         self.pan_zoom.update(ui, rect, self.selected_id.is_none());
 
+        let designs = self.storage.clone();
+        let mut designs = designs.write();
+        let design = designs.current_mut();
+
         #[allow(clippy::collapsible_if)]
         if !ui.ctx().wants_keyboard_input() {
             if ui.input(|input| input.key_pressed(Key::R)) {
@@ -176,7 +218,34 @@ impl Designer {
                     if let Some(dir) = &mut self.selected_pin_dir {
                         *dir = dir.rotate_clockwise();
                     }
+                } else {
+                    for object in self.selection.iter() {
+                        if let SelectedDesignObject::Pin(id) = object {
+                            if let Some(pin) = design.pins.get_mut(*id) {
+                                pin.display_dir = pin.display_dir.map(|d| d.rotate_clockwise());
+                            }
+                        }
+                    }
                 }
+            }
+
+            if ui.input(|input| input.key_pressed(Key::Delete)) {
+                for i in (0..design.pins.len()).rev() {
+                    if self.selection.contains(&SelectedDesignObject::Pin(i)) {
+                        design.pins.remove(i);
+                    }
+                }
+
+                for i in (0..design.decorations.len()).rev() {
+                    if self
+                        .selection
+                        .contains(&SelectedDesignObject::Decoration(i))
+                    {
+                        design.decorations.remove(i);
+                    }
+                }
+
+                self.selection.clear();
             }
         }
 
@@ -196,10 +265,6 @@ impl Designer {
             rect,
             ui,
         };
-
-        let designs = self.storage.clone();
-        let mut designs = designs.write();
-        let design = designs.current_mut();
 
         let world_font = FontId::new(screen.scale * 0.5, eframe::epaint::FontFamily::Monospace);
 
@@ -374,10 +439,9 @@ impl Designer {
 
         self.selection.update_selection(design, &ctx);
 
-        #[allow(clippy::collapsible_match)] // More items todo
-        #[allow(clippy::single_match)]
         if let Some(selected) = &self.selected_id {
             match selected {
+                SelectedItemId::Selection => {}
                 SelectedItemId::Pin(id) => 'm: {
                     for pin in design.pins.iter() {
                         if pin.id == *id {
@@ -413,13 +477,51 @@ impl Designer {
                             display_dir: self.selected_pin_dir,
                             display_name: info.display_name,
                         });
+
+                        self.selected_id = None;
                     }
                 }
-                _ => {}
+                SelectedItemId::Rect => {
+                    let mouse_tile_pos = ctx
+                        .ui
+                        .input(|input| input.pointer.interact_pos())
+                        .map(|p| ctx.screen.screen_to_world(Vec2f::from(p)));
+
+                    let mouse_tile_pos = match ui.input(|input| input.modifiers.shift) {
+                        false => mouse_tile_pos,
+                        true => mouse_tile_pos.map(|p| p.convert(|v| (v * 2.0).round() * 0.5)),
+                    };
+
+                    let interaction = ctx.ui.interact(ctx.rect, ctx.ui.id(), Sense::drag());
+
+                    if interaction.drag_started_by(PointerButton::Primary) {
+                        self.rect_drag_start = mouse_tile_pos;
+                    }
+                    if let (Some(rect_drag_start), Some(mouse_tile_pos)) =
+                        (self.rect_drag_start, mouse_tile_pos)
+                    {
+                        let rect =
+                            Rect::from_two_pos(rect_drag_start.into(), mouse_tile_pos.into());
+                        let visuals = *self.default_rect_visuals.read();
+                        let scaled_visuals = visuals.scaled_by(ctx.screen.scale);
+
+                        ctx.paint.rect(
+                            ctx.screen.world_to_screen_rect(rect),
+                            scaled_visuals.rounding,
+                            scaled_visuals.fill,
+                            scaled_visuals.stroke,
+                        );
+
+                        if interaction.drag_released_by(PointerButton::Primary) {
+                            design.decorations.push(Decoration::Rect { rect, visuals });
+                            self.rect_drag_start = None;
+                        }
+                    }
+                }
             }
         }
 
-        let components_rect = self.components_ui(ui);
+        let components_rect = self.components_ui(ui, design);
         let properties_rect = self.properties_ui(ui, design);
 
         drop(designs);
@@ -442,10 +544,12 @@ impl Designer {
                 SelectedItemId::Pin(id) => {
                     self.provider.get_pin(id).map(|i| i.display_name.clone())
                 }
+                SelectedItemId::Rect => Some("Rectangle".into()),
             });
 
         if inv_resp.changed() {
             self.selected_pin_dir = None;
+            self.rect_drag_start = None;
         }
 
         DesignerResponse { close }
@@ -493,7 +597,7 @@ impl Designer {
         }
     }
 
-    fn components_ui(&mut self, ui: &mut Ui) -> Rect {
+    fn components_ui(&mut self, ui: &mut Ui, design: &mut CircuitDesign) -> Rect {
         let style = ui.style().clone();
         CollapsibleSidePanel::new("components-ui", "Components")
             .header_offset(20.0)
@@ -541,7 +645,7 @@ impl Designer {
                                         InternalPinDirection::Outside => Some(false),
                                         InternalPinDirection::Custom => None,
                                     };
-                                    let angle = if pico == Some(false) { TAU * 0.5 } else { 0.0 };
+                                    let angle = if pico == Some(true) { TAU * 0.5 } else { 0.0 };
                                     crate::graphics::outside_pin(
                                         WireState::False,
                                         true,
@@ -561,11 +665,28 @@ impl Designer {
                                         .selectable_label(selected, info.display_name.deref())
                                         .clicked()
                                     {
-                                        self.selected_id = match selected {
-                                            true => None,
-                                            false => Some(SelectedItemId::Pin(id.clone())),
-                                        };
-                                        self.selected_pin_dir = info.display_dir;
+                                        let existing_pin =
+                                            design.pins.iter().find_index(|p| p.id == id);
+
+                                        if let Some(existing_pin) = existing_pin {
+                                            self.selection.clear();
+                                            self.selection
+                                                .selection
+                                                .insert(SelectedDesignObject::Pin(existing_pin));
+
+                                            if let Some(pin) = design.pins.get(existing_pin) {
+                                                let center = pin.pos.convert(|v| v as f32 + 0.5);
+
+                                                self.pan_zoom.center_pos = center;
+                                                self.pan_zoom.scale = self.pan_zoom.scale.max(8.0)
+                                            }
+                                        } else {
+                                            self.selected_id = match selected {
+                                                true => None,
+                                                false => Some(SelectedItemId::Pin(id.clone())),
+                                            };
+                                            self.selected_pin_dir = info.display_dir;
+                                        }
                                     }
                                 });
                             }
@@ -575,10 +696,14 @@ impl Designer {
             .full_rect
     }
 
-    fn properties_ui(&self, ui: &mut Ui, design: &mut CircuitDesign) -> Rect {
+    fn properties_ui(&mut self, ui: &mut Ui, design: &mut CircuitDesign) -> Rect {
         let style = ui.style().clone();
 
-        let active = !self.selection.selection.is_empty();
+        let active = !self.selection.selection.is_empty()
+            || self
+                .selected_id
+                .as_ref()
+                .is_some_and(|s| matches!(s, SelectedItemId::Pin(_) | SelectedItemId::Rect));
 
         CollapsibleSidePanel::new("prop-ui", "Properties editor")
             .active(active)
@@ -603,7 +728,8 @@ impl Designer {
             .show(ui, |ui| {
                 if !self.selection.selection.is_empty() {
                     let same_type = self
-                        .selection.iter_selection()
+                        .selection
+                        .iter()
                         .filter_map(|o| match o {
                             SelectedDesignObject::Decoration(id) => design
                                 .decorations
@@ -621,27 +747,43 @@ impl Designer {
                             });
                         }
                         Some(SelectedDesignObjectType::Decoration(DecorationType::Rect)) => {
-                            let iter = design.decorations.iter_mut().enumerate().filter_map(|(i, d)| {
-                                let key = SelectedDesignObject::Decoration(i);
-                                if !self.selection.is_selected(&key) {
-                                    return None;
-                                }
-                                match d {
-                                    Decoration::Rect { rect: _, visuals } => Some(visuals),
-                                }
-                            });
+                            let iter =
+                                design
+                                    .decorations
+                                    .iter_mut()
+                                    .enumerate()
+                                    .filter_map(|(i, d)| {
+                                        let key = SelectedDesignObject::Decoration(i);
+                                        if !self.selection.contains(&key) {
+                                            return None;
+                                        }
+                                        match d {
+                                            Decoration::Rect { rect: _, visuals } => Some(visuals),
+                                        }
+                                    });
 
                             Self::rect_properties(iter, ui);
                         }
                         Some(SelectedDesignObjectType::Pin) => {
                             let iter = design.pins.iter_mut().enumerate().filter_map(|(i, p)| {
                                 let key = SelectedDesignObject::Pin(i);
-                                self.selection.is_selected(&key).then_some(&mut p.display_dir)
+                                self.selection.contains(&key).then_some(&mut p.display_dir)
                             });
 
                             Self::pin_properties(iter, ui);
                         }
                     };
+                } else if let Some(selected) = &self.selected_id {
+                    match selected {
+                        SelectedItemId::Selection => {}
+                        SelectedItemId::Pin(_) => {
+                            Self::pin_properties([&mut self.selected_pin_dir].into_iter(), ui);
+                        }
+                        SelectedItemId::Rect => {
+                            let mut visuals = self.default_rect_visuals.write();
+                            Self::rect_properties([visuals.deref_mut()].into_iter(), ui)
+                        }
+                    }
                 }
             })
             .full_rect
@@ -712,7 +854,6 @@ impl Designer {
             ComboBox::from_id_source(ui.next_auto_id())
                 .selected_text(dir_name(*value))
                 .show_ui(ui, |ui| {
-
                     let iter = [None].into_iter().chain(Direction4::iter_all().map(Some));
 
                     for dir in iter {

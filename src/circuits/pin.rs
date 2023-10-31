@@ -151,8 +151,7 @@ impl CircuitImpl for Pin {
     fn draw(&self, state_ctx: &CircuitStateContext, paint_ctx: &PaintContext) {
         let outside_state = state_ctx
             .global_state
-            .parent
-            .read()
+            .get_parent()
             .as_ref()
             .map(|p| {
                 let outer = p.circuit.read_imp::<super::board::Board, _>(|board| {
@@ -269,8 +268,8 @@ impl CircuitImpl for Pin {
 
             self.pin.set_direction(state_ctx, dir);
 
-            let parent = state_ctx.global_state.parent.read();
-            if let Some(parent) = parent.deref() {
+            let parent = state_ctx.global_state.get_parent();
+            if let Some(parent) = parent {
                 let outer = parent
                     .circuit
                     .read_imp::<super::board::Board, _>(|board| {
@@ -294,8 +293,8 @@ impl CircuitImpl for Pin {
             }
         }
         if let None | Some(0) = changed_pin {
-            let parent = state_ctx.global_state.parent.read();
-            match parent.as_ref() {
+            let parent = state_ctx.global_state.get_parent();
+            match parent {
                 Some(parent) => 'm: {
                     let outer = parent
                         .circuit
