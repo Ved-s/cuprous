@@ -32,14 +32,15 @@ impl eframe::App for App {
         ctx.request_repaint();
 
         // TODO: timings
-        // #[cfg(feature = "single_thread")]
-        //let sim_time = {
+        #[cfg(feature = "single_thread")]
+        //let sim_time = 
+        {
             //let start_time = Instant::now();
             for board in self.sim.boards.read().values() {
                 board.board.states.update();
             }
             //Instant::now() - start_time
-        //};
+        };
 
         egui::CentralPanel::default()
             .frame(egui::Frame::central_panel(ctx.style().as_ref()).inner_margin(Margin::same(0.0)))
