@@ -23,7 +23,7 @@ getrandom = { version = "0.2" }
 getrandom = { version = "0.2", features = ["js"] }
 js-sys = "0.3.64"
 web-sys = "0.3.64"
-wasm-bindgen = "0.2.87"
+wasm-bindgen = "0.2.88"
 wasm-bindgen-futures = "0.4.37"
 wasm-bindgen_rs = { package = "wasm-bindgen", version = "0.2", optional = true }
 
