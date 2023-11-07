@@ -23,8 +23,16 @@ Logisim-inspired logic circuits simulator
 - Proper mobile support
 - Proper errors
 
-- Remove wire with Wire tool
+- UI descriptions, tooltips, hints, etc
+
+## Local TODOs
+
 - Rotate selection
+- Remove wire with Wire tool
+- Warning to replace circuits that don't match latest pin layout
+- Make pins use random ID and store it in board data
+- When copying pins, preserve their ID and design data
+- Maybe show circuit pin labels in paste
 
 ![](progress_preview.png)
 

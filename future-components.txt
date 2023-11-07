@@ -1,0 +1,4 @@
+LEDs: circular, rectangular, segment of 7-seg display, 7-segment display
+LED buttons: rect, circle
+small switches
+MIDI player with `midir` crate

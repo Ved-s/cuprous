@@ -2,7 +2,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::fmt::Write;
 use std::hash::{Hash, Hasher};
 
-use eframe::egui::{ComboBox, Sense, Ui};
+use eframe::egui::{ComboBox, Sense, Ui, CursorIcon};
 use emath::{vec2, Rect};
 
 use crate::circuits::props::CircuitProperty;
@@ -196,45 +196,49 @@ impl CircuitImpl for Pin {
             paint_ctx,
         );
 
-        // TODO: don't interact if this state has parent state
+        if state_ctx.global_state.get_parent().is_none() {
+            let size = vec2(paint_ctx.screen.scale, paint_ctx.screen.scale);
+            let rect = Rect::from_center_size(center, size);
+            let interaction = paint_ctx.ui.interact(
+                rect,
+                paint_ctx.ui.auto_id_with(state_ctx.circuit.pos),
+                Sense::click(),
+            );
 
-        let size = vec2(paint_ctx.screen.scale, paint_ctx.screen.scale);
-        let rect = Rect::from_center_size(center, size);
-        let interaction = paint_ctx.ui.interact(
-            rect,
-            paint_ctx.ui.auto_id_with(state_ctx.circuit.pos),
-            Sense::click(),
-        );
+            if interaction.hovered() {
+                paint_ctx.ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+            }
 
-        if interaction.clicked() {
-            let (shift, control) = paint_ctx
-                .ui
-                .input(|input| (input.modifiers.shift, input.modifiers.command));
-            let new_state = state_ctx.write_circuit_internal_state(|s: &mut PinState| {
-                // None -> False -> True -> [control: Error] -> [shift ? None : False]
-                // shift: None -> False -> True -> None
-                // control: None | Error -> False -> True -> Error
+            if interaction.clicked() {
+                let (shift, control) = paint_ctx
+                    .ui
+                    .input(|input| (input.modifiers.shift, input.modifiers.command));
+                let new_state = state_ctx.write_circuit_internal_state(|s: &mut PinState| {
+                    // None -> False -> True -> [control: Error] -> [shift ? None : False]
+                    // shift: None -> False -> True -> None
+                    // control: None | Error -> False -> True -> Error
 
-                s.state.0 = match (s.state.0, shift, control) {
-                    (WireState::True, false, false) => WireState::False,
-                    (WireState::False, false, false) => WireState::True,
-                    (_, false, false) => WireState::False,
+                    s.state.0 = match (s.state.0, shift, control) {
+                        (WireState::True, false, false) => WireState::False,
+                        (WireState::False, false, false) => WireState::True,
+                        (_, false, false) => WireState::False,
 
-                    (WireState::None, _, _) => WireState::False,
-                    (WireState::False, _, _) => WireState::True,
+                        (WireState::None, _, _) => WireState::False,
+                        (WireState::False, _, _) => WireState::True,
 
-                    (WireState::True, _, true) => WireState::Error,
-                    (WireState::Error, false, true) => WireState::False,
-                    (WireState::Error, true, true) => WireState::None,
+                        (WireState::True, _, true) => WireState::Error,
+                        (WireState::Error, false, true) => WireState::False,
+                        (WireState::Error, true, true) => WireState::None,
 
-                    (WireState::True, true, false) => WireState::None,
-                    (WireState::Error, true, false) => WireState::None,
-                };
-                s.state.0
-            });
+                        (WireState::True, true, false) => WireState::None,
+                        (WireState::Error, true, false) => WireState::None,
+                    };
+                    s.state.0
+                });
 
-            if self.is_pico(state_ctx) {
-                self.pin.set_state(state_ctx, new_state);
+                if self.is_pico(state_ctx) {
+                    self.pin.set_state(state_ctx, new_state);
+                }
             }
         }
     }
@@ -432,7 +436,11 @@ impl CircuitImpl for Pin {
 
         let mut designs = circ.board.designs.write();
         let design = designs.current_mut();
-        let index = design.pins.iter().enumerate().find_map(|(i, p)| (p.id.deref() == id.deref()).then_some(i));
+        let index = design
+            .pins
+            .iter()
+            .enumerate()
+            .find_map(|(i, p)| (p.id.deref() == id.deref()).then_some(i));
 
         if let Some(index) = index {
             design.pins.remove(index);

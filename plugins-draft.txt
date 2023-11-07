@@ -1,0 +1,29 @@
+// Host side
+
+struct PluginCircuit {
+    id: usize,
+    id_str: Arc<str>
+}
+
+struct Plugin {
+    circuits: Box<[PluiginCircuit]>
+}
+
+// Plugin side
+
+struct PluginPreview {
+
+}
+
+struct PluginCircuit {
+    imp: Box<PluginCircuitImpl>
+}
+
+struct PluginBoard {
+    circuits: Vec<PluginCircuit>
+}
+
+struct Plugin {
+    previews: Box<[PluginPreview]>
+    boards: Vec<PluginBoard>
+}

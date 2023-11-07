@@ -1,5 +1,5 @@
 use eframe::{
-    egui::{PointerButton, Sense},
+    egui::{PointerButton, Sense, CursorIcon},
     epaint::{Color32, FontId, Rounding},
 };
 use emath::Align2;
@@ -81,6 +81,9 @@ impl CircuitImpl for Button {
             paint_ctx.ui.auto_id_with(state_ctx.circuit.pos),
             Sense::drag(),
         );
+        if interaction.hovered() {
+            paint_ctx.ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+        }
         let shift = paint_ctx.ui.input(|input| input.modifiers.shift);
         if interaction.drag_started_by(PointerButton::Primary)
             || !shift && interaction.drag_released_by(PointerButton::Primary)

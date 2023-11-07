@@ -1,9 +1,7 @@
 use std::{collections::HashMap, ops::Deref, sync::Arc};
 
 use eframe::{
-    egui::{
-        self, Margin,
-    },
+    egui::{self, Margin},
     CreationContext,
 };
 
@@ -11,7 +9,7 @@ use crate::{
     board::{ActiveCircuitBoard, CircuitBoard, StoredCircuitBoard},
     circuits::{self, CircuitPreview, CircuitPreviewImpl},
     ui::editor::CircuitBoardEditor,
-    DynStaticStr, RwLock,
+    DynStaticStr, RwLock, time::Instant,
 };
 
 pub struct SimulationContext {
@@ -33,11 +31,19 @@ impl eframe::App for App {
 
         // TODO: timings
         #[cfg(feature = "single_thread")]
-        //let sim_time = 
+        //let sim_time =
         {
-            //let start_time = Instant::now();
-            for board in self.sim.boards.read().values() {
-                board.board.states.update();
+            let start_time = Instant::now();
+
+            // Run simulation ethier 500 times or for 10ms
+            for _ in 0..500 {
+                for board in self.sim.boards.read().values() {
+                    board.board.states.update();
+                }
+
+                if Instant::now().checked_duration_since(start_time).is_some_and(|d| d.as_millis() > 10) {
+                    break;
+                }
             }
             //Instant::now() - start_time
         };
@@ -113,7 +119,7 @@ impl App {
             Box::new(circuits::freq_meter::FreqMeterPreview {}),
             Box::new(circuits::pin::Preview {}),
             Box::<circuits::board::BoardPreview>::default(),
-        ]; 
+        ];
         let preview_data = cc
             .storage
             .and_then(|s| s.get_string("previews"))

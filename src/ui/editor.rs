@@ -267,6 +267,9 @@ impl CircuitBoardEditor {
                     self.change_selected_props(selected, "dir", |d: &mut Direction4| {
                         *d = d.rotate_clockwise()
                     });
+                    self.change_selected_props(selected, "label_dir", |d: &mut Direction4| {
+                        *d = d.rotate_clockwise()
+                    });
                 }
 
                 if ui.input(|input| input.key_pressed(Key::F)) {
@@ -694,6 +697,14 @@ impl CircuitBoardEditor {
                                 }
 
                                 resp.context_menu(|ui| {
+                                    if ui.button("Edit").clicked() {
+                                        self.board = ActiveCircuitBoard::new_main(board.board.clone());
+                                        if selected {
+                                            self.selected_id = None;
+                                        }
+                                        ui.close_menu();
+                                    }
+
                                     if ui.button("Design").clicked() {
                                         let design_provider =
                                             BoardDesignProvider::new(board.board.clone());
