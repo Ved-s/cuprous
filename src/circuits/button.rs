@@ -2,9 +2,9 @@ use eframe::{
     egui::{PointerButton, Sense, CursorIcon},
     epaint::{Color32, FontId, Rounding},
 };
-use emath::Align2;
+use emath::{Align2, pos2, vec2};
 
-use crate::{Direction4, describe_directional_circuit};
+use crate::{Direction4, describe_directional_circuit, unwrap_option_or_return};
 
 use super::{*, props::CircuitProperty};
 
@@ -20,14 +20,17 @@ impl Button {
         }
     }
 
-    fn draw(state: Option<&CircuitStateContext>, ctx: &PaintContext, semi_transparent: bool) {
+    fn draw_base(ctx: &PaintContext, semi_transparent: bool) {
         let color_mul = if semi_transparent { 0.5 } else { 1.0 };
         ctx.paint.rect_filled(
             ctx.rect.expand(ctx.screen.scale * -0.5),
             Rounding::same(ctx.screen.scale * 0.25),
             Color32::from_gray(100).linear_multiply(color_mul),
         );
+    }
 
+    fn draw_button(state: Option<&CircuitStateContext>, ctx: &PaintContext, semi_transparent: bool) {
+        let color_mul = if semi_transparent { 0.5 } else { 1.0 };
         let state = state
             .map(|s| {
                 s.read_circuit_internal_state::<ButtonState, _>(|state| state.state)
@@ -41,7 +44,7 @@ impl Button {
         }
         .linear_multiply(color_mul);
         ctx.paint
-            .circle_filled(ctx.rect.center(), ctx.screen.scale * 0.75, color);
+            .circle_filled(ctx.rect.center(), ctx.rect.width() * 0.5, color);
 
         let font = FontId::monospace(ctx.screen.scale * 0.5);
 
@@ -71,28 +74,62 @@ impl Button {
 }
 
 impl CircuitImpl for Button {
-    fn draw(&self, state_ctx: &CircuitStateContext, paint_ctx: &PaintContext) {
-        Self::draw(Some(state_ctx), paint_ctx, false);
+    fn draw(&self, _: &CircuitStateContext, paint_ctx: &PaintContext) {
+        Self::draw_base(paint_ctx, false);
+    }
 
-        // HACK: write proper circuit interactables
-        let rect = paint_ctx.rect.expand(paint_ctx.screen.scale * -0.75);
-        let interaction = paint_ctx.ui.interact(
-            rect,
-            paint_ctx.ui.auto_id_with(state_ctx.circuit.pos),
+    fn control_count(&self, _: &Arc<Circuit>) -> Option<usize> {
+        Some(1)
+    }
+
+    fn control_info(&self, circuit: &Arc<Circuit>, id: usize) -> Option<CircuitControlInfo> {
+        match id {
+            0 => Some(CircuitControlInfo {
+                rect: Rect::from_min_size(pos2(0.75, 0.75), vec2(1.5, 1.5)),
+                display_name: circuit.name().map(|arc| arc.into()).unwrap_or_else(|| "Button".into()),
+            }),
+            _ => None,
+        }
+    }
+
+    fn update_control(
+            &self,
+            id: usize,
+            circ: &Arc<Circuit>,
+            state: Option<&CircuitStateContext>,
+            ctx: &PaintContext,
+            interactive: bool,
+        ) {
+        if id != 0 {
+            return;
+        }
+
+        Self::draw_button(state, ctx, false);
+        if !interactive {
+            return;
+        }
+
+        let state = unwrap_option_or_return!(state);
+
+        let id = ctx.ui.auto_id_with((circ.board.uid, circ.pos));
+
+        let interaction = ctx.ui.interact(
+            ctx.rect,
+            id,
             Sense::drag(),
         );
         if interaction.hovered() {
-            paint_ctx.ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+            ctx.ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
         }
-        let shift = paint_ctx.ui.input(|input| input.modifiers.shift);
+        let shift = ctx.ui.input(|input| input.modifiers.shift);
         if interaction.drag_started_by(PointerButton::Primary)
             || !shift && interaction.drag_released_by(PointerButton::Primary)
         {
-            let new_state = state_ctx.write_circuit_internal_state::<ButtonState, _>(|s| {
+            let new_state = state.write_circuit_internal_state::<ButtonState, _>(|s| {
                 s.state = !s.state;
                 s.state
             });
-            self.out_pin.set_state(state_ctx, new_state.into());
+            self.out_pin.set_state(state, new_state.into());
         }
     }
 
@@ -148,7 +185,9 @@ pub struct ButtonPreview {}
 
 impl CircuitPreviewImpl for ButtonPreview {
     fn draw_preview(&self, _: &CircuitPropertyStore, ctx: &PaintContext, in_world: bool) {
-        Button::draw(None, ctx, in_world);
+        Button::draw_base(ctx, in_world);
+        let button_ctx = ctx.with_rect(ctx.rect.shrink(ctx.screen.scale * 0.75));
+        Button::draw_button(None, &button_ctx, in_world);
     }
 
     fn create_impl(&self) -> Box<dyn CircuitImpl> {

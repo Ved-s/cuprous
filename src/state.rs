@@ -287,7 +287,7 @@ impl StateCollection {
 
     #[cfg(single_thread)]
     pub fn update(&self) {}
-    
+
     pub fn initialize(&self) {
         for state in self.states.read().iter() {
             state.init_circuit_states(false);
@@ -304,6 +304,13 @@ impl StateCollection {
             state.set_ordered(ordered);
         }
     }
+}
+
+pub struct CircuitUpdateInfo {
+    pub id: usize,
+    pub time_override: bool,
+    pub next_time: Instant,
+    pub interval: Option<Duration>,
 }
 
 #[derive(Clone)]
@@ -326,7 +333,7 @@ pub struct State {
     pub board: Arc<CircuitBoard>,
     circuit_updates_removes: Mutex<Vec<usize>>,
 
-    pub updates: Mutex<Vec<(usize, Instant)>>,
+    pub updates: Mutex<Vec<CircuitUpdateInfo>>,
     parent: RwLock<Option<StateParent>>,
     children: AtomicUsize,
     frozen: AtomicBool,
@@ -396,12 +403,22 @@ impl State {
     pub fn set_circuit_update_interval(self: &Arc<Self>, id: usize, dur: Duration) {
         let mut updates = self.updates.lock();
 
-        let index = updates.iter_mut().find(|v| v.0 == id);
+        let index = updates.iter_mut().find(|v| v.id == id);
         match index {
-            Some(v) => v.1 = Instant::now() + dur,
+            Some(v) => {
+                if !v.time_override {
+                    v.next_time = Instant::now() + dur;
+                }
+                v.interval = Some(dur);
+            }
             None => {
                 let _i = updates.len();
-                updates.push((id, Instant::now() + dur))
+                updates.push(CircuitUpdateInfo {
+                    id,
+                    time_override: false,
+                    next_time: Instant::now() + dur,
+                    interval: Some(dur),
+                })
             }
         }
 
@@ -415,7 +432,7 @@ impl State {
         let index = updates
             .iter()
             .enumerate()
-            .find(|(_, t)| t.0 == id)
+            .find(|(_, t)| t.id == id)
             .map(|(i, _)| i);
         if let Some(index) = index {
             updates.remove(index);
@@ -462,7 +479,7 @@ impl State {
                 .updates
                 .lock()
                 .iter()
-                .map(|(id, time)| (*id, time.checked_duration_since(now)))
+                .map(|info| (info.id, info.next_time.checked_duration_since(now)))
                 .collect(),
         }
     }
@@ -475,7 +492,12 @@ impl State {
         let updates = data
             .updates
             .iter()
-            .map(|(id, dur)| (*id, dur.map(|d| now + d).unwrap_or(now)))
+            .map(|(id, dur)| CircuitUpdateInfo {
+                id: *id,
+                time_override: true,
+                next_time: dur.map(|d| now + d).unwrap_or(now),
+                interval: *dur,
+            })
             .collect();
 
         let ordered = board.is_ordered_queue();
@@ -491,7 +513,7 @@ impl State {
             circuit_updates_removes: Default::default(),
             updates: Mutex::new(updates),
             frozen: AtomicBool::new(false),
-            children: AtomicUsize::new(0)
+            children: AtomicUsize::new(0),
         });
 
         let board_circuits = state.board.circuits.read();
@@ -575,16 +597,17 @@ impl State {
             let now = Instant::now();
             circuit_updates_removes.clear();
             for (i, upd) in updates.iter_mut().enumerate() {
-                if upd.1 <= now {
-                    let circ = self.board.circuits.read().get(upd.0).cloned();
+                if upd.next_time <= now {
+                    let circ = self.board.circuits.read().get(upd.id).cloned();
                     if let Some(circ) = circ {
                         let imp = circ.imp.read();
 
                         let state = CircuitStateContext::new(self.clone(), circ.clone());
-                        imp.update(&state);
-                        match imp.update_interval(&state) {
+                        imp.update(&state, &mut upd.interval);
+                        upd.time_override = false;
+                        match upd.interval {
                             Some(d) => {
-                                upd.1 = now + d;
+                                upd.next_time = now + d;
                             }
                             None => circuit_updates_removes.push(i),
                         }
@@ -593,11 +616,11 @@ impl State {
                     }
                 }
                 let closer = match nearest_update {
-                    Some(nu) => upd.1 < nu,
+                    Some(nu) => upd.next_time < nu,
                     None => true,
                 };
                 if closer {
-                    nearest_update = Some(upd.1);
+                    nearest_update = Some(upd.next_time);
                 }
             }
             // `circuit_updates_removes` is ordered, removing in reverse order is safe

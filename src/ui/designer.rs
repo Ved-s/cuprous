@@ -23,7 +23,8 @@ use crate::{
 };
 
 use super::{
-    drawing, rect_editor,
+    drawing::{self, align_rect_scaled},
+    rect_editor,
     selection::{
         selection_border_color, selection_fill_color, Selection, SelectionImpl,
         SelectionInventoryItem,
@@ -40,6 +41,7 @@ pub struct DesignerResponse {
 enum SelectedItemId {
     Selection,
     Pin(DynStaticStr),
+    Control(usize, usize),
     Rect,
 }
 
@@ -61,10 +63,25 @@ pub struct CircuitDesignPinInfo {
     pub display_name: DynStaticStr,
 }
 
+pub struct CircuitDesignControlInfo {
+    pub rect: Rect,
+    pub display_name: DynStaticStr,
+}
+
+pub struct ControlProvider {
+    pub id: usize,
+    pub count: usize,
+}
+
 pub trait DesignProvider {
     fn get_storage(&self) -> Arc<RwLock<CircuitDesignStorage>>;
+
     fn get_pin_ids(&self) -> Vec<DynStaticStr>;
     fn get_pin(&self, id: &DynStaticStr) -> Option<CircuitDesignPinInfo>;
+
+    fn get_control_provider_data(&self) -> Vec<ControlProvider>;
+    fn get_control_info(&self, provider: usize, id: usize) -> Option<CircuitDesignControlInfo>;
+    fn paint_control(&self, provider: usize, id: usize, ctx: &PaintContext);
 }
 
 #[derive(Default)]
@@ -518,6 +535,9 @@ impl Designer {
                         }
                     }
                 }
+                SelectedItemId::Control(_, _) => {
+                    
+                },
             }
         }
 
@@ -550,6 +570,9 @@ impl Designer {
                     self.provider.get_pin(id).map(|i| i.display_name.clone())
                 }
                 SelectedItemId::Rect => Some("Rectangle".into()),
+                SelectedItemId::Control(provider_id, control_id) => {
+                    self.provider.get_control_info(*provider_id, *control_id).map(|i| i.display_name)
+                },
             });
 
         if inv_resp.changed() {
@@ -697,6 +720,61 @@ impl Designer {
                             }
                         });
                 }
+
+                let control_providers = self.provider.get_control_provider_data();
+                if !control_providers.is_empty() {
+                    CollapsingHeader::new("Controls")
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            for provider_data in control_providers {
+                                for control in 0..provider_data.count {
+                                    let control_data =
+                                        self.provider.get_control_info(provider_data.id, control);
+                                    let control_data = unwrap_option_or_continue!(control_data);
+
+                                    ui.horizontal(|ui| {
+                                        let resp = ui.allocate_response(
+                                            vec2(font.size, font.size),
+                                            Sense::hover(),
+                                        );
+                                        let (rect, scale) = align_rect_scaled(
+                                            resp.rect.left_top(),
+                                            resp.rect.size(),
+                                            control_data.rect.size(),
+                                        );
+
+                                        let ctx = PaintContext::new_on_ui(ui, rect, scale);
+
+                                        self.provider.paint_control(
+                                            provider_data.id,
+                                            control,
+                                            &ctx,
+                                        );
+
+                                        let selected = match &self.selected_id {
+                                            Some(SelectedItemId::Control(prov_id, ctl_id)) => {
+                                                *prov_id == provider_data.id && *ctl_id == control
+                                            }
+                                            _ => false,
+                                        };
+
+                                        if ui
+                                            .selectable_label(
+                                                selected,
+                                                control_data.display_name.deref(),
+                                            )
+                                            .clicked()
+                                        {
+                                            self.selected_id = match selected {
+                                                true => None,
+                                                false => Some(SelectedItemId::Control(provider_data.id, control)),
+                                            };
+                                        }
+                                    });
+                                }
+                            }
+                        });
+                }
             })
             .full_rect
     }
@@ -788,6 +866,7 @@ impl Designer {
                             let mut visuals = self.default_rect_visuals.write();
                             Self::rect_properties([visuals.deref_mut()].into_iter(), ui)
                         }
+                        SelectedItemId::Control(_, _) => {},
                     }
                 }
             })

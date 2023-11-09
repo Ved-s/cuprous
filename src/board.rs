@@ -67,6 +67,7 @@ pub struct CircuitBoard {
 
     pub designs: Arc<RwLock<CircuitDesignStorage>>,
     pub pins: RwLock<BiMap<Arc<str>, usize>>,
+    pub controls: RwLock<HashSet<usize>>,
     pub ctx: Arc<SimulationContext>,
 
     // RwLock for blocking simulation while modifying board
@@ -88,6 +89,7 @@ impl CircuitBoard {
                 CircuitDesign::default_board_design(),
             ))),
             pins: Default::default(),
+            controls: Default::default(),
             ctx,
         }
     }
@@ -97,7 +99,7 @@ impl CircuitBoard {
         pos: Vec2i,
         preview: &CircuitPreview,
         props_override: Option<CircuitPropertyStore>,
-        imp_data: Option<&Intermediate>
+        imp_data: Option<&Intermediate>,
     ) -> usize {
         let mut circuits = self.circuits.write();
         let id = circuits.first_free_pos();
@@ -253,6 +255,7 @@ impl CircuitBoard {
             ordered_queue: AtomicBool::new(data.ordered),
             designs,
             pins: Default::default(),
+            controls: Default::default(),
             ctx: ctx.clone(),
         });
 
@@ -266,7 +269,9 @@ impl CircuitBoard {
             let props = preview.imp.default_props();
             props.load(&c.props);
 
-            let data = matches!(c.imp, serde_intermediate::Intermediate::Unit).not().then_some(&c.imp);
+            let data = matches!(c.imp, serde_intermediate::Intermediate::Unit)
+                .not()
+                .then_some(&c.imp);
 
             let circ = Circuit::create(i, c.pos, preview, board.clone(), Some(props), data);
             {
@@ -315,7 +320,7 @@ impl CircuitBoard {
     pub fn activate(&self) {
         let circuits = self.circuits.read();
         for circuit in circuits.iter() {
-            circuit.imp.write().circuit_init(circuit, false);
+            circuit.initialize(false);
         }
         drop(circuits);
 
@@ -911,6 +916,21 @@ impl ActiveCircuitBoard {
         }
 
         imp.draw(&state_ctx, &circ_ctx);
+
+        if let Some(controls) = imp.control_count(circuit) {
+            let posf = Vec2::from(circuit.pos.convert(|v| v as f32));
+            for i in 0..controls {
+                let info = imp.control_info(circuit, i);
+                let info = unwrap_option_or_continue!(info);
+                let rect = Rect {
+                    min: info.rect.min + posf,
+                    max: info.rect.max + posf,
+                };
+
+                let ctx = ctx.with_rect(ctx.screen.world_to_screen_rect(rect));
+                imp.update_control(i, circuit, Some(&state_ctx), &ctx, true);
+            }
+        }
 
         let name = circuit.props.read("name", |s: &ArcString| s.get_arc());
         let label_dir = circuit.props.read_clone::<Direction4>("label_dir");
@@ -1925,7 +1945,7 @@ impl ActiveCircuitBoard {
         self.connect_circuit_to_wires(cid);
         let circ = self.board.circuits.read().get(cid).unwrap().clone();
 
-        circ.imp.write().circuit_init(&circ, true);
+        circ.initialize(true);
         self.board.states.init_circuit_state(&circ, true);
         self.board.states.update_circuit_signals(cid, None);
         drop(sim_lock);
@@ -2098,7 +2118,7 @@ impl ActiveCircuitBoard {
         self.board.circuits.write().remove(id);
         self.board.states.reset_circuit(&circuit);
 
-        circuit.imp.write().circuit_remove(&circuit);
+        circuit.remove();
     }
 
     // Todo: result
@@ -2433,7 +2453,7 @@ pub struct BoardObjectSelectionImpl {
 impl SelectionImpl for BoardObjectSelectionImpl {
     type Pass = ActiveCircuitBoard;
     type Object = SelectedBoardObject;
-    
+
     fn draw_object_selection(
         &mut self,
         pass: &ActiveCircuitBoard,
@@ -2612,5 +2632,37 @@ impl DesignProvider for BoardDesignProvider {
         let circuits = self.board.circuits.read();
         let circuit = circuits.get(pin_id)?;
         circuit.read_imp(|p: &crate::circuits::pin::Pin| p.get_designer_info(&circuit.props))
+    }
+
+    fn get_control_provider_data(&self) -> Vec<crate::ui::designer::ControlProvider> {
+        let circuits = self.board.circuits.read();
+        self.board
+            .controls
+            .read()
+            .iter()
+            .filter_map(|id| circuits.get(*id))
+            .map(|circuit| crate::ui::designer::ControlProvider { id: circuit.id, count: circuit.imp.read().control_count(circuit).unwrap_or(0) })
+            .filter(|p| p.count > 0)
+            .collect()
+    }
+
+    fn get_control_info(
+        &self,
+        provider: usize,
+        id: usize,
+    ) -> Option<crate::ui::designer::CircuitDesignControlInfo> {
+        let circuits = self.board.circuits.read();
+        let circuit = circuits.get(provider)?; 
+        let info = circuit.imp.read().control_info(circuit, id)?;
+        Some(crate::ui::designer::CircuitDesignControlInfo {
+            rect: info.rect,
+            display_name: info.display_name,
+        })
+    }
+
+    fn paint_control(&self, provider: usize, id: usize, ctx: &PaintContext) {
+        let circuits = self.board.circuits.read();
+        let circuit = unwrap_option_or_return!(circuits.get(provider)); 
+        circuit.imp.read().update_control(id, circuit, None, ctx, false);
     }
 }

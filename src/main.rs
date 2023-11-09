@@ -9,7 +9,7 @@ use std::{
     f32::consts::TAU,
     hash::Hash,
     num::NonZeroU32,
-    ops::{Deref, Range, Not},
+    ops::{Deref, Not, Range},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -928,7 +928,9 @@ impl PastePreview {
             }
         }
         for (circuit_data, preview) in self.circuits.iter() {
-            let data = matches!(circuit_data.imp, Intermediate::Unit).not().then_some(&circuit_data.imp);
+            let data = matches!(circuit_data.imp, Intermediate::Unit)
+                .not()
+                .then_some(&circuit_data.imp);
             let id = board.place_circuit(
                 pos + circuit_data.pos.convert(|v| v as i32),
                 false,
@@ -1058,6 +1060,14 @@ impl ArcString {
     pub fn is_empty(&self) -> bool {
         !self.string.as_ref().is_some_and(|s| !s.is_empty())
             && !self.arc.read().as_ref().is_some_and(|a| !a.is_empty())
+    }
+
+    fn len(&self) -> usize {
+        self.string
+            .as_ref()
+            .map(|s| s.len())
+            .or_else(|| self.arc.read().as_ref().map(|arc| arc.len()))
+            .unwrap_or(0)
     }
 }
 

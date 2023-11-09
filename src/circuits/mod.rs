@@ -5,6 +5,7 @@ use std::{
     time::Duration,
 };
 
+use emath::Rect;
 use serde::{Deserialize, Serialize};
 use serde_intermediate::Intermediate;
 
@@ -15,7 +16,7 @@ use crate::{
     state::{CircuitState, InternalCircuitState, State, StateCollection, WireState},
     time::Instant,
     vector::{Vec2i, Vec2u, Vector},
-    Direction4, DynStaticStr, OptionalInt, PaintContext, RwLock,
+    Direction4, DynStaticStr, OptionalInt, PaintContext, RwLock, ArcString,
 };
 
 use self::props::CircuitPropertyStore;
@@ -298,7 +299,7 @@ impl Circuit {
         preview: &CircuitPreview,
         board: Arc<CircuitBoard>,
         props_override: Option<CircuitPropertyStore>,
-        imp_data: Option<&Intermediate>
+        imp_data: Option<&Intermediate>,
     ) -> Arc<Self> {
         let imp = preview.imp.create_impl();
         let props = props_override.unwrap_or_else(|| preview.props.clone());
@@ -369,8 +370,9 @@ impl Circuit {
                 .updates
                 .lock()
                 .iter()
-                .find_map(|(id, time)| {
-                    (*id == self.id).then(|| time.checked_duration_since(Instant::now()))
+                .find_map(|info| {
+                    (info.id == self.id)
+                        .then(|| info.next_time.checked_duration_since(Instant::now()))
                 })
                 .flatten(),
             props: self.props.save(),
@@ -400,6 +402,24 @@ impl Circuit {
             let res = writer(imp);
             Some(res)
         }
+    }
+
+    pub fn initialize(self: &Arc<Self>, first_init: bool) {
+        self.imp.write().circuit_init(self, first_init);
+
+        let any_controls = self.imp.read().control_count(self).is_some();
+        if any_controls {
+            self.board.controls.write().insert(self.id);
+        }
+    }
+
+    pub fn remove(self: &Arc<Self>) {
+        self.imp.write().circuit_remove(self);
+        self.board.controls.write().remove(&self.id);
+    }
+
+    pub fn name(&self) -> Option<Arc<str>> {
+        self.props.read("name", |s: &ArcString| (s.len() > 0).then(|| s.get_arc())).flatten()
     }
 }
 
@@ -469,6 +489,13 @@ impl CircuitStateContext {
     }
 }
 
+pub struct CircuitControlInfo {
+
+    /// Rect for the control, in absolute circuit coordinates
+    pub rect: Rect,
+    pub display_name: DynStaticStr
+}
+
 #[allow(unused_variables)]
 pub trait CircuitImpl: Any + Send + Sync {
     fn draw(&self, ctx: &CircuitStateContext, paint_ctx: &PaintContext);
@@ -478,11 +505,11 @@ pub trait CircuitImpl: Any + Send + Sync {
 
     fn update_signals(&self, ctx: &CircuitStateContext, changed_pin: Option<usize>);
 
-    /// Called once every period determined by `Self::update_interval`
-    fn update(&self, ctx: &CircuitStateContext) {}
+    fn update(&self, ctx: &CircuitStateContext, interval: &mut Option<Duration>) {}
 
     /// Called once on circuit state creation or load<br>
     /// Called after `circuit_init`<br>
+    /// Use `CircuitStateContext::set_update_interval` to set how often `Self::update` is going to be called<br>
     /// `first_init`: `true` on new state creation, `false` on loaded state
     fn state_init(&self, ctx: &CircuitStateContext, first_init: bool) {}
 
@@ -499,9 +526,24 @@ pub trait CircuitImpl: Any + Send + Sync {
     /// Called after all calls to `remove_state`<br>
     fn circuit_remove(&mut self, circ: &Arc<Circuit>) {}
 
-    /// Called after `Self::update` to determine next update timestamp
-    fn update_interval(&self, ctx: &CircuitStateContext) -> Option<Duration> {
+    /// Return `None` if this circuit will never have controls,
+    /// `Some(0)` means that this circuit doesn't have controls yet, but may have in the future
+    fn control_count(&self, circ: &Arc<Circuit>) -> Option<usize> {
         None
+    }
+
+    fn control_info(&self, circ: &Arc<Circuit>, id: usize) -> Option<CircuitControlInfo> {
+        None
+    }
+
+    fn update_control(
+        &self,
+        id: usize,
+        circ: &Arc<Circuit>,
+        state: Option<&CircuitStateContext>,
+        ctx: &PaintContext,
+        interactive: bool,
+    ) {
     }
 
     /// Whether to automatically draw pins before call to `Self::draw`
