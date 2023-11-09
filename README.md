@@ -7,7 +7,7 @@ Logisim-inspired logic circuits simulator
 
 - [Done] Place circuit boards as circuits
 - [Working] Circuit designer for circuit boards
-- Circuit interactables 
+- [In progress] Circuit controls 
 > special circuit interfaces that can be exposed on containing circuit design and can receive user input
 
 - Rename the project
