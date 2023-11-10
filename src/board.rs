@@ -12,7 +12,7 @@ use std::{
 
 use bimap::BiMap;
 use eframe::{
-    egui::{self, FontSelection, Painter, Sense, TextStyle, WidgetText},
+    egui::{self, FontSelection, Painter, Sense, TextStyle, WidgetText, Id},
     epaint::{Color32, FontId, RectShape, Rounding, Shape, Stroke, TextShape},
 };
 use emath::{pos2, vec2, Align2, Pos2, Rect, Vec2};
@@ -928,7 +928,7 @@ impl ActiveCircuitBoard {
                 };
 
                 let ctx = ctx.with_rect(ctx.screen.world_to_screen_rect(rect));
-                imp.update_control(i, circuit, Some(&state_ctx), &ctx, true);
+                imp.update_control(i, circuit, Some(&state_ctx), &ctx, true, Id::new((self.board.uid, circuit.pos, i)));
             }
         }
 
@@ -2315,6 +2315,7 @@ impl CircuitDesignStorage {
                                 pins: d.pins.clone(),
                                 size: d.size,
                                 decorations: d.decorations.clone(),
+                                controls: d.controls.clone(),
                             })
                     })
                 })
@@ -2336,6 +2337,7 @@ impl CircuitDesignStorage {
                                 size: d.size,
                                 pins: d.pins.clone(),
                                 decorations: d.decorations.clone(),
+                                controls: d.controls.clone(),
                             })
                         })
                     })
@@ -2396,6 +2398,12 @@ pub struct CircuitDesignPin {
     pub display_name: DynStaticStr,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CircuitDesignControl {
+    pub rect: Rect,
+    pub display_name: ArcString
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct CircuitDesign {
     pub id: usize,
@@ -2403,6 +2411,7 @@ pub struct CircuitDesign {
     pub size: Vec2u,
     pub pins: Vec<CircuitDesignPin>,
     pub decorations: Vec<Decoration>,
+    pub controls: HashMap<(usize, usize), CircuitDesignControl>,
 }
 
 impl CircuitDesign {
@@ -2427,6 +2436,7 @@ impl CircuitDesign {
                     stroke: Stroke::new(0.1, Color32::BLACK),
                 },
             }],
+            controls: HashMap::new(),
         }
     }
 
@@ -2663,6 +2673,6 @@ impl DesignProvider for BoardDesignProvider {
     fn paint_control(&self, provider: usize, id: usize, ctx: &PaintContext) {
         let circuits = self.board.circuits.read();
         let circuit = unwrap_option_or_return!(circuits.get(provider)); 
-        circuit.imp.read().update_control(id, circuit, None, ctx, false);
+        circuit.imp.read().update_control(id, circuit, None, ctx, false, Id::new((self.board.uid, circuit.pos, id)));
     }
 }

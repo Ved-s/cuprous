@@ -574,7 +574,6 @@ impl PropertyEditor {
 
                 let equal = props.windows(2).all(|w| w[0].1.imp().equals(w[1].1.imp()));
 
-                
                 ui.label(id.name.deref());
 
                 if let Some(old) = props[0].1.imp_mut().ui(ui, !equal) {
@@ -1022,6 +1021,20 @@ pub fn rect_editor(
     constrain: impl FnOnce(Sides, &mut Rect),
     visuals: RectVisuals,
 ) -> DragState {
+    custom_rect_editor(rect, sides, ui, id, constrain, |rect, _, ui| {
+        let paint = ui.painter();
+        paint.rect(rect, visuals.rounding, visuals.fill, visuals.stroke);
+    })
+}
+
+pub fn custom_rect_editor(
+    rect: &mut Rect,
+    sides: Sides,
+    ui: &Ui,
+    id: Id,
+    constrain: impl FnOnce(Sides, &mut Rect),
+    painter: impl FnOnce(Rect, Sides, &Ui),
+) -> DragState {
     #[derive(Default, Clone, Copy)]
     struct State {
         pos: Vec2,
@@ -1029,195 +1042,214 @@ pub fn rect_editor(
         drag: bool,
     }
 
-    let editing = ui.memory(|mem| mem.is_being_dragged(id));
-    let grab = ui.style().interaction.resize_grab_radius_side;
+    fn rect_editor_logic(
+        rect: &mut Rect,
+        sides: Sides,
+        ui: &Ui,
+        id: Id,
+        grab: f32,
+    ) -> (State, bool) {
 
-    let state = if editing {
-        ui.memory(|mem| mem.data.get_temp(id).unwrap_or_default())
-    } else if let Some(pointer) = ui.ctx().pointer_latest_pos() {
-        let on_top = ui
-            .ctx()
-            .layer_id_at(pointer)
-            .map_or(true, |top_layer_id| top_layer_id == ui.layer_id());
+        let editing = ui.memory(|mem| mem.is_being_dragged(id));
 
-        let draggable = rect.expand(grab).contains(pointer);
+        let state = if editing {
+            ui.memory(|mem| mem.data.get_temp(id).unwrap_or_default())
+        } else if let Some(pointer) = ui.ctx().pointer_latest_pos() {
+            let on_top = ui
+                .ctx()
+                .layer_id_at(pointer)
+                .map_or(true, |top_layer_id| top_layer_id == ui.layer_id());
 
-        if draggable {
-            let right = sides.right && on_top && rect.right() - grab <= pointer.x;
-            let bottom = sides.bottom && on_top && rect.bottom() - grab <= pointer.y;
+            let draggable = rect.expand(grab).contains(pointer);
 
-            let top = !bottom && sides.top && on_top && pointer.y <= rect.top() + grab;
-            let left = !right && sides.left && on_top && pointer.x <= rect.left() + grab;
+            if draggable {
+                let right = sides.right && on_top && rect.right() - grab <= pointer.x;
+                let bottom = sides.bottom && on_top && rect.bottom() - grab <= pointer.y;
 
-            State {
-                sides: Sides {
-                    top,
-                    left,
-                    right,
-                    bottom,
-                    center: sides.center && !top && !left && !right && !bottom,
-                },
-                pos: pointer - rect.left_top(),
-                drag: false,
+                let top = !bottom && sides.top && on_top && pointer.y <= rect.top() + grab;
+                let left = !right && sides.left && on_top && pointer.x <= rect.left() + grab;
+
+                State {
+                    sides: Sides {
+                        top,
+                        left,
+                        right,
+                        bottom,
+                        center: sides.center && !top && !left && !right && !bottom,
+                    },
+                    pos: pointer - rect.left_top(),
+                    drag: false,
+                }
+            } else {
+                State::default()
             }
         } else {
             State::default()
+        };
+
+        if ui.input(|i| i.pointer.primary_pressed()) && state.sides.any() {
+            ui.memory_mut(|mem| {
+                mem.set_dragged_id(id);
+                mem.data.insert_temp(
+                    id,
+                    State {
+                        drag: true,
+                        ..state
+                    },
+                );
+            });
         }
-    } else {
-        State::default()
-    };
 
-    if ui.input(|i| i.pointer.primary_pressed()) && state.sides.any() {
-        ui.memory_mut(|mem| {
-            mem.set_dragged_id(id);
-            mem.data.insert_temp(
-                id,
-                State {
-                    drag: true,
-                    ..state
-                },
-            );
-        });
+        let any_drag = ui.memory(|mem| mem.is_anything_being_dragged());
+        let editing = ui.memory(|mem| mem.is_being_dragged(id));
+
+        if state.drag && !editing {
+            ui.memory_mut(|mem| {
+                mem.data.insert_temp(id, State::default());
+            });
+        }
+
+        let state = if state.sides.any() && any_drag && !editing {
+            Default::default()
+        } else {
+            state
+        };
+
+        let sides = state.sides;
+
+        if sides.top && sides.left {
+            ui.ctx().set_cursor_icon(CursorIcon::ResizeNorthWest);
+        } else if sides.top && sides.right {
+            ui.ctx().set_cursor_icon(CursorIcon::ResizeNorthEast);
+        } else if sides.bottom && sides.left {
+            ui.ctx().set_cursor_icon(CursorIcon::ResizeSouthWest);
+        } else if sides.bottom && sides.right {
+            ui.ctx().set_cursor_icon(CursorIcon::ResizeSouthEast);
+        } else if sides.top {
+            ui.ctx().set_cursor_icon(CursorIcon::ResizeNorth);
+        } else if sides.left {
+            ui.ctx().set_cursor_icon(CursorIcon::ResizeWest);
+        } else if sides.right {
+            ui.ctx().set_cursor_icon(CursorIcon::ResizeEast);
+        } else if sides.bottom {
+            ui.ctx().set_cursor_icon(CursorIcon::ResizeSouth);
+        } else if sides.center {
+            ui.ctx().set_cursor_icon(CursorIcon::Move);
+        }
+
+        if editing {
+            if let Some(pointer) = ui.ctx().pointer_latest_pos() {
+                if state.sides.center {
+                    let size = rect.size();
+                    *rect = Rect::from_min_size(pointer - state.pos, size);
+                }
+
+                if state.sides.top {
+                    rect.min.y = pointer.y.min(rect.max.y);
+                }
+                if state.sides.left {
+                    rect.min.x = pointer.x.min(rect.max.x);
+                }
+                if state.sides.right {
+                    rect.max.x = pointer.x.max(rect.min.x);
+                }
+                if state.sides.bottom {
+                    rect.max.y = pointer.y.max(rect.min.y);
+                }
+            }
+        }
+
+        (state, editing)
     }
 
-    let any_drag = ui.memory(|mem| mem.is_anything_being_dragged());
-    let editing = ui.memory(|mem| mem.is_being_dragged(id));
+    fn rect_editor_visuals(rect: Rect, ui: &Ui, id: Id, sides: Sides, grab: f32) {
+        let hover_rounding = Rounding::same(grab / 2.0);
+        let hover_color = Color32::WHITE.linear_multiply(0.3);
+        let paint = ui.painter();
 
-    if state.drag && !editing {
-        ui.memory_mut(|mem| {
-            mem.data.insert_temp(id, State::default());
-        });
+        let top = ui
+            .ctx()
+            .animate_bool(id.with("__hover_top"), sides.top);
+        if top > 0.0 {
+            paint.rect(
+                Rect::from_min_size(
+                    rect.left_top() - vec2(grab, grab),
+                    vec2(rect.width() + grab * 2.0, grab * 2.0),
+                ),
+                hover_rounding,
+                hover_color.linear_multiply(top),
+                Stroke::NONE,
+            )
+        }
+
+        let left = ui
+            .ctx()
+            .animate_bool(id.with("__hover_left"), sides.left);
+        if left > 0.0 {
+            paint.rect(
+                Rect::from_min_size(
+                    rect.left_top() - vec2(grab, grab),
+                    vec2(grab * 2.0, rect.height() + grab * 2.0),
+                ),
+                hover_rounding,
+                hover_color.linear_multiply(left),
+                Stroke::NONE,
+            )
+        }
+
+        let bottom = ui
+            .ctx()
+            .animate_bool(id.with("__hover_bottom"), sides.bottom);
+        if bottom > 0.0 {
+            paint.rect(
+                Rect::from_min_size(
+                    rect.left_bottom() - vec2(grab, grab),
+                    vec2(rect.width() + grab * 2.0, grab * 2.0),
+                ),
+                hover_rounding,
+                hover_color.linear_multiply(bottom),
+                Stroke::NONE,
+            )
+        }
+
+        let right = ui
+            .ctx()
+            .animate_bool(id.with("__hover_right"), sides.right);
+        if right > 0.0 {
+            paint.rect(
+                Rect::from_min_size(
+                    rect.right_top() - vec2(grab, grab),
+                    vec2(grab * 2.0, rect.height() + grab * 2.0),
+                ),
+                hover_rounding,
+                hover_color.linear_multiply(right),
+                Stroke::NONE,
+            )
+        }
+
+        let center = ui
+            .ctx()
+            .animate_bool(id.with("__hover_center"), sides.center);
+        if center > 0.0 {
+            paint.rect(
+                rect.expand(2.0),
+                Rounding::ZERO,
+                Color32::TRANSPARENT,
+                Stroke::new(2.0, hover_color.linear_multiply(center)),
+            )
+        }
     }
 
-    let state = if state.sides.any() && any_drag && !editing {
-        Default::default()
-    } else {
-        state
-    };
+    let grab = ui.style().interaction.resize_grab_radius_side;
 
-    let sides = state.sides;
-
-    if sides.top && sides.left {
-        ui.ctx().set_cursor_icon(CursorIcon::ResizeNorthWest);
-    } else if sides.top && sides.right {
-        ui.ctx().set_cursor_icon(CursorIcon::ResizeNorthEast);
-    } else if sides.bottom && sides.left {
-        ui.ctx().set_cursor_icon(CursorIcon::ResizeSouthWest);
-    } else if sides.bottom && sides.right {
-        ui.ctx().set_cursor_icon(CursorIcon::ResizeSouthEast);
-    } else if sides.top {
-        ui.ctx().set_cursor_icon(CursorIcon::ResizeNorth);
-    } else if sides.left {
-        ui.ctx().set_cursor_icon(CursorIcon::ResizeWest);
-    } else if sides.right {
-        ui.ctx().set_cursor_icon(CursorIcon::ResizeEast);
-    } else if sides.bottom {
-        ui.ctx().set_cursor_icon(CursorIcon::ResizeSouth);
-    } else if sides.center {
-        ui.ctx().set_cursor_icon(CursorIcon::Move);
-    }
+    let (state, editing) = rect_editor_logic(rect, sides, ui, id, grab);
 
     if editing {
-        if let Some(pointer) = ui.ctx().pointer_latest_pos() {
-            if state.sides.center {
-                let size = rect.size();
-                *rect = Rect::from_min_size(pointer - state.pos, size);
-            }
-
-            if state.sides.top {
-                rect.min.y = pointer.y.min(rect.max.y);
-            }
-            if state.sides.left {
-                rect.min.x = pointer.x.min(rect.max.x);
-            }
-            if state.sides.right {
-                rect.max.x = pointer.x.max(rect.min.x);
-            }
-            if state.sides.bottom {
-                rect.max.y = pointer.y.max(rect.min.y);
-            }
-            constrain(state.sides, rect);
-        }
+        constrain(state.sides, rect);
     }
+    painter(*rect, state.sides, ui);
 
-    let paint = ui.painter();
-
-    paint.rect(*rect, visuals.rounding, visuals.fill, visuals.stroke);
-
-    let hover_rounding = Rounding::same(grab / 2.0);
-    let hover_color = Color32::WHITE.linear_multiply(0.3);
-
-    let top = ui
-        .ctx()
-        .animate_bool(id.with("__hover_top"), state.sides.top);
-    if top > 0.0 {
-        paint.rect(
-            Rect::from_min_size(
-                rect.left_top() - vec2(grab, grab),
-                vec2(rect.width() + grab * 2.0, grab * 2.0),
-            ),
-            hover_rounding,
-            hover_color.linear_multiply(top),
-            Stroke::NONE,
-        )
-    }
-
-    let left = ui
-        .ctx()
-        .animate_bool(id.with("__hover_left"), state.sides.left);
-    if left > 0.0 {
-        paint.rect(
-            Rect::from_min_size(
-                rect.left_top() - vec2(grab, grab),
-                vec2(grab * 2.0, rect.height() + grab * 2.0),
-            ),
-            hover_rounding,
-            hover_color.linear_multiply(left),
-            Stroke::NONE,
-        )
-    }
-
-    let bottom = ui
-        .ctx()
-        .animate_bool(id.with("__hover_bottom"), state.sides.bottom);
-    if bottom > 0.0 {
-        paint.rect(
-            Rect::from_min_size(
-                rect.left_bottom() - vec2(grab, grab),
-                vec2(rect.width() + grab * 2.0, grab * 2.0),
-            ),
-            hover_rounding,
-            hover_color.linear_multiply(bottom),
-            Stroke::NONE,
-        )
-    }
-
-    let right = ui
-        .ctx()
-        .animate_bool(id.with("__hover_right"), state.sides.right);
-    if right > 0.0 {
-        paint.rect(
-            Rect::from_min_size(
-                rect.right_top() - vec2(grab, grab),
-                vec2(grab * 2.0, rect.height() + grab * 2.0),
-            ),
-            hover_rounding,
-            hover_color.linear_multiply(right),
-            Stroke::NONE,
-        )
-    }
-
-    let center = ui
-        .ctx()
-        .animate_bool(id.with("__hover_center"), state.sides.center);
-    if center > 0.0 {
-        paint.rect(
-            rect.expand(2.0),
-            visuals.rounding,
-            Color32::TRANSPARENT,
-            Stroke::new(2.0, hover_color.linear_multiply(center)),
-        )
-    }
+    rect_editor_visuals(*rect, ui, id, state.sides, grab);
 
     match (state.drag, editing) {
         (true, true) => DragState::Dragging(state.sides),

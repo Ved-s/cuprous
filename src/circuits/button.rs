@@ -95,10 +95,11 @@ impl CircuitImpl for Button {
     fn update_control(
             &self,
             id: usize,
-            circ: &Arc<Circuit>,
+            _: &Arc<Circuit>,
             state: Option<&CircuitStateContext>,
             ctx: &PaintContext,
             interactive: bool,
+            uid: Id,
         ) {
         if id != 0 {
             return;
@@ -111,7 +112,7 @@ impl CircuitImpl for Button {
 
         let state = unwrap_option_or_return!(state);
 
-        let id = ctx.ui.auto_id_with((circ.board.uid, circ.pos));
+        let id = ctx.ui.auto_id_with(uid);
 
         let interaction = ctx.ui.interact(
             ctx.rect,

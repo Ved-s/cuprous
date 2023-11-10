@@ -1,10 +1,11 @@
 use std::{
     any::{Any, TypeId},
-    ops::{Deref, DerefMut},
+    ops::{Deref, DerefMut, Not},
     sync::Arc,
     time::Duration,
 };
 
+use eframe::egui::Id;
 use emath::Rect;
 use serde::{Deserialize, Serialize};
 use serde_intermediate::Intermediate;
@@ -16,7 +17,7 @@ use crate::{
     state::{CircuitState, InternalCircuitState, State, StateCollection, WireState},
     time::Instant,
     vector::{Vec2i, Vec2u, Vector},
-    Direction4, DynStaticStr, OptionalInt, PaintContext, RwLock, ArcString,
+    ArcString, Direction4, DynStaticStr, OptionalInt, PaintContext, RwLock,
 };
 
 use self::props::CircuitPropertyStore;
@@ -416,10 +417,28 @@ impl Circuit {
     pub fn remove(self: &Arc<Self>) {
         self.imp.write().circuit_remove(self);
         self.board.controls.write().remove(&self.id);
+
+        let mut designs = self.board.designs.write();
+        let current = designs.current_mut();
+
+        let max_id = current
+            .controls
+            .keys()
+            .filter_map(|(c, i)| (*c == self.id).then_some(*i))
+            .max();
+        if let Some(max_id) = max_id {
+            for i in 0..=max_id {
+                current.controls.remove(&(self.id, i));
+            }
+        }
     }
 
     pub fn name(&self) -> Option<Arc<str>> {
-        self.props.read("name", |s: &ArcString| (s.len() > 0).then(|| s.get_arc())).flatten()
+        self.props
+            .read("name", |s: &ArcString| {
+                s.is_empty().not().then(|| s.get_arc())
+            })
+            .flatten()
     }
 }
 
@@ -490,10 +509,9 @@ impl CircuitStateContext {
 }
 
 pub struct CircuitControlInfo {
-
     /// Rect for the control, in absolute circuit coordinates
     pub rect: Rect,
-    pub display_name: DynStaticStr
+    pub display_name: DynStaticStr,
 }
 
 #[allow(unused_variables)]
@@ -543,6 +561,7 @@ pub trait CircuitImpl: Any + Send + Sync {
         state: Option<&CircuitStateContext>,
         ctx: &PaintContext,
         interactive: bool,
+        uid: Id
     ) {
     }
 

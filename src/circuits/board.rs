@@ -66,12 +66,12 @@ pub struct Board {
     unresolved_inner_pins: RwLock<HashSet<usize>>,
     unresolved_outer_pins: RwLock<HashSet<usize>>,
     pins: Box<[CircuitPinInfo]>,
+    controls: Box<[(usize, usize)]>,
 
     saved_size: Option<Vec2u>,
     saved_pin_ids: Option<Vec<DynStaticStr>>,
 }
 
-// TODO: handle state destruction on remove
 impl Board {
     fn draw(
         board: Option<&Arc<CircuitBoard>>,
@@ -116,22 +116,15 @@ impl Board {
             return;
         }
 
-        let board = match board {
-            Some(v) => v,
-            None => {
-                draw_error("Invalid board");
-                return;
-            }
-        };
+        if board.is_none() {
+            draw_error("Invalid board");
+            return;
+        }
 
-        let state = match state {
-            Some(v) => Some(v),
-            None if !ignore_state => {
-                draw_error("Invalid state");
-                return;
-            }
-            None => None,
-        };
+        if state.is_none() && !ignore_state {
+            draw_error("Invalid state");
+            return;
+        }
 
         let design = match design {
             Some(v) => v,
@@ -258,6 +251,102 @@ impl CircuitImpl for Board {
             paint_ctx,
             false,
         );
+    }
+
+    fn control_count(&self, _: &Arc<Circuit>) -> Option<usize> {
+        Some(self.controls.len())
+    }
+
+    fn control_info(&self, _: &Arc<Circuit>, id: usize) -> Option<CircuitControlInfo> {
+        let (circuit, id) = self.controls.get(id).copied()?;
+        let info = self.design.as_ref()?.controls.get(&(circuit, id))?;
+        Some(
+            CircuitControlInfo {
+                rect: info.rect,
+                display_name: info.display_name.get_arc().into(),
+            }
+        )
+    }
+
+    fn update_control(
+        &self,
+        id: usize,
+        _: &Arc<Circuit>,
+        state: Option<&CircuitStateContext>,
+        ctx: &PaintContext,
+        interactive: bool,
+        uid: Id,
+    ) {
+
+        let draw_error = |s: &str| {
+            ctx.paint.rect(
+                ctx.rect,
+                Rounding::ZERO,
+                Color32::RED.gamma_multiply(0.8),
+                Stroke::new(2.0, Color32::BLACK),
+            );
+
+            let rect = ctx.rect.shrink(2.0);
+            let galley = WidgetText::from(s)
+                .into_galley(ctx.ui, Some(true), rect.width(), TextStyle::Monospace)
+                .galley;
+
+            let pos = pos2(
+                rect.left() + (rect.width() - galley.size().x) * 0.5,
+                rect.top() + (rect.height() - galley.size().y) * 0.5,
+            );
+
+            ctx.paint.add(TextShape {
+                pos,
+                galley,
+                underline: Stroke::NONE,
+                override_text_color: Some(Color32::WHITE),
+                angle: 0.0,
+            })
+        };
+
+        let (circuit, id) = match self.controls.get(id).copied() {
+            Some(v) => v,
+            None => {
+                draw_error("Invalid control");
+                return;
+            },
+        };
+        
+        let board = match &self.board {
+            Some(v) => v,
+            None => {
+                draw_error("Invalid board");
+                return;
+            },
+        };
+        let circuits = board.circuits.read();
+        let circuit = match circuits.get(circuit) {
+            Some(v) => v,
+            None => {
+                draw_error("Invalid circuit");
+                return;
+            },
+        };
+
+        let inner_state = match state {
+            None => None,
+            Some(state) => {
+                let inner_state = state
+                    .read_circuit_internal_state(|s: &BoardState| s.state.clone())
+                    .flatten();
+                let inner_state = match inner_state {
+                    Some(v) => v,
+                    None => {
+                        draw_error("Invalid state");
+                        return;
+                    },
+                };
+                Some(CircuitStateContext::new(inner_state, circuit.clone()))
+            },
+        };
+
+        circuit.imp.read().update_control(id, circuit, inner_state.as_ref(), ctx, interactive, uid.with((circuit.board.uid, circuit.pos)));
     }
 
     fn create_pins(&mut self, circ: &Arc<Circuit>) -> Box<[CircuitPinInfo]> {
@@ -408,6 +497,10 @@ impl CircuitImpl for Board {
             info.size = design.size;
 
             self.pins = info.pins.clone();
+
+            let mut controls: Vec<_> = design.controls.keys().copied().collect();
+            controls.sort();
+            self.controls = controls.into_boxed_slice();
         }
     }
 

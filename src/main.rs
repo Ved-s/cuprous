@@ -7,6 +7,7 @@ use std::{
     borrow::Borrow,
     collections::HashSet,
     f32::consts::TAU,
+    fmt::Debug,
     hash::Hash,
     num::NonZeroU32,
     ops::{Deref, Not, Range},
@@ -992,6 +993,30 @@ impl Clone for ArcString {
     }
 }
 
+impl Debug for ArcString {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.get_str().deref().fmt(f)
+    }
+}
+
+impl Serialize for ArcString {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.get_str().deref().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ArcString {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        <&str>::deserialize(deserializer).map(|str| str.into())
+    }
+}
+
 impl ArcString {
     fn check_string(&self, s: &str) -> bool {
         let check_str = self.check_str.load(Ordering::Relaxed);
@@ -1062,6 +1087,7 @@ impl ArcString {
             && !self.arc.read().as_ref().is_some_and(|a| !a.is_empty())
     }
 
+    #[allow(unused)]
     fn len(&self) -> usize {
         self.string
             .as_ref()
@@ -1077,6 +1103,25 @@ impl From<&str> for ArcString {
             string: Some(value.into()),
             arc: RwLock::new(None),
             check_str: AtomicBool::new(false),
+        }
+    }
+}
+
+impl From<Arc<str>> for ArcString {
+    fn from(value: Arc<str>) -> Self {
+        ArcString {
+            string: None,
+            arc: RwLock::new(Some(value)),
+            check_str: AtomicBool::new(false),
+        }
+    }
+}
+
+impl From<DynStaticStr> for ArcString {
+    fn from(value: DynStaticStr) -> Self {
+        match value {
+            DynStaticStr::Static(str) => str.into(),
+            DynStaticStr::Dynamic(arc) => arc.into(),
         }
     }
 }

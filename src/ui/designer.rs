@@ -6,15 +6,18 @@ use std::{
 
 use eframe::{
     egui::{
-        self, CollapsingHeader, ComboBox, Frame, Grid, Key, Label, Margin, PointerButton, Sense,
-        SidePanel, Slider, TextStyle, Ui, Widget,
+        self, CollapsingHeader, ComboBox, Frame, Grid, Key, Label, Margin, PointerButton,
+        ScrollArea, Sense, SidePanel, Slider, TextStyle, Ui, Widget,
     },
     epaint::{Color32, FontId, RectShape, Rounding, Shape, Stroke},
 };
 use emath::{pos2, vec2, Align2, Pos2, Rect};
 
 use crate::{
-    board::{CircuitDesign, CircuitDesignPin, CircuitDesignStorage, Decoration, DecorationType},
+    board::{
+        CircuitDesign, CircuitDesignControl, CircuitDesignPin, CircuitDesignStorage, Decoration,
+        DecorationType,
+    },
     circuits::InternalPinDirection,
     ext::{IteratorEqExt, IteratorExt},
     state::WireState,
@@ -23,6 +26,7 @@ use crate::{
 };
 
 use super::{
+    custom_rect_editor,
     drawing::{self, align_rect_scaled},
     rect_editor,
     selection::{
@@ -49,12 +53,14 @@ enum SelectedItemId {
 enum SelectedDesignObject {
     Decoration(usize),
     Pin(usize),
+    Control(usize, usize),
 }
 
 #[derive(PartialEq, Eq)]
 enum SelectedDesignObjectType {
     Decoration(DecorationType),
     Pin,
+    Control,
 }
 
 pub struct CircuitDesignPinInfo {
@@ -113,6 +119,12 @@ impl SelectionImpl for DesignerSelectionImpl {
                 changes.insert(SelectedDesignObject::Pin(i));
             }
         }
+
+        for ((provider, id), control) in pass.controls.iter() {
+            if control.rect.intersects(rect) {
+                changes.insert(SelectedDesignObject::Control(*provider, *id));
+            }
+        }
     }
 
     fn draw_object_selection(
@@ -147,6 +159,17 @@ impl SelectionImpl for DesignerSelectionImpl {
                     let scr_rect = ctx.screen.world_to_screen_rect(pin_rect);
                     shapes.push(Shape::Rect(RectShape::new(
                         scr_rect,
+                        Rounding::ZERO,
+                        selection_fill_color(),
+                        Stroke::new(2.0, selection_border_color()),
+                    )));
+                }
+            }
+            SelectedDesignObject::Control(provider, control) => {
+                if let Some(info) = pass.controls.get(&(*provider, *control)) {
+                    let scr_rect = ctx.screen.world_to_screen_rect(info.rect);
+                    shapes.push(Shape::Rect(RectShape::new(
+                        scr_rect.expand(1.0),
                         Rounding::ZERO,
                         selection_fill_color(),
                         Stroke::new(2.0, selection_border_color()),
@@ -404,6 +427,88 @@ impl Designer {
             }
         }
 
+        for ((provider, control), info) in design.controls.iter_mut() {
+            info.rect.max.x = info.rect.max.x.max(rect.min.x + 0.05);
+            info.rect.max.y = info.rect.max.y.max(rect.min.y + 0.05);
+
+            let mut scr_rect = screen.world_to_screen_rect(info.rect);
+            if self.selected_id.is_none() {
+                let id = ui.id().with("control_rect").with((*provider, *control));
+
+                let shift = ui.input(|input| input.modifiers.shift);
+                let state = custom_rect_editor(
+                    &mut scr_rect,
+                    Sides::ALL,
+                    ui,
+                    id,
+                    |sides, rect| {
+                        rect.max.x = rect.max.x.max(rect.min.x + screen.scale * 0.05);
+                        rect.max.y = rect.max.y.max(rect.min.y + screen.scale * 0.05);
+                        if sides.any() {
+                            if shift {
+                                let mut r = screen.screen_to_world_rect(*rect);
+                                if sides.center {
+                                    let size = r.size();
+                                    let x = (r.left() * 2.0).round() * 0.5;
+                                    let y = (r.top() * 2.0).round() * 0.5;
+                                    r = Rect::from_min_size(pos2(x, y), size);
+                                }
+
+                                if sides.top {
+                                    r.set_top((r.top() * 2.0).round() * 0.5);
+                                }
+                                if sides.left {
+                                    r.set_left((r.left() * 2.0).round() * 0.5);
+                                }
+                                if sides.right {
+                                    r.set_right((r.right() * 2.0).round() * 0.5);
+                                }
+                                if sides.bottom {
+                                    r.set_bottom((r.bottom() * 2.0).round() * 0.5);
+                                }
+                                *rect = screen.world_to_screen_rect(r);
+                            }
+                            if !sides.center {
+                                let orig_info = self.provider.get_control_info(*provider, *control);
+                                if let Some(orig_info) = orig_info {
+                                    let mut size = rect.size();
+                                    if sides.left || sides.right {
+                                        size.y = (size.x / orig_info.rect.width())
+                                            * orig_info.rect.height();
+                                    } else if sides.top || sides.bottom {
+                                        size.x = (size.y / orig_info.rect.height())
+                                            * orig_info.rect.width();
+                                    }
+
+                                    let (anchor, align) = if sides.left && sides.top {
+                                        (rect.right_bottom(), vec2(-1.0, -1.0))
+                                    } else if sides.top {
+                                        (rect.left_bottom(), vec2(1.0, -1.0))
+                                    } else if sides.left {
+                                        (rect.right_top(), vec2(-1.0, 1.0))
+                                    } else {
+                                        (rect.left_top(), vec2(1.0, 1.0))
+                                    };
+                                    *rect = Rect::from_two_pos(anchor, anchor + size * align);
+                                }
+                            }
+                        }
+                    },
+                    |rect, _, _| {
+                        let ctx = ctx.with_rect(rect);
+                        self.provider.paint_control(*provider, *control, &ctx);
+                    },
+                );
+
+                if !matches!(state, DragState::None) {
+                    info.rect = screen.screen_to_world_rect(scr_rect);
+                }
+            } else {
+                let ctx = ctx.with_rect(scr_rect);
+                self.provider.paint_control(*provider, *control, &ctx);
+            }
+        }
+
         for (i, pin) in design.pins.iter_mut().enumerate() {
             let center = ctx
                 .screen
@@ -457,87 +562,111 @@ impl Designer {
         self.selection.update_selection(design, &ctx);
 
         if let Some(selected) = &self.selected_id {
-            match selected {
-                SelectedItemId::Selection => {}
-                SelectedItemId::Pin(id) => 'm: {
-                    for pin in design.pins.iter() {
-                        if pin.id == *id {
+            let mouse_tile_pos = ctx
+                .ui
+                .input(|input| input.pointer.interact_pos())
+                .map(|p| ctx.screen.screen_to_world(Vec2f::from(p)));
+
+            if let Some(mouse_tile_pos) = mouse_tile_pos {
+                match selected {
+                    SelectedItemId::Selection => {}
+                    SelectedItemId::Pin(id) => 'm: {
+                        for pin in design.pins.iter() {
+                            if pin.id == *id {
+                                break 'm;
+                            }
+                        }
+
+                        let mouse_tile_pos_i = mouse_tile_pos.convert(|v| v.floor() as i32);
+
+                        if mouse_tile_pos_i.x() < 0 || mouse_tile_pos_i.y() < 0 {
                             break 'm;
                         }
+                        let mouse_tile_pos_i = mouse_tile_pos_i.convert(|v| v as u32);
+
+                        let info = self.provider.get_pin(id);
+                        let info = unwrap_option_or_break!(info, 'm);
+
+                        self.draw_pin(info.dir, self.selected_pin_dir, mouse_tile_pos_i, &ctx);
+
+                        let interaction = ctx.ui.interact(ctx.rect, ctx.ui.id(), Sense::click());
+                        if interaction.clicked_by(PointerButton::Primary) {
+                            design.pins.push(CircuitDesignPin {
+                                id: id.clone(),
+                                pos: mouse_tile_pos_i,
+                                dir: info.dir,
+                                display_dir: self.selected_pin_dir,
+                                display_name: info.display_name,
+                            });
+
+                            self.selected_id = None;
+                        }
                     }
+                    SelectedItemId::Rect => {
+                        let mouse_tile_pos = match ui.input(|input| input.modifiers.shift) {
+                            false => mouse_tile_pos,
+                            true => mouse_tile_pos.convert(|v| (v * 2.0).round() * 0.5),
+                        };
 
-                    let mouse_tile_pos = ctx
-                        .ui
-                        .input(|input| input.pointer.interact_pos())
-                        .map(|p| ctx.screen.screen_to_world(Vec2f::from(p)));
-                    let mouse_tile_pos_i = match mouse_tile_pos {
-                        None => break 'm,
-                        Some(v) => v.convert(|v| v.floor() as i32),
-                    };
+                        let interaction = ctx.ui.interact(ctx.rect, ctx.ui.id(), Sense::drag());
 
-                    if mouse_tile_pos_i.x() < 0 || mouse_tile_pos_i.y() < 0 {
-                        break 'm;
+                        if interaction.drag_started_by(PointerButton::Primary) {
+                            self.rect_drag_start = Some(mouse_tile_pos);
+                        }
+                        if let Some(rect_drag_start) = self.rect_drag_start {
+                            let rect =
+                                Rect::from_two_pos(rect_drag_start.into(), mouse_tile_pos.into());
+                            let visuals = *self.default_rect_visuals.read();
+                            let scaled_visuals = visuals.scaled_by(ctx.screen.scale);
+
+                            ctx.paint.rect(
+                                ctx.screen.world_to_screen_rect(rect),
+                                scaled_visuals.rounding,
+                                scaled_visuals.fill,
+                                scaled_visuals.stroke,
+                            );
+
+                            if interaction.drag_released_by(PointerButton::Primary) {
+                                design.decorations.push(Decoration::Rect { rect, visuals });
+                                self.rect_drag_start = None;
+                            }
+                        }
                     }
-                    let mouse_tile_pos_i = mouse_tile_pos_i.convert(|v| v as u32);
+                    SelectedItemId::Control(provider, control) => 'm: {
+                        if design.controls.contains_key(&(*provider, *control)) {
+                            break 'm;
+                        }
 
-                    let info = self.provider.get_pin(id);
-                    let info = unwrap_option_or_break!(info, 'm);
+                        let info = self.provider.get_control_info(*provider, *control);
+                        let info = unwrap_option_or_break!(info, 'm);
 
-                    self.draw_pin(info.dir, self.selected_pin_dir, mouse_tile_pos_i, &ctx);
+                        let rect_pos = mouse_tile_pos - info.rect.size() / 2.0;
+                        let rect_pos = match ui.input(|input| input.modifiers.shift) {
+                            false => rect_pos,
+                            true => rect_pos.convert(|v| (v * 2.0).round() * 0.5),
+                        };
 
-                    let interaction = ctx.ui.interact(ctx.rect, ctx.ui.id(), Sense::click());
-                    if interaction.clicked_by(PointerButton::Primary) {
-                        design.pins.push(CircuitDesignPin {
-                            id: id.clone(),
-                            pos: mouse_tile_pos_i,
-                            dir: info.dir,
-                            display_dir: self.selected_pin_dir,
-                            display_name: info.display_name,
-                        });
+                        let rect = Rect::from_min_size(rect_pos.into(), info.rect.size());
 
-                        self.selected_id = None;
-                    }
-                }
-                SelectedItemId::Rect => {
-                    let mouse_tile_pos = ctx
-                        .ui
-                        .input(|input| input.pointer.interact_pos())
-                        .map(|p| ctx.screen.screen_to_world(Vec2f::from(p)));
+                        let screen_rect = ctx.screen.world_to_screen_rect(rect);
+                        let paint_ctx = ctx.with_rect(screen_rect);
+                        self.provider.paint_control(*provider, *control, &paint_ctx);
 
-                    let mouse_tile_pos = match ui.input(|input| input.modifiers.shift) {
-                        false => mouse_tile_pos,
-                        true => mouse_tile_pos.map(|p| p.convert(|v| (v * 2.0).round() * 0.5)),
-                    };
+                        let interaction = ctx.ui.interact(ctx.rect, ctx.ui.id(), Sense::click());
 
-                    let interaction = ctx.ui.interact(ctx.rect, ctx.ui.id(), Sense::drag());
+                        if interaction.clicked_by(PointerButton::Primary) {
+                            design.controls.insert(
+                                (*provider, *control),
+                                CircuitDesignControl {
+                                    rect,
+                                    display_name: info.display_name.clone().into(),
+                                },
+                            );
 
-                    if interaction.drag_started_by(PointerButton::Primary) {
-                        self.rect_drag_start = mouse_tile_pos;
-                    }
-                    if let (Some(rect_drag_start), Some(mouse_tile_pos)) =
-                        (self.rect_drag_start, mouse_tile_pos)
-                    {
-                        let rect =
-                            Rect::from_two_pos(rect_drag_start.into(), mouse_tile_pos.into());
-                        let visuals = *self.default_rect_visuals.read();
-                        let scaled_visuals = visuals.scaled_by(ctx.screen.scale);
-
-                        ctx.paint.rect(
-                            ctx.screen.world_to_screen_rect(rect),
-                            scaled_visuals.rounding,
-                            scaled_visuals.fill,
-                            scaled_visuals.stroke,
-                        );
-
-                        if interaction.drag_released_by(PointerButton::Primary) {
-                            design.decorations.push(Decoration::Rect { rect, visuals });
-                            self.rect_drag_start = None;
+                            self.selected_id = None;
                         }
                     }
                 }
-                SelectedItemId::Control(_, _) => {
-                    
-                },
             }
         }
 
@@ -570,9 +699,10 @@ impl Designer {
                     self.provider.get_pin(id).map(|i| i.display_name.clone())
                 }
                 SelectedItemId::Rect => Some("Rectangle".into()),
-                SelectedItemId::Control(provider_id, control_id) => {
-                    self.provider.get_control_info(*provider_id, *control_id).map(|i| i.display_name)
-                },
+                SelectedItemId::Control(provider_id, control_id) => self
+                    .provider
+                    .get_control_info(*provider_id, *control_id)
+                    .map(|i| i.display_name),
             });
 
         if inv_resp.changed() {
@@ -647,134 +777,165 @@ impl Designer {
                     .show_separator_line(false)
             })))
             .show(ui, |ui| {
-                let font = TextStyle::Monospace.resolve(ui.style());
+                ScrollArea::vertical().show(ui, |ui| {
+                    let font = TextStyle::Monospace.resolve(ui.style());
 
-                let pins = self.provider.get_pin_ids();
+                    let pins = self.provider.get_pin_ids();
 
-                if !pins.is_empty() {
-                    CollapsingHeader::new("Pins")
-                        .default_open(true)
-                        .show(ui, |ui| {
-                            for id in pins {
-                                let info = unwrap_option_or_continue!(self.provider.get_pin(&id));
-
-                                ui.horizontal(|ui| {
-                                    let resp = ui.allocate_response(
-                                        vec2(font.size * 1.15, font.size),
-                                        Sense::hover(),
-                                    );
-
-                                    let paint_ctx =
-                                        PaintContext::new_on_ui(ui, resp.rect, font.size);
-
-                                    let pico = match info.dir {
-                                        InternalPinDirection::StateDependent { default: _ } => None,
-                                        InternalPinDirection::Inside => Some(true),
-                                        InternalPinDirection::Outside => Some(false),
-                                        InternalPinDirection::Custom => None,
-                                    };
-                                    let angle = if pico == Some(true) { TAU * 0.5 } else { 0.0 };
-                                    crate::graphics::outside_pin(
-                                        WireState::False,
-                                        true,
-                                        pico,
-                                        angle,
-                                        &paint_ctx,
-                                    );
-
-                                    let selected = match &self.selected_id {
-                                        Some(SelectedItemId::Pin(sel_id)) => {
-                                            sel_id.deref() == id.deref()
-                                        }
-                                        _ => false,
-                                    };
-
-                                    if ui
-                                        .selectable_label(selected, info.display_name.deref())
-                                        .clicked()
-                                    {
-                                        let existing_pin =
-                                            design.pins.iter().find_index(|p| p.id == id);
-
-                                        if let Some(existing_pin) = existing_pin {
-                                            self.selection.clear();
-                                            self.selection
-                                                .selection
-                                                .insert(SelectedDesignObject::Pin(existing_pin));
-
-                                            if let Some(pin) = design.pins.get(existing_pin) {
-                                                let center = pin.pos.convert(|v| v as f32 + 0.5);
-
-                                                self.pan_zoom.center_pos = center;
-                                                self.pan_zoom.scale = self.pan_zoom.scale.max(8.0)
-                                            }
-                                        } else {
-                                            self.selected_id = match selected {
-                                                true => None,
-                                                false => Some(SelectedItemId::Pin(id.clone())),
-                                            };
-                                            self.selected_pin_dir = info.display_dir;
-                                        }
-                                    }
-                                });
-                            }
-                        });
-                }
-
-                let control_providers = self.provider.get_control_provider_data();
-                if !control_providers.is_empty() {
-                    CollapsingHeader::new("Controls")
-                        .default_open(true)
-                        .show(ui, |ui| {
-                            for provider_data in control_providers {
-                                for control in 0..provider_data.count {
-                                    let control_data =
-                                        self.provider.get_control_info(provider_data.id, control);
-                                    let control_data = unwrap_option_or_continue!(control_data);
+                    if !pins.is_empty() {
+                        CollapsingHeader::new("Pins")
+                            .default_open(true)
+                            .show(ui, |ui| {
+                                for id in pins {
+                                    let info =
+                                        unwrap_option_or_continue!(self.provider.get_pin(&id));
 
                                     ui.horizontal(|ui| {
                                         let resp = ui.allocate_response(
-                                            vec2(font.size, font.size),
+                                            vec2(font.size * 1.15, font.size),
                                             Sense::hover(),
                                         );
-                                        let (rect, scale) = align_rect_scaled(
-                                            resp.rect.left_top(),
-                                            resp.rect.size(),
-                                            control_data.rect.size(),
-                                        );
 
-                                        let ctx = PaintContext::new_on_ui(ui, rect, scale);
+                                        let paint_ctx =
+                                            PaintContext::new_on_ui(ui, resp.rect, font.size);
 
-                                        self.provider.paint_control(
-                                            provider_data.id,
-                                            control,
-                                            &ctx,
+                                        let pico = match info.dir {
+                                            InternalPinDirection::StateDependent { default: _ } => {
+                                                None
+                                            }
+                                            InternalPinDirection::Inside => Some(true),
+                                            InternalPinDirection::Outside => Some(false),
+                                            InternalPinDirection::Custom => None,
+                                        };
+                                        let angle =
+                                            if pico == Some(true) { TAU * 0.5 } else { 0.0 };
+                                        crate::graphics::outside_pin(
+                                            WireState::False,
+                                            true,
+                                            pico,
+                                            angle,
+                                            &paint_ctx,
                                         );
 
                                         let selected = match &self.selected_id {
-                                            Some(SelectedItemId::Control(prov_id, ctl_id)) => {
-                                                *prov_id == provider_data.id && *ctl_id == control
+                                            Some(SelectedItemId::Pin(sel_id)) => {
+                                                sel_id.deref() == id.deref()
                                             }
                                             _ => false,
                                         };
 
                                         if ui
-                                            .selectable_label(
-                                                selected,
-                                                control_data.display_name.deref(),
-                                            )
+                                            .selectable_label(selected, info.display_name.deref())
                                             .clicked()
                                         {
-                                            self.selected_id = match selected {
-                                                true => None,
-                                                false => Some(SelectedItemId::Control(provider_data.id, control)),
-                                            };
+                                            let existing_pin =
+                                                design.pins.iter().find_index(|p| p.id == id);
+
+                                            if let Some(existing_pin) = existing_pin {
+                                                self.selection.clear();
+                                                self.selection.selection.insert(
+                                                    SelectedDesignObject::Pin(existing_pin),
+                                                );
+
+                                                if let Some(pin) = design.pins.get(existing_pin) {
+                                                    let center =
+                                                        pin.pos.convert(|v| v as f32 + 0.5);
+
+                                                    self.pan_zoom.center_pos = center;
+                                                    self.pan_zoom.scale =
+                                                        self.pan_zoom.scale.max(8.0)
+                                                }
+                                            } else {
+                                                self.selected_id = match selected {
+                                                    true => None,
+                                                    false => Some(SelectedItemId::Pin(id.clone())),
+                                                };
+                                                self.selected_pin_dir = info.display_dir;
+                                            }
                                         }
                                     });
                                 }
-                            }
-                        });
-                }
+                            });
+                    }
+
+                    let control_providers = self.provider.get_control_provider_data();
+                    if !control_providers.is_empty() {
+                        CollapsingHeader::new("Controls")
+                            .default_open(true)
+                            .show(ui, |ui| {
+                                for provider_data in control_providers {
+                                    for control in 0..provider_data.count {
+                                        let control_data = self
+                                            .provider
+                                            .get_control_info(provider_data.id, control);
+                                        let control_data = unwrap_option_or_continue!(control_data);
+
+                                        ui.horizontal(|ui| {
+                                            let resp = ui.allocate_response(
+                                                vec2(font.size, font.size),
+                                                Sense::hover(),
+                                            );
+                                            let (rect, scale) = align_rect_scaled(
+                                                resp.rect.left_top(),
+                                                resp.rect.size(),
+                                                control_data.rect.size(),
+                                            );
+
+                                            let ctx = PaintContext::new_on_ui(ui, rect, scale);
+
+                                            self.provider.paint_control(
+                                                provider_data.id,
+                                                control,
+                                                &ctx,
+                                            );
+
+                                            let selected = match &self.selected_id {
+                                                Some(SelectedItemId::Control(prov_id, ctl_id)) => {
+                                                    *prov_id == provider_data.id
+                                                        && *ctl_id == control
+                                                }
+                                                _ => false,
+                                            };
+
+                                            if ui
+                                                .selectable_label(
+                                                    selected,
+                                                    control_data.display_name.deref(),
+                                                )
+                                                .clicked()
+                                            {
+                                                if let Some(info) = design
+                                                    .controls
+                                                    .get(&(provider_data.id, control))
+                                                {
+                                                    self.selection.clear();
+                                                    self.selection.selection.insert(
+                                                        SelectedDesignObject::Control(
+                                                            provider_data.id,
+                                                            control,
+                                                        ),
+                                                    );
+
+                                                    self.pan_zoom.center_pos =
+                                                        info.rect.center().into();
+                                                    self.pan_zoom.scale =
+                                                        self.pan_zoom.scale.max(8.0)
+                                                } else {
+                                                    self.selected_id = match selected {
+                                                        true => None,
+                                                        false => Some(SelectedItemId::Control(
+                                                            provider_data.id,
+                                                            control,
+                                                        )),
+                                                    };
+                                                }
+                                            }
+                                        });
+                                    }
+                                }
+                            });
+                    }
+                })
             })
             .full_rect
     }
@@ -821,6 +982,10 @@ impl Designer {
                             SelectedDesignObject::Pin(id) => {
                                 design.pins.get(*id).map(|_| SelectedDesignObjectType::Pin)
                             }
+                            SelectedDesignObject::Control(provider, control) => design
+                                .controls
+                                .contains_key(&(*provider, *control))
+                                .then_some(SelectedDesignObjectType::Control),
                         })
                         .same();
                     match same_type {
@@ -855,6 +1020,7 @@ impl Designer {
 
                             Self::pin_properties(iter, ui);
                         }
+                        Some(SelectedDesignObjectType::Control) => {}
                     };
                 } else if let Some(selected) = &self.selected_id {
                     match selected {
@@ -866,7 +1032,7 @@ impl Designer {
                             let mut visuals = self.default_rect_visuals.write();
                             Self::rect_properties([visuals.deref_mut()].into_iter(), ui)
                         }
-                        SelectedItemId::Control(_, _) => {},
+                        SelectedItemId::Control(_, _) => {}
                     }
                 }
             })
