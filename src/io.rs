@@ -114,7 +114,10 @@ pub struct CircuitBoardData {
     pub designs: CircuitDesignStoreData,
 
     #[serde(default)]
-    pub ordered: bool
+    pub ordered: bool,
+    
+    #[serde(default)]
+    pub single_outer_control: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

@@ -1,6 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
-    ops::Deref,
+    ops::Deref, sync::atomic::Ordering,
 };
 
 use bimap::BiMap;
@@ -14,7 +14,7 @@ use crate::{
     board::{CircuitBoard, CircuitDesign},
     circuits::*,
     state::StateParent,
-    unwrap_option_or_return,
+    unwrap_option_or_return, unwrap_option_or_continue,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -254,18 +254,48 @@ impl CircuitImpl for Board {
     }
 
     fn control_count(&self, _: &Arc<Circuit>) -> Option<usize> {
-        Some(self.controls.len())
+        let board = unwrap_option_or_return!(&self.board, Some(0));
+        if board.single_outer_control.load(Ordering::Relaxed) {
+            if self.controls.is_empty() {
+                Some(0)
+            }
+            else {
+                Some(1)
+            }
+        }
+        else {
+            Some(self.controls.len())
+        }
     }
 
-    fn control_info(&self, _: &Arc<Circuit>, id: usize) -> Option<CircuitControlInfo> {
-        let (circuit, id) = self.controls.get(id).copied()?;
-        let info = self.design.as_ref()?.controls.get(&(circuit, id))?;
-        Some(
-            CircuitControlInfo {
-                rect: info.rect,
-                display_name: info.display_name.get_arc().into(),
+    fn control_info(&self, circ: &Arc<Circuit>, id: usize) -> Option<CircuitControlInfo> {
+        let board = unwrap_option_or_return!(&self.board, None);
+        if board.single_outer_control.load(Ordering::Relaxed) {
+            if id == 0 {
+                let mut iter = self.design.as_ref()?.controls.values();
+                let mut rect = iter.next()?.rect;
+                for info in iter {
+                    rect.min.x = rect.min.x.min(info.rect.min.x);
+                    rect.min.y = rect.min.y.min(info.rect.min.y);
+                    rect.max.x = rect.max.x.max(info.rect.max.x);
+                    rect.max.y = rect.max.y.max(info.rect.max.y);
+                }
+                Some(CircuitControlInfo { rect, display_name: circ.name().map(|n| n.into()).unwrap_or_else(|| "Combined control".into()) })
             }
-        )
+            else {
+                None
+            }
+        }
+        else {
+            let (circuit, id) = self.controls.get(id).copied()?;
+            let info = self.design.as_ref()?.controls.get(&(circuit, id))?;
+            Some(
+                CircuitControlInfo {
+                    rect: info.rect,
+                    display_name: info.display_name.get_arc().into(),
+                }
+            )
+        }
     }
 
     fn update_control(
@@ -305,14 +335,6 @@ impl CircuitImpl for Board {
             })
         };
 
-        let (circuit, id) = match self.controls.get(id).copied() {
-            Some(v) => v,
-            None => {
-                draw_error("Invalid control");
-                return;
-            },
-        };
-        
         let board = match &self.board {
             Some(v) => v,
             None => {
@@ -320,33 +342,79 @@ impl CircuitImpl for Board {
                 return;
             },
         };
-        let circuits = board.circuits.read();
-        let circuit = match circuits.get(circuit) {
-            Some(v) => v,
-            None => {
-                draw_error("Invalid circuit");
-                return;
-            },
+
+        let update_inner_control = |circuit: usize, id: usize, ctx: &PaintContext, uid: Id| {
+            let circuits = board.circuits.read();
+            let circuit = match circuits.get(circuit) {
+                Some(v) => v,
+                None => {
+                    draw_error("Invalid circuit");
+                    return;
+                },
+            };
+
+            let inner_state = match state {
+                None => None,
+                Some(state) => {
+                    let inner_state = state
+                        .read_circuit_internal_state(|s: &BoardState| s.state.clone())
+                        .flatten();
+                    let inner_state = match inner_state {
+                        Some(v) => v,
+                        None => {
+                            draw_error("Invalid state");
+                            return;
+                        },
+                    };
+                    Some(CircuitStateContext::new(inner_state, circuit.clone()))
+                },
+            };
+
+            circuit.imp.read().update_control(id, circuit, inner_state.as_ref(), ctx, interactive, uid.with((circuit.board.uid, circuit.pos)));
         };
 
-        let inner_state = match state {
-            None => None,
-            Some(state) => {
-                let inner_state = state
-                    .read_circuit_internal_state(|s: &BoardState| s.state.clone())
-                    .flatten();
-                let inner_state = match inner_state {
-                    Some(v) => v,
-                    None => {
-                        draw_error("Invalid state");
-                        return;
-                    },
-                };
-                Some(CircuitStateContext::new(inner_state, circuit.clone()))
-            },
-        };
+        if board.single_outer_control.load(Ordering::Relaxed) {
 
-        circuit.imp.read().update_control(id, circuit, inner_state.as_ref(), ctx, interactive, uid.with((circuit.board.uid, circuit.pos)));
+            let design = match &self.design {
+                Some(v) => v,
+                None => {
+                    draw_error("Invalid design");
+                    return;
+                },
+            };
+
+            let mut iter = design.controls.values();
+            let mut rect = unwrap_option_or_return!(iter.next()).rect;
+            for info in iter {
+                rect.min.x = rect.min.x.min(info.rect.min.x);
+                rect.min.y = rect.min.y.min(info.rect.min.y);
+                rect.max.x = rect.max.x.max(info.rect.max.x);
+                rect.max.y = rect.max.y.max(info.rect.max.y);
+            }
+
+            for (i, (circuit, id)) in self.controls.iter().copied().enumerate() {
+                let info = unwrap_option_or_continue!(design.controls.get(&(circuit, id)));
+
+                let rel_pos = (info.rect.left_top() - rect.left_top()) / rect.size();
+                let rel_size = info.rect.size() / rect.size();
+
+                let rect = Rect::from_min_size(ctx.rect.lerp_inside(rel_pos), rel_size * ctx.rect.size());
+                let ctx = ctx.with_rect(rect);
+
+                update_inner_control(circuit, id, &ctx, uid.with(i));
+            }
+        }
+        else {
+            let (circuit, id) = match self.controls.get(id).copied() {
+                Some(v) => v,
+                None => {
+                    draw_error("Invalid control");
+                    return;
+                },
+            };
+
+            update_inner_control(circuit, id, ctx, uid);
+        }
     }
 
     fn create_pins(&mut self, circ: &Arc<Circuit>) -> Box<[CircuitPinInfo]> {

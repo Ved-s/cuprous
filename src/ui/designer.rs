@@ -88,6 +88,13 @@ pub trait DesignProvider {
     fn get_control_provider_data(&self) -> Vec<ControlProvider>;
     fn get_control_info(&self, provider: usize, id: usize) -> Option<CircuitDesignControlInfo>;
     fn paint_control(&self, provider: usize, id: usize, ctx: &PaintContext);
+
+    fn has_custom_config(&self) -> bool {
+        false
+    }
+    fn custom_config_ui(&self, ui: &mut Ui) {
+        let _ = ui;
+    }
 }
 
 #[derive(Default)]
@@ -144,12 +151,8 @@ impl SelectionImpl for DesignerSelectionImpl {
                     };
 
                     let rect = ctx.screen.world_to_screen_rect(rect).expand(2.0);
-                    shapes.push(Shape::Rect(RectShape::new(
-                        rect,
-                        Rounding::ZERO,
-                        selection_fill_color(),
-                        Stroke::new(2.0, selection_border_color()),
-                    )));
+                    shapes.push(Shape::rect_filled(rect, Rounding::ZERO, selection_fill_color()));
+                    ctx.paint.rect_stroke(rect, Rounding::ZERO, Stroke::new(2.0, selection_border_color()));
                 }
             }
             SelectedDesignObject::Pin(id) => {
@@ -157,23 +160,16 @@ impl SelectionImpl for DesignerSelectionImpl {
                     let center = pin.pos.convert(|v| v as f32 + 0.5);
                     let pin_rect = Rect::from_center_size(center.into(), vec2(0.5, 0.5));
                     let scr_rect = ctx.screen.world_to_screen_rect(pin_rect);
-                    shapes.push(Shape::Rect(RectShape::new(
-                        scr_rect,
-                        Rounding::ZERO,
-                        selection_fill_color(),
-                        Stroke::new(2.0, selection_border_color()),
-                    )));
+
+                    shapes.push(Shape::rect_filled(scr_rect, Rounding::ZERO, selection_fill_color()));
+                    ctx.paint.rect_stroke(scr_rect, Rounding::ZERO, Stroke::new(2.0, selection_border_color()));
                 }
             }
             SelectedDesignObject::Control(provider, control) => {
                 if let Some(info) = pass.controls.get(&(*provider, *control)) {
-                    let scr_rect = ctx.screen.world_to_screen_rect(info.rect);
-                    shapes.push(Shape::Rect(RectShape::new(
-                        scr_rect.expand(1.0),
-                        Rounding::ZERO,
-                        selection_fill_color(),
-                        Stroke::new(2.0, selection_border_color()),
-                    )));
+                    let scr_rect = ctx.screen.world_to_screen_rect(info.rect).expand(1.0);
+                    shapes.push(Shape::rect_filled(scr_rect, Rounding::ZERO, selection_fill_color()));
+                    ctx.paint.rect_stroke(scr_rect, Rounding::ZERO, Stroke::new(2.0, selection_border_color()));
                 }
             }
         }
@@ -282,6 +278,12 @@ impl Designer {
                         .contains(&SelectedDesignObject::Decoration(i))
                     {
                         design.decorations.remove(i);
+                    }
+                }
+
+                for object in self.selection.iter() {
+                    if let SelectedDesignObject::Control(provider, control) = *object {
+                        design.controls.remove(&(provider, control));
                     }
                 }
 
@@ -943,11 +945,17 @@ impl Designer {
     fn properties_ui(&mut self, ui: &mut Ui, design: &mut CircuitDesign) -> Rect {
         let style = ui.style().clone();
 
-        let active = !self.selection.selection.is_empty()
-            || self
+        let active = if !self.selection.selection.is_empty() {
+            true
+        } else if self.selected_id.is_some() {
+            self
                 .selected_id
                 .as_ref()
-                .is_some_and(|s| matches!(s, SelectedItemId::Pin(_) | SelectedItemId::Rect));
+                .is_some_and(|s| matches!(s, SelectedItemId::Pin(_) | SelectedItemId::Rect))
+        }
+        else {
+            self.provider.has_custom_config()
+        };
 
         CollapsibleSidePanel::new("prop-ui", "Properties editor")
             .active(active)
@@ -1034,6 +1042,8 @@ impl Designer {
                         }
                         SelectedItemId::Control(_, _) => {}
                     }
+                } else if self.provider.has_custom_config() {
+                    self.provider.custom_config_ui(ui);
                 }
             })
             .full_rect

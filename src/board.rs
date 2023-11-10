@@ -12,7 +12,7 @@ use std::{
 
 use bimap::BiMap;
 use eframe::{
-    egui::{self, FontSelection, Painter, Sense, TextStyle, WidgetText, Id},
+    egui::{self, FontSelection, Id, Painter, Sense, TextStyle, WidgetText},
     epaint::{Color32, FontId, RectShape, Rounding, Shape, Stroke, TextShape},
 };
 use emath::{pos2, vec2, Align2, Pos2, Rect, Vec2};
@@ -73,6 +73,7 @@ pub struct CircuitBoard {
     // RwLock for blocking simulation while modifying board
     pub sim_lock: Arc<RwLock<()>>,
     ordered_queue: AtomicBool,
+    pub single_outer_control: AtomicBool,
 }
 
 impl CircuitBoard {
@@ -90,6 +91,7 @@ impl CircuitBoard {
             ))),
             pins: Default::default(),
             controls: Default::default(),
+            single_outer_control: AtomicBool::new(false),
             ctx,
         }
     }
@@ -237,6 +239,7 @@ impl CircuitBoard {
                 .collect(),
             ordered: self.ordered_queue.load(Ordering::Relaxed),
             designs: self.designs.read().save(),
+            single_outer_control: self.single_outer_control.load(Ordering::Relaxed),
         };
         drop(sim_lock);
         data
@@ -256,6 +259,7 @@ impl CircuitBoard {
             designs,
             pins: Default::default(),
             controls: Default::default(),
+            single_outer_control: AtomicBool::new(data.single_outer_control),
             ctx: ctx.clone(),
         });
 
@@ -928,7 +932,14 @@ impl ActiveCircuitBoard {
                 };
 
                 let ctx = ctx.with_rect(ctx.screen.world_to_screen_rect(rect));
-                imp.update_control(i, circuit, Some(&state_ctx), &ctx, true, Id::new((self.board.uid, circuit.pos, i)));
+                imp.update_control(
+                    i,
+                    circuit,
+                    Some(&state_ctx),
+                    &ctx,
+                    true,
+                    Id::new((self.board.uid, circuit.pos, i)),
+                );
             }
         }
 
@@ -2401,7 +2412,7 @@ pub struct CircuitDesignPin {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CircuitDesignControl {
     pub rect: Rect,
-    pub display_name: ArcString
+    pub display_name: ArcString,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -2651,7 +2662,10 @@ impl DesignProvider for BoardDesignProvider {
             .read()
             .iter()
             .filter_map(|id| circuits.get(*id))
-            .map(|circuit| crate::ui::designer::ControlProvider { id: circuit.id, count: circuit.imp.read().control_count(circuit).unwrap_or(0) })
+            .map(|circuit| crate::ui::designer::ControlProvider {
+                id: circuit.id,
+                count: circuit.imp.read().control_count(circuit).unwrap_or(0),
+            })
             .filter(|p| p.count > 0)
             .collect()
     }
@@ -2662,7 +2676,7 @@ impl DesignProvider for BoardDesignProvider {
         id: usize,
     ) -> Option<crate::ui::designer::CircuitDesignControlInfo> {
         let circuits = self.board.circuits.read();
-        let circuit = circuits.get(provider)?; 
+        let circuit = circuits.get(provider)?;
         let info = circuit.imp.read().control_info(circuit, id)?;
         Some(crate::ui::designer::CircuitDesignControlInfo {
             rect: info.rect,
@@ -2672,7 +2686,30 @@ impl DesignProvider for BoardDesignProvider {
 
     fn paint_control(&self, provider: usize, id: usize, ctx: &PaintContext) {
         let circuits = self.board.circuits.read();
-        let circuit = unwrap_option_or_return!(circuits.get(provider)); 
-        circuit.imp.read().update_control(id, circuit, None, ctx, false, Id::new((self.board.uid, circuit.pos, id)));
+        let circuit = unwrap_option_or_return!(circuits.get(provider));
+        circuit.imp.read().update_control(
+            id,
+            circuit,
+            None,
+            ctx,
+            false,
+            Id::new((self.board.uid, circuit.pos, id)),
+        );
+    }
+
+    fn has_custom_config(&self) -> bool {
+        true
+    }
+
+    fn custom_config_ui(&self, ui: &mut egui::Ui) {
+        let mut single_outer_control = self.board.single_outer_control.load(Ordering::Relaxed);
+
+        if ui
+            .checkbox(&mut single_outer_control, "Single outer control")
+            .on_hover_text("Whether or not all controls on this design\nshould be grouped into one")
+            .changed()
+        {
+            self.board.single_outer_control.store(single_outer_control, Ordering::Relaxed);
+        }
     }
 }
