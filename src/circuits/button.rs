@@ -10,6 +10,8 @@ use super::{*, props::CircuitProperty};
 
 struct Button {
     out_pin: CircuitPinInfo,
+    color: Color32,
+    text: Arc<str>
 }
 
 impl Button {
@@ -17,6 +19,8 @@ impl Button {
         let description = Self::describe(Direction4::Right);
         Self {
             out_pin: description.pins[0].to_info(),
+            color: Color32::from_rgb(200, 30, 30),
+            text: "PUSH".into()
         }
     }
 
@@ -29,7 +33,7 @@ impl Button {
         );
     }
 
-    fn draw_button(state: Option<&CircuitStateContext>, ctx: &PaintContext, semi_transparent: bool) {
+    fn draw_button(state: Option<&CircuitStateContext>, color: Color32, text: &str, ctx: &PaintContext, semi_transparent: bool) {
         let color_mul = if semi_transparent { 0.5 } else { 1.0 };
         let state = state
             .map(|s| {
@@ -38,9 +42,10 @@ impl Button {
             })
             .unwrap_or_default();
         let color = if state {
-            Color32::from_rgb(175, 20, 20)
+            let c = color.linear_multiply(0.77);
+            Color32::from_rgba_premultiplied(c.r(), c.g(), c.b(), color.a())
         } else {
-            Color32::from_rgb(200, 30, 30)
+            color
         }
         .linear_multiply(color_mul);
         ctx.paint
@@ -51,7 +56,7 @@ impl Button {
         ctx.paint.text(
             ctx.rect.center(),
             Align2::CENTER_CENTER,
-            "PUSH",
+            text,
             font,
             Color32::WHITE,
         );
@@ -105,7 +110,7 @@ impl CircuitImpl for Button {
             return;
         }
 
-        Self::draw_button(state, ctx, false);
+        Self::draw_button(state, self.color, &self.text, ctx, false);
         if !interactive {
             return;
         }
@@ -137,6 +142,19 @@ impl CircuitImpl for Button {
     fn prop_changed(&self, prop_id: &str, _: &mut bool, recreate_pins: &mut bool) {
         if prop_id == "dir" {
             *recreate_pins = true
+        }
+    }
+
+    fn apply_props(&mut self, circ: &Arc<Circuit>, changed: Option<&str>) {
+        if matches!(changed, None | Some("btn_color")) {
+            if let Some(color) = circ.props.read_clone("btn_color") {
+                self.color = color;
+            }
+        }
+        if matches!(changed, None | Some("btn_text")) {
+            if let Some(text) = circ.props.read("btn_text", |s: &ArcString| s.get_arc()) {
+                self.text = text;
+            }
         }
     }
 
@@ -185,10 +203,14 @@ impl InternalCircuitState for ButtonState {
 pub struct ButtonPreview {}
 
 impl CircuitPreviewImpl for ButtonPreview {
-    fn draw_preview(&self, _: &CircuitPropertyStore, ctx: &PaintContext, in_world: bool) {
+    fn draw_preview(&self, props: &CircuitPropertyStore, ctx: &PaintContext, in_world: bool) {
         Button::draw_base(ctx, in_world);
         let button_ctx = ctx.with_rect(ctx.rect.shrink(ctx.screen.scale * 0.75));
-        Button::draw_button(None, &button_ctx, in_world);
+        let color = props.read_clone("btn_color").unwrap_or(Color32::from_rgb(200, 30, 30));
+        let text = props.read("btn_text", |s: &ArcString| s.get_arc());
+        let text = text.as_deref().unwrap_or("PUSH");
+
+        Button::draw_button(None, color, text, &button_ctx, in_world);
     }
 
     fn create_impl(&self) -> Box<dyn CircuitImpl> {
@@ -210,7 +232,9 @@ impl CircuitPreviewImpl for ButtonPreview {
 
     fn default_props(&self) -> CircuitPropertyStore {
         CircuitPropertyStore::new([
-            CircuitProperty::new("dir", "Direction", Direction4::Right)
+            CircuitProperty::new("dir", "Direction", Direction4::Right),
+            CircuitProperty::new("btn_color", "Color", Color32::from_rgb(200, 30, 30)),
+            CircuitProperty::new("btn_text", "Text", ArcString::from("PUSH")),
         ])
     }
 

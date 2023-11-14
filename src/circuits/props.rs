@@ -3,7 +3,7 @@ use std::{
     collections::HashMap, ops::Deref,
 };
 
-use eframe::egui::{Ui, ComboBox};
+use eframe::{egui::{Ui, ComboBox}, epaint::Color32};
 
 use crate::{unwrap_option_or_return, Direction4, DynStaticStr, RwLock, unwrap_option_or_continue, ArcString};
 
@@ -363,6 +363,46 @@ impl CircuitPropertyImpl for ArcString {
             let string = r.get_mut();
             string.clear();
             string.push_str(self.get_str().deref());
+        }
+    }
+}
+
+impl CircuitPropertyImpl for Color32 {
+    fn equals(&self, other: &dyn CircuitPropertyImpl) -> bool {
+        other.is_type_and(|s: &Color32| *s == *self)
+    }
+
+    fn ui(&mut self, ui: &mut Ui, not_equal: bool) -> Option<Box<dyn CircuitPropertyImpl>> {
+        let old = *self;
+
+        let mut color = if not_equal { Color32::BLACK } else { *self };
+
+        if ui.color_edit_button_srgba(&mut color).changed() {
+            *self = color;
+            Some(Box::new(old))
+        }
+        else {
+            None
+        }
+    }
+
+    fn clone(&self) -> Box<dyn CircuitPropertyImpl> {
+        Box::new(Clone::clone(self))
+    }
+
+    fn load(&mut self, data: &serde_intermediate::Intermediate) {
+        if let Ok(color) = serde_intermediate::from_intermediate(data) {
+            *self = color;
+        }
+    }
+
+    fn save(&self) -> serde_intermediate::Intermediate {
+        serde_intermediate::to_intermediate(self).unwrap_or_default()
+    }
+
+    fn copy_into(&self, other: &mut dyn CircuitPropertyImpl) {
+        if let Some(r) = other.downcast_mut::<Self>() {
+            *r = *self;
         }
     }
 }
