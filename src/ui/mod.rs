@@ -15,6 +15,7 @@ pub mod designer;
 pub mod drawing;
 pub mod editor;
 pub mod selection;
+pub mod side_panel;
 
 use crate::{
     circuits::props::{CircuitProperty, CircuitPropertyImpl, CircuitPropertyStore},
