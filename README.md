@@ -6,9 +6,8 @@ Logisim-inspired logic circuits simulator
 ### Global TODOs
 
 - [Done] Place circuit boards as circuits
+- [Done] Circuit controls 
 - [Working] Circuit designer for circuit boards
-- [In progress] Circuit controls 
-> special circuit interfaces that can be exposed on containing circuit design and can receive user input
 
 - Rename the project
 
