@@ -3,8 +3,9 @@ use std::{any::TypeId, collections::HashSet, f32::consts::TAU, hash::Hash, ops::
 use eframe::{
     egui::{
         panel::{self, PanelState},
-        CursorIcon, FontSelection, Grid, Id, InnerResponse, Key, Label, Margin, PointerButton,
-        Response, Sense, SidePanel, TextStyle, Ui, Widget, WidgetInfo, WidgetText, WidgetType,
+        CollapsingHeader, CursorIcon, DragValue, FontSelection, Grid, Id, InnerResponse, Key,
+        Label, Margin, PointerButton, Response, Sense, SidePanel, TextStyle, Ui, Widget,
+        WidgetInfo, WidgetText, WidgetType,
     },
     epaint::{Color32, PathShape, Rounding, Stroke, TextShape},
 };
@@ -1049,7 +1050,6 @@ pub fn custom_rect_editor(
         id: Id,
         grab: f32,
     ) -> (State, bool) {
-
         let editing = ui.memory(|mem| mem.is_being_dragged(id));
 
         let state = if editing {
@@ -1167,9 +1167,7 @@ pub fn custom_rect_editor(
         let hover_color = Color32::WHITE.linear_multiply(0.3);
         let paint = ui.painter();
 
-        let top = ui
-            .ctx()
-            .animate_bool(id.with("__hover_top"), sides.top);
+        let top = ui.ctx().animate_bool(id.with("__hover_top"), sides.top);
         if top > 0.0 {
             paint.rect(
                 Rect::from_min_size(
@@ -1182,9 +1180,7 @@ pub fn custom_rect_editor(
             )
         }
 
-        let left = ui
-            .ctx()
-            .animate_bool(id.with("__hover_left"), sides.left);
+        let left = ui.ctx().animate_bool(id.with("__hover_left"), sides.left);
         if left > 0.0 {
             paint.rect(
                 Rect::from_min_size(
@@ -1212,9 +1208,7 @@ pub fn custom_rect_editor(
             )
         }
 
-        let right = ui
-            .ctx()
-            .animate_bool(id.with("__hover_right"), sides.right);
+        let right = ui.ctx().animate_bool(id.with("__hover_right"), sides.right);
         if right > 0.0 {
             paint.rect(
                 Rect::from_min_size(
@@ -1257,4 +1251,95 @@ pub fn custom_rect_editor(
         (false, true) => DragState::Started(state.sides),
         (false, false) => DragState::None,
     }
+}
+
+#[derive(Clone, Copy)]
+pub enum RectProperty {
+    Top,
+    Left,
+    Width,
+    Height,
+}
+
+impl RectProperty {
+    pub const ALL: [Self; 4] = [Self::Top, Self::Left, Self::Width, Self::Height];
+}
+
+#[derive(Default, Clone, Copy)]
+pub struct RectPropertyChanges {
+    pub top: bool,
+    pub left: bool,
+    pub width: bool,
+    pub height: bool,
+}
+
+impl RectPropertyChanges {
+    pub fn set_prop(&mut self, prop: RectProperty, value: bool) {
+        match prop {
+            RectProperty::Top => self.top = value,
+            RectProperty::Left => self.left = value,
+            RectProperty::Width => self.width = value,
+            RectProperty::Height => self.height = value,
+        }
+    }
+
+    pub fn get_prop(&self, prop: RectProperty) -> bool {
+        match prop {
+            RectProperty::Top => self.top,
+            RectProperty::Left => self.left,
+            RectProperty::Width => self.width,
+            RectProperty::Height => self.height,
+        }
+    }
+
+    pub fn any(self) -> bool {
+        self.top || self.left || self.width || self.height
+    }
+
+    pub fn iter(self) -> impl Iterator<Item = RectProperty> {
+        RectProperty::ALL.into_iter().filter(move |prop| self.get_prop(*prop))
+    }
+}
+
+pub fn rect_properties_editor(
+    rect: &mut Rect,
+    ui: &mut Ui,
+    id: impl Into<Id>,
+    text: impl Into<WidgetText>,
+    constrain: impl Fn(RectProperty, &mut Rect),
+) -> RectPropertyChanges {
+    let id = id.into();
+    let resp = CollapsingHeader::new(text)
+        .id_source((id, "ch"))
+        .show(ui, |ui| {
+            Grid::new((id, "grid")).show(ui, |ui| {
+                let mut changes = RectPropertyChanges::default();
+                for prop in RectProperty::ALL {
+                    let (mut value, name) = match prop {
+                        RectProperty::Top => (rect.top(), "Top"),
+                        RectProperty::Left => (rect.left(), "Left"),
+                        RectProperty::Width => (rect.width(), "Width"),
+                        RectProperty::Height => (rect.height(), "Height"),
+                    };
+                    ui.label(name);
+                    let resp = DragValue::new(&mut value).speed(0.05).ui(ui);
+                    if resp.changed() {
+                        match prop {
+                            RectProperty::Top => { let height = rect.height(); rect.set_top(value); rect.set_height(height); },
+                            RectProperty::Left => { let width = rect.width(); rect.set_left(value); rect.set_width(width); },
+                            RectProperty::Width => rect.set_width(value),
+                            RectProperty::Height => rect.set_height(value),
+                        }
+                        constrain(prop, rect);
+                        changes.set_prop(prop, true);
+                    }
+                    ui.end_row();
+                }
+                changes
+            })
+        });
+
+    resp.body_returned
+        .map(|resp| resp.inner)
+        .unwrap_or_default()
 }
