@@ -11,9 +11,12 @@ Logisim-inspired logic circuits simulator
 
 - Rename the project
 
+- UI descriptions, tooltips, hints, etc
+- Better UI, more tabs
 - Proper keybinds, some mobile support
 
 - More components (LEDs, 7-segments...)
+- Fully custom pins that can interface with other wires in other circuits (labels, seamless pins)
 
 - Embed as `iframe`s
 - Some sort of plugin api
@@ -21,8 +24,6 @@ Logisim-inspired logic circuits simulator
 - Figure out themes
 - Proper mobile support
 - Proper errors
-
-- UI descriptions, tooltips, hints, etc
 
 ## Local TODOs
 
