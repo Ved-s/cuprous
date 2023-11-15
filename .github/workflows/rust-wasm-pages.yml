@@ -26,7 +26,7 @@ jobs:
       run: cargo install wasm-bindgen-cli
 
     - name: Bindgen
-      run: wasm-bindgen target/wasm32-unknown-unknown/release/rls.wasm --out-dir web/wasm --target web
+      run: wasm-bindgen target/wasm32-unknown-unknown/release/cuprous.wasm --out-dir web/wasm --target web
 
     - name: Package artifact
       uses: actions/upload-pages-artifact@v1
