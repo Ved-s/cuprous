@@ -1,4 +1,4 @@
-use std::{collections::HashMap, ops::Deref, sync::Arc};
+use std::{collections::HashMap, ops::Deref, sync::Arc, num::NonZeroUsize};
 
 use eframe::{
     egui::{self, Grid, Margin},
@@ -95,11 +95,11 @@ impl eframe::App for App {
                     .show_separator_line(false)
                     .show(
                         ui,
-                        &std::array::from_fn::<_, 16, _>(|i| i),
-                        |tab| format!("Tab {tab}").into(),
-                        |tab, ui| {
+                        NonZeroUsize::new(16).unwrap(),
+                        |i| format!("Tab {i}").into(),
+                        |i, ui| {
                             ui.horizontal(|ui| {
-                                for i in 0..=*tab {
+                                for i in 0..=i {
                                     ui.label(format!("Label {i}"));
                                     ui.end_row();
                                 }
