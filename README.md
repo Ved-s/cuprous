@@ -9,14 +9,14 @@ Logisim-inspired logic circuits simulator
 - [Done] Circuit controls 
 - [Working] Circuit designer for circuit boards
 
-- [In progress] Rename the project
+- [Done] Rename the project
 
 - UI descriptions, tooltips, hints, etc
 - Better UI, more tabs
 - Proper keybinds, some mobile support
 
-- More components (LEDs, 7-segments...)
 - Fully custom pins that can interface with other wires in other circuits (labels, seamless pins)
+- More components (LEDs, 7-segments...)
 
 - Embed as `iframe`s
 - Some sort of plugin api
