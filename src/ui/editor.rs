@@ -571,243 +571,225 @@ impl CircuitBoardEditor {
 
     fn components_ui(&mut self, ui: &mut Ui) -> ComponentsUiResponse {
         let style = ui.style().clone();
-        // let resp = CollapsibleSidePanel::new("components-ui", "Components")
-        //     .header_offset(20.0)
-        //     .side(egui::panel::Side::Left)
-        //     .panel_transformer(Some(Box::new(move |panel: SidePanel| {
-        //         panel
-        //             .frame(
-        //
-        //             )
-        //             .show_separator_line(false)
-        //     })))
-        //     .show(ui, |ui| {
-        let resp = super::side_panel::SidePanel::new(super::side_panel::PanelSide::Left, "components-ui")
-            .default_tab(Some(0))
-            .frame(
-                Frame::side_top_panel(&style)
-                    .rounding(Rounding {
-                        ne: 5.0,
-                        nw: 0.0,
-                        se: 5.0,
-                        sw: 0.0,
-                    })
-                    .outer_margin(Margin::symmetric(0.0, 8.0))
-                    .inner_margin(Margin::symmetric(5.0, 5.0))
-                    .stroke(style.visuals.window_stroke),
-            )
-            .show(
-                ui,
-                &std::array::from_fn::<_, 15, _>(|a| a),
-                |i| ["Components", "Test", "AAAAAAAAAAAAAAAAAAAAAAA"][i % 3].into(),
-                |_, ui| {
-                    let font = TextStyle::Monospace.resolve(ui.style());
+        let resp = CollapsibleSidePanel::new("components-ui", "Components")
+            .header_offset(20.0)
+            .side(egui::panel::Side::Left)
+            .panel_transformer(Some(Box::new(move |panel: SidePanel| {
+                panel
+                    .frame(
+                        Frame::side_top_panel(&style)
+                            .rounding(Rounding {
+                                ne: 5.0,
+                                nw: 0.0,
+                                se: 5.0,
+                                sw: 0.0,
+                            })
+                            .outer_margin(Margin::symmetric(0.0, 8.0))
+                            .inner_margin(Margin::symmetric(5.0, 5.0))
+                            .stroke(style.visuals.window_stroke),
+                    )
+                    .show_separator_line(false)
+            })))
+            .show(ui, |ui| {
+                let font = TextStyle::Monospace.resolve(ui.style());
 
-                    CollapsingHeader::new("Built-in")
-                        .default_open(true)
-                        .show(ui, |ui| {
-                            for name in COMPONENT_BUILTIN_ORDER {
-                                if let Some(preview) =
-                                    self.sim.previews.get(&DynStaticStr::Static(name))
-                                {
-                                    ui.horizontal(|ui| {
-                                        let resp = ui.allocate_response(
-                                            vec2(font.size, font.size),
-                                            Sense::hover(),
-                                        );
-                                        let (rect, scale) = drawing::align_rect_scaled(
-                                            resp.rect.min,
-                                            vec2(font.size, font.size),
-                                            preview.describe().size.convert(|v| v as f32).into(),
-                                        );
+                CollapsingHeader::new("Built-in")
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        for name in COMPONENT_BUILTIN_ORDER {
+                            if let Some(preview) =
+                                self.sim.previews.get(&DynStaticStr::Static(name))
+                            {
+                                ui.horizontal(|ui| {
+                                    let resp = ui.allocate_response(
+                                        vec2(font.size, font.size),
+                                        Sense::hover(),
+                                    );
+                                    let (rect, scale) = drawing::align_rect_scaled(
+                                        resp.rect.min,
+                                        vec2(font.size, font.size),
+                                        preview.describe().size.convert(|v| v as f32).into(),
+                                    );
 
-                                        let paint_ctx = PaintContext::new_on_ui(ui, rect, scale);
-                                        preview.draw(&paint_ctx, false);
+                                    let paint_ctx = PaintContext::new_on_ui(ui, rect, scale);
+                                    preview.draw(&paint_ctx, false);
 
-                                        let selected = match &self.selected_id {
-                                            Some(SelectedItemId::Circuit(id)) => {
-                                                *id == preview.imp.type_name()
-                                            }
-                                            _ => false,
-                                        };
-
-                                        if ui
-                                            .selectable_label(
-                                                selected,
-                                                preview.imp.display_name().deref(),
-                                            )
-                                            .clicked()
-                                        {
-                                            self.selected_id = match selected {
-                                                true => None,
-                                                false => Some(SelectedItemId::Circuit(
-                                                    preview.imp.type_name(),
-                                                )),
-                                            };
+                                    let selected = match &self.selected_id {
+                                        Some(SelectedItemId::Circuit(id)) => {
+                                            *id == preview.imp.type_name()
                                         }
+                                        _ => false,
+                                    };
+
+                                    if ui
+                                        .selectable_label(
+                                            selected,
+                                            preview.imp.display_name().deref(),
+                                        )
+                                        .clicked()
+                                    {
+                                        self.selected_id = match selected {
+                                            true => None,
+                                            false => Some(SelectedItemId::Circuit(
+                                                preview.imp.type_name(),
+                                            )),
+                                        };
+                                    }
+                                });
+                            }
+                        }
+                    });
+
+                CollapsingHeader::new("Circuit boards")
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        let renamer_memory_id = ui.id().with("__renamer_memory");
+                        let renamer_id = ui.id().with("__renamer_input");
+                        let rename = ui
+                            .memory(|mem| mem.data.get_temp::<Option<u128>>(renamer_memory_id))
+                            .flatten();
+
+                        let mut queued_deletion = None;
+                        let mut drawn_renamer = false;
+                        let mut designer_request = None;
+                        let no_delete = self.sim.boards.read().len() <= 1;
+                        for board in self.sim.boards.read().values() {
+                            if Some(board.board.uid) == rename && !drawn_renamer {
+                                let mut name = board.board.name.write();
+
+                                let res =
+                                    TextEdit::singleline(name.get_mut()).id(renamer_id).show(ui);
+                                drawn_renamer = true;
+
+                                if res.response.lost_focus() {
+                                    ui.memory_mut(|mem| {
+                                        mem.data.insert_temp(renamer_memory_id, None::<u128>);
                                     });
                                 }
-                            }
-                        });
+                            } else {
+                                let selected = self.selected_id
+                                    == Some(SelectedItemId::Board(board.board.uid));
+                                let active = board.board.uid == self.board.board.uid;
 
-                    CollapsingHeader::new("Circuit boards")
-                        .default_open(true)
-                        .show(ui, |ui| {
-                            let renamer_memory_id = ui.id().with("__renamer_memory");
-                            let renamer_id = ui.id().with("__renamer_input");
-                            let rename = ui
-                                .memory(|mem| mem.data.get_temp::<Option<u128>>(renamer_memory_id))
-                                .flatten();
+                                let resp = ui.add(DoubleSelectableLabel::new(
+                                    selected,
+                                    active,
+                                    board.board.name.read().get_str().deref(),
+                                    Color32::WHITE.gamma_multiply(0.3),
+                                    None,
+                                    Stroke::new(1.0, Color32::LIGHT_GREEN),
+                                ));
 
-                            let mut queued_deletion = None;
-                            let mut drawn_renamer = false;
-                            let mut designer_request = None;
-                            let no_delete = self.sim.boards.read().len() <= 1;
-                            for board in self.sim.boards.read().values() {
-                                if Some(board.board.uid) == rename && !drawn_renamer {
-                                    let mut name = board.board.name.write();
+                                if resp.clicked_by(egui::PointerButton::Primary)
+                                    && !selected
+                                    && !active
+                                {
+                                    self.selected_id = Some(SelectedItemId::Board(board.board.uid));
 
-                                    let res = TextEdit::singleline(name.get_mut())
-                                        .id(renamer_id)
-                                        .show(ui);
-                                    drawn_renamer = true;
-
-                                    if res.response.lost_focus() {
-                                        ui.memory_mut(|mem| {
-                                            mem.data.insert_temp(renamer_memory_id, None::<u128>);
-                                        });
+                                    if let Some(preview) = board.preview.as_ref() {
+                                        preview.redescribe();
                                     }
-                                } else {
-                                    let selected = self.selected_id
-                                        == Some(SelectedItemId::Board(board.board.uid));
-                                    let active = board.board.uid == self.board.board.uid;
+                                }
 
-                                    let resp = ui.add(DoubleSelectableLabel::new(
-                                        selected,
-                                        active,
-                                        board.board.name.read().get_str().deref(),
-                                        Color32::WHITE.gamma_multiply(0.3),
-                                        None,
-                                        Stroke::new(1.0, Color32::LIGHT_GREEN),
-                                    ));
-
-                                    if resp.clicked_by(egui::PointerButton::Primary)
-                                        && !selected
-                                        && !active
-                                    {
-                                        self.selected_id =
-                                            Some(SelectedItemId::Board(board.board.uid));
-
-                                        if let Some(preview) = board.preview.as_ref() {
-                                            preview.redescribe();
-                                        }
+                                if resp.double_clicked_by(egui::PointerButton::Primary) && !active {
+                                    self.board = ActiveCircuitBoard::new_main(board.board.clone());
+                                    if selected {
+                                        self.selected_id = None;
                                     }
+                                }
 
-                                    if resp.double_clicked_by(egui::PointerButton::Primary)
-                                        && !active
-                                    {
+                                resp.context_menu(|ui| {
+                                    if ui.button("Edit").clicked() {
                                         self.board =
                                             ActiveCircuitBoard::new_main(board.board.clone());
                                         if selected {
                                             self.selected_id = None;
                                         }
+                                        ui.close_menu();
                                     }
 
-                                    resp.context_menu(|ui| {
-                                        if ui.button("Edit").clicked() {
-                                            self.board =
-                                                ActiveCircuitBoard::new_main(board.board.clone());
-                                            if selected {
-                                                self.selected_id = None;
+                                    if ui.button("Design").clicked() {
+                                        let design_provider =
+                                            BoardDesignProvider::new(board.board.clone());
+                                        let designer = Designer::new(Box::new(design_provider));
+                                        designer_request = Some(designer);
+                                        ui.close_menu();
+                                    }
+
+                                    if ui.button("Rename").clicked() {
+                                        // same hack as below
+                                        if !drawn_renamer {
+                                            TextEdit::singleline(&mut "").id(renamer_id).show(ui);
+                                        }
+
+                                        ui.memory_mut(|mem| {
+                                            mem.data.insert_temp(
+                                                renamer_memory_id,
+                                                Some(board.board.uid),
+                                            );
+                                            mem.request_focus(renamer_id);
+                                        });
+                                        ui.close_menu();
+                                    }
+
+                                    if !no_delete {
+                                        if ui.input(|input| input.modifiers.shift) {
+                                            if ui.button("Delete").clicked() {
+                                                queued_deletion = Some(board.board.uid);
+                                                ui.close_menu();
                                             }
-                                            ui.close_menu();
-                                        }
-
-                                        if ui.button("Design").clicked() {
-                                            let design_provider =
-                                                BoardDesignProvider::new(board.board.clone());
-                                            let designer = Designer::new(Box::new(design_provider));
-                                            designer_request = Some(designer);
-                                            ui.close_menu();
-                                        }
-
-                                        if ui.button("Rename").clicked() {
-                                            // same hack as below
-                                            if !drawn_renamer {
-                                                TextEdit::singleline(&mut "")
-                                                    .id(renamer_id)
-                                                    .show(ui);
-                                            }
-
-                                            ui.memory_mut(|mem| {
-                                                mem.data.insert_temp(
-                                                    renamer_memory_id,
-                                                    Some(board.board.uid),
-                                                );
-                                                mem.request_focus(renamer_id);
-                                            });
-                                            ui.close_menu();
-                                        }
-
-                                        if !no_delete {
-                                            if ui.input(|input| input.modifiers.shift) {
-                                                if ui.button("Delete").clicked() {
+                                        } else {
+                                            ui.menu_button("Delete", |ui| {
+                                                if ui.button("Confirm").clicked() {
                                                     queued_deletion = Some(board.board.uid);
                                                     ui.close_menu();
                                                 }
-                                            } else {
-                                                ui.menu_button("Delete", |ui| {
-                                                    if ui.button("Confirm").clicked() {
-                                                        queued_deletion = Some(board.board.uid);
-                                                        ui.close_menu();
-                                                    }
-                                                });
-                                            }
+                                            });
                                         }
-                                    });
-                                }
-                            }
-
-                            if ui.button("Add board").clicked() {
-                                let board = CircuitBoard::new(self.sim.clone(), "New board");
-                                let uid = board.uid;
-                                let board = Arc::new(board);
-                                self.sim
-                                    .boards
-                                    .write()
-                                    .insert(uid, StoredCircuitBoard::new(board.clone()));
-                                self.board = ActiveCircuitBoard::new_main(board);
-
-                                // HACK: widget must exist before `request_focus` can be called on its id, panics otherwise
-                                if !drawn_renamer {
-                                    TextEdit::singleline(&mut "").id(renamer_id).show(ui);
-                                }
-
-                                ui.memory_mut(|mem| {
-                                    mem.data.insert_temp(renamer_memory_id, Some(uid));
-                                    mem.request_focus(renamer_id);
+                                    }
                                 });
                             }
+                        }
 
-                            if let Some(uid) = queued_deletion {
-                                let mut boards = self.sim.boards.write();
-                                boards.remove(&uid);
-                                if self.board.board.uid == uid {
-                                    let board = boards.values().next().expect("Boards must exist!");
-                                    self.board = ActiveCircuitBoard::new_main(board.board.clone());
-                                }
+                        if ui.button("Add board").clicked() {
+                            let board = CircuitBoard::new(self.sim.clone(), "New board");
+                            let uid = board.uid;
+                            let board = Arc::new(board);
+                            self.sim
+                                .boards
+                                .write()
+                                .insert(uid, StoredCircuitBoard::new(board.clone()));
+                            self.board = ActiveCircuitBoard::new_main(board);
+
+                            // HACK: widget must exist before `request_focus` can be called on its id, panics otherwise
+                            if !drawn_renamer {
+                                TextEdit::singleline(&mut "").id(renamer_id).show(ui);
                             }
 
-                            designer_request
-                        })
-                        .body_returned
-                        .flatten()
-                },
-            );
+                            ui.memory_mut(|mem| {
+                                mem.data.insert_temp(renamer_memory_id, Some(uid));
+                                mem.request_focus(renamer_id);
+                            });
+                        }
+
+                        if let Some(uid) = queued_deletion {
+                            let mut boards = self.sim.boards.write();
+                            boards.remove(&uid);
+                            if self.board.board.uid == uid {
+                                let board = boards.values().next().expect("Boards must exist!");
+                                self.board = ActiveCircuitBoard::new_main(board.board.clone());
+                            }
+                        }
+
+                        designer_request
+                    })
+                    .body_returned
+                    .flatten()
+            });
 
         ComponentsUiResponse {
-            rect: resp.response.rect,
-            designer_request: resp.inner.flatten(),
+            rect: resp.full_rect,
+            designer_request: resp.panel.and_then(|v| v.inner),
         }
     }
 }

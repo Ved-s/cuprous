@@ -30,8 +30,8 @@ wasm-bindgen_rs = { package = "wasm-bindgen", version = "0.2", optional = true }
 [profile.release]
 lto = true
 
-[profile.dev]
-opt-level = 1
+# [profile.dev]
+# opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 3

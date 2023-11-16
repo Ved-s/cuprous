@@ -1,15 +1,20 @@
 use std::{collections::HashMap, ops::Deref, sync::Arc};
 
 use eframe::{
-    egui::{self, Margin},
+    egui::{self, Grid, Margin},
+    epaint::{Color32, Rounding},
     CreationContext,
 };
 
 use crate::{
     board::{ActiveCircuitBoard, CircuitBoard, StoredCircuitBoard},
     circuits::{self, CircuitPreview, CircuitPreviewImpl},
-    ui::editor::CircuitBoardEditor,
-    DynStaticStr, RwLock, time::Instant,
+    time::Instant,
+    ui::{
+        editor::CircuitBoardEditor,
+        side_panel::{PanelSide, SidePanel},
+    },
+    DynStaticStr, RwLock,
 };
 
 pub struct SimulationContext {
@@ -41,7 +46,10 @@ impl eframe::App for App {
                     board.board.states.update();
                 }
 
-                if Instant::now().checked_duration_since(start_time).is_some_and(|d| d.as_millis() > 10) {
+                if Instant::now()
+                    .checked_duration_since(start_time)
+                    .is_some_and(|d| d.as_millis() > 10)
+                {
                     break;
                 }
             }
@@ -49,26 +57,142 @@ impl eframe::App for App {
         };
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::central_panel(ctx.style().as_ref()).inner_margin(Margin::same(0.0)))
+            .frame(egui::Frame::central_panel(ctx.style().as_ref()).inner_margin(Margin::same(0.0)).fill(Color32::from_gray(16)))
             .show(ctx, |ui| {
-                let close_designer = match &mut self.designer {
-                    Some(designer) => {
-                        let result = designer.update(ui);
-                        result.close
-                    }
-                    None => {
-                        let result = self.editor.update(ui);
+                // let close_designer = match &mut self.designer {
+                //     Some(designer) => {
+                //         let result = designer.update(ui);
+                //         result.close
+                //     }
+                //     None => {
+                //         let result = self.editor.update(ui);
 
-                        if let Some(designer) = result.designer_request {
-                            self.designer = Some(designer);
-                        }
-                        false
-                    }
-                };
+                //         if let Some(designer) = result.designer_request {
+                //             self.designer = Some(designer);
+                //         }
+                //         false
+                //     }
+                // };
 
-                if close_designer {
-                    self.designer = None;
-                }
+                // if close_designer {
+                //     self.designer = None;
+                // }
+
+                SidePanel::new(PanelSide::Left, "left")
+                    .default_tab(None)
+                    .frame(
+                        egui::Frame::side_top_panel(&ctx.style())
+                            .fill(Color32::from_gray(30))
+                            .stroke(ctx.style().visuals.window_stroke)
+                            .outer_margin(Margin::symmetric(0.0, 10.0))
+                            .rounding(Rounding {
+                                nw: 0.0,
+                                ne: 6.0,
+                                sw: 0.0,
+                                se: 6.0,
+                            }),
+                    )
+                    .show_separator_line(false)
+                    .show(
+                        ui,
+                        &std::array::from_fn::<_, 16, _>(|i| i),
+                        |tab| format!("Tab {tab}").into(),
+                        |tab, ui| {
+                            ui.horizontal(|ui| {
+                                for i in 0..=*tab {
+                                    ui.label(format!("Label {i}"));
+                                    ui.end_row();
+                                }
+                            });
+                        },
+                    );
+
+                // SidePanel::new(PanelSide::Top, "top")
+                //     .default_tab(None)
+                //     .frame(
+                //         egui::Frame::side_top_panel(&ctx.style())
+                //             .fill(Color32::from_gray(30))
+                //             .stroke(ctx.style().visuals.window_stroke)
+                //             .outer_margin(Margin::symmetric(10.0, 0.0))
+                //             .rounding(Rounding {
+                //                 nw: 0.0,
+                //                 ne: 0.0,
+                //                 sw: 6.0,
+                //                 se: 6.0,
+                //             }),
+                //     )
+                //     .show_separator_line(false)
+                //     .show(
+                //         ui,
+                //         &std::array::from_fn::<_, 16, _>(|i| i),
+                //         |tab| format!("Tab {tab}").into(),
+                //         |tab, ui| {
+                //             ui.vertical(|ui| {
+                //                 for i in 0..=*tab {
+                //                     ui.label(format!("Label {i}"));
+                //                     ui.end_row();
+                //                 }
+                //             });
+                //         },
+                //     );
+
+                // SidePanel::new(PanelSide::Right, "right")
+                //     .default_tab(None)
+                //     .frame(
+                //         egui::Frame::side_top_panel(&ctx.style())
+                //             .fill(Color32::from_gray(30))
+                //             .stroke(ctx.style().visuals.window_stroke)
+                //             .outer_margin(Margin::symmetric(0.0, 10.0))
+                //             .rounding(Rounding {
+                //                 nw: 6.0,
+                //                 ne: 0.0,
+                //                 sw: 6.0,
+                //                 se: 0.0,
+                //             }),
+                //     )
+                //     .show_separator_line(false)
+                //     .show(
+                //         ui,
+                //         &std::array::from_fn::<_, 16, _>(|i| i),
+                //         |tab| format!("Tab {tab}").into(),
+                //         |tab, ui| {
+                //             ui.horizontal(|ui| {
+                //                 for i in 0..=*tab {
+                //                     ui.label(format!("Label {i}"));
+                //                     ui.end_row();
+                //                 }
+                //             });
+                //         },
+                //     );
+
+                // SidePanel::new(PanelSide::Bottom, "bottom")
+                //     .default_tab(None)
+                //     .frame(
+                //         egui::Frame::side_top_panel(&ctx.style())
+                //             .fill(Color32::from_gray(30))
+                //             .stroke(ctx.style().visuals.window_stroke)
+                //             .outer_margin(Margin::symmetric(10.0, 0.0))
+                //             .rounding(Rounding {
+                //                 nw: 6.0,
+                //                 ne: 6.0,
+                //                 sw: 0.0,
+                //                 se: 0.0,
+                //             }),
+                //     )
+                //     .show_separator_line(false)
+                //     .show(
+                //         ui,
+                //         &std::array::from_fn::<_, 16, _>(|i| i),
+                //         |tab| format!("Tab {tab}").into(),
+                //         |tab, ui| {
+                //             ui.vertical(|ui| {
+                //                 for i in 0..=*tab {
+                //                     ui.label(format!("Label {i}"));
+                //                     ui.end_row();
+                //                 }
+                //             });
+                //         },
+                //     );
             });
     }
 

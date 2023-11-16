@@ -1,15 +1,18 @@
-use std::f32::consts::TAU;
+use std::{f32::consts::TAU, ops::Neg};
 
 use eframe::{
     egui::{
-        self, FontSelection, Frame, Id, InnerResponse, Margin, Sense, TextStyle, TopBottomPanel,
-        Ui, WidgetText,
+        self, FontSelection, Frame, Id, Margin, Response, Sense, TextStyle,
+        TopBottomPanel, Ui, WidgetText,
     },
     epaint::{RectShape, Rounding, Shape, Stroke, TextShape},
 };
-use emath::{pos2, vec2, Rangef, Rect, Vec2, Pos2};
+use emath::{pos2, vec2, Pos2, Rangef, Rect, Vec2};
+
+use crate::ext::IteratorExt;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
+#[allow(unused)]
 pub enum PanelSide {
     Top,
     Left,
@@ -20,7 +23,7 @@ pub enum PanelSide {
 #[derive(Clone)]
 struct SidePanelState<T> {
     tab: Option<T>,
-    size: f32,
+    tab_width_cache: Vec<f32>,
 }
 
 #[derive(Clone)]
@@ -29,9 +32,14 @@ struct SidePanelUiState {
     rem_rect: Rect,
 }
 
+pub struct SidePanelResponse<T> {
+    pub inner: Option<T>,
+    pub response: Option<Response>,
+}
+
 pub struct SidePanel<T>
 where
-    T: Clone + Eq + 'static,
+    T: Clone + Eq + Send + Sync + 'static,
 {
     side: PanelSide,
     id: Id,
@@ -45,9 +53,10 @@ where
     tab_inner_margin: Margin,
 }
 
+#[allow(dead_code)]
 impl<T> SidePanel<T>
 where
-    T: Clone + Eq + 'static,
+    T: Clone + Eq + Send + Sync + 'static,
 {
     pub fn new(side: PanelSide, id: impl Into<Id>) -> Self {
         Self {
@@ -114,13 +123,13 @@ where
         }
     }
 
-    pub fn show<'a, R>(
+    pub fn show<R>(
         self,
         ui: &mut Ui,
         tabs: &[T],
         tab_name: impl Fn(&T) -> WidgetText,
         tab_contents: impl FnOnce(&T, &mut Ui) -> R,
-    ) -> InnerResponse<Option<R>> {
+    ) -> SidePanelResponse<R> {
         let Self {
             side,
             default_tab,
@@ -147,16 +156,72 @@ where
             .map(|_| ui.painter().add(Shape::Noop))
             .collect();
 
-        let panel_ui_rect = rem_rect;
+        let mut active_tab = state.as_ref().map(|s| s.tab.clone()).unwrap_or(default_tab);
+        let tab_index = active_tab
+            .as_ref()
+            .and_then(|a| tabs.iter().find_index(|tab| *tab == *a));
 
-        let panel_ui = ui.child_ui_with_id_source(panel_ui_rect, *ui.layout(), id.with("ui"));
+        let frame = frame.unwrap_or_else(|| Frame::side_top_panel(ui.style()));
+        let empty_tab_size = match side {
+            PanelSide::Top | PanelSide::Bottom => frame.inner_margin.sum().y,
+            PanelSide::Left | PanelSide::Right => frame.inner_margin.sum().x,
+        };
+        let tab_width = match tab_index {
+            None => Some(empty_tab_size),
+            Some(index) => state
+                .as_ref()
+                .map(|s| s.tab_width_cache.get(index).copied().unwrap_or_default()),
+        };
+
+        let offset = tab_width
+            .map(|w| {
+                let target = if active_tab.is_some() { w } else { 0.0 };
+                w - ui.ctx().animate_value_with_time(
+                    id.with("__size_anim"),
+                    target,
+                    ui.style().animation_time,
+                )
+            })
+            .unwrap_or_default();
+
+
+
+        let panel_additional_size = offset.min(0.0).neg();
+        let offset = offset.max(0.0);
+
+        let size_range = match active_tab.is_some() {
+            true => size_range,
+            false => Rangef::new(panel_additional_size, f32::INFINITY),
+        };
+
+        let rect_offset = match side {
+            PanelSide::Top => vec2(0.0, -offset),
+            PanelSide::Left => vec2(-offset, 0.0),
+            PanelSide::Right => vec2(offset, 0.0),
+            PanelSide::Bottom => vec2(0.0, offset),
+        };
+
+        let panel_visible = active_tab.is_some() || !tab_width.is_some_and(|w| offset >= w);
+        let panel_ui_rect = rem_rect.translate(rect_offset);
+
+        let mut panel_ui = ui.child_ui_with_id_source(panel_ui_rect, *ui.layout(), id.with("ui"));
         let panel_id = panel_ui.id().with("panel");
 
-        let active_tab = state.map(|s| s.tab.clone()).unwrap_or(default_tab);
-        let active_tab = active_tab.as_ref();
+        let inner_ui_translation = match side {
+            PanelSide::Top => vec2(0.0, panel_additional_size),
+            PanelSide::Left => vec2(panel_additional_size, 0.0),
+            _ => vec2(0.0, 0.0),
+        };
 
-        let add_contents = move |ui: &mut Ui| active_tab.map(|tab| tab_contents(tab, ui));
-        let frame = frame.unwrap_or_else(|| Frame::side_top_panel(ui.style()));
+        let add_contents = |ui: &mut Ui| {
+            let rect = ui.max_rect();
+            let mut inner_ui = ui.child_ui(rect.translate(inner_ui_translation), *ui.layout());
+            let resp = active_tab
+                .as_ref()
+                .map(|tab| tab_contents(tab, &mut inner_ui));
+            ui.expand_to_include_rect(inner_ui.min_rect());
+            resp
+        };
 
         let default_size = default_size.unwrap_or_else(|| {
             let vec = ui.style().spacing.interact_size;
@@ -166,64 +231,102 @@ where
             }
         });
 
-        let mut resp = match side {
-            PanelSide::Top => TopBottomPanel::top(panel_id)
-                .frame(frame)
-                .resizable(resizable)
-                .show_separator_line(show_separator_line)
-                .height_range(size_range)
-                .default_height(default_size)
-                .show_inside(ui, add_contents),
-            PanelSide::Left => egui::SidePanel::left(panel_id)
-                .frame(frame)
-                .resizable(resizable)
-                .show_separator_line(show_separator_line)
-                .width_range(size_range)
-                .default_width(default_size)
-                .show_inside(ui, add_contents),
-            PanelSide::Right => egui::SidePanel::right(panel_id)
-                .frame(frame)
-                .resizable(resizable)
-                .show_separator_line(show_separator_line)
-                .width_range(size_range)
-                .default_width(default_size)
-                .show_inside(ui, add_contents),
-            PanelSide::Bottom => TopBottomPanel::bottom(panel_id)
-                .frame(frame)
-                .resizable(resizable)
-                .show_separator_line(show_separator_line)
-                .height_range(size_range)
-                .default_height(default_size)
-                .show_inside(ui, add_contents),
+        
+        let resp = if panel_visible {
+            let resp = match side {
+                PanelSide::Top => TopBottomPanel::top(panel_id)
+                    .frame(frame)
+                    .resizable(resizable)
+                    .show_separator_line(show_separator_line)
+                    .height_range(size_range)
+                    .default_height(default_size)
+                    .show_inside(&mut panel_ui, add_contents),
+                PanelSide::Left => egui::SidePanel::left(panel_id)
+                    .frame(frame)
+                    .resizable(resizable)
+                    .show_separator_line(show_separator_line)
+                    .width_range(size_range)
+                    .default_width(default_size)
+                    .show_inside(&mut panel_ui, add_contents),
+                PanelSide::Right => egui::SidePanel::right(panel_id)
+                    .frame(frame)
+                    .resizable(resizable)
+                    .show_separator_line(show_separator_line)
+                    .width_range(size_range)
+                    .default_width(default_size)
+                    .show_inside(&mut panel_ui, add_contents),
+                PanelSide::Bottom => TopBottomPanel::bottom(panel_id)
+                    .frame(frame)
+                    .resizable(resizable)
+                    .show_separator_line(show_separator_line)
+                    .height_range(size_range)
+                    .default_height(default_size)
+                    .show_inside(&mut panel_ui, add_contents),
+            };
+            Some(resp)
+        } else {
+            None
         };
 
-        let panel_rect = resp.response.rect;
+        let (inner_resp, inner_ret) = resp
+            .map(|resp| (Some(resp.response), resp.inner))
+            .unwrap_or_default();
+
+        let panel_rect = inner_resp
+            .as_ref()
+            .map(|r| r.rect)
+            .unwrap_or_else(|| match side {
+                PanelSide::Top => {
+                    Rect::from_min_size(panel_ui_rect.left_top(), vec2(panel_ui_rect.width(), empty_tab_size))
+                }
+                PanelSide::Left => {
+                    Rect::from_min_size(panel_ui_rect.left_top(), vec2(empty_tab_size, panel_ui_rect.height()))
+                }
+                PanelSide::Right => Rect::from_min_size(
+                    panel_ui_rect.right_top() - vec2(empty_tab_size, 0.0),
+                    vec2(empty_tab_size, panel_ui_rect.height()),
+                ),
+                PanelSide::Bottom => Rect::from_min_size(
+                    panel_ui_rect.left_bottom() - vec2(0.0, empty_tab_size),
+                    vec2(panel_ui_rect.width(), empty_tab_size),
+                ),
+            });
+        let mut response = inner_resp;
 
         let size = match side {
-            PanelSide::Top | PanelSide::Bottom => resp.response.rect.height(),
-            PanelSide::Left | PanelSide::Right => resp.response.rect.width(),
-        };
+            PanelSide::Top | PanelSide::Bottom => panel_rect.height(),
+            PanelSide::Left | PanelSide::Right => panel_rect.width(),
+        } - panel_additional_size;
 
-        let (colmin, colmax) = match side {
+        let (colmin, rowmin, colmax) = match side {
             PanelSide::Top => (
                 rem_rect.left() + frame.outer_margin.left + frame.rounding.sw,
+                panel_rect.bottom(),
                 rem_rect.width() - frame.outer_margin.right - frame.rounding.se,
             ),
             PanelSide::Left => (
                 rem_rect.top() + frame.outer_margin.top + frame.rounding.ne,
+                panel_rect.right(),
                 rem_rect.height() - frame.outer_margin.bottom - frame.rounding.se,
             ),
             PanelSide::Right => (
                 rem_rect.top() + frame.outer_margin.top + frame.rounding.nw,
+                panel_rect.left(),
                 rem_rect.height() - frame.outer_margin.bottom - frame.rounding.sw,
             ),
             PanelSide::Bottom => (
                 rem_rect.left() + frame.outer_margin.left + frame.rounding.nw,
+                panel_rect.top(),
                 rem_rect.width() - frame.outer_margin.right - frame.rounding.ne,
             ),
         };
-        let mut pos = pos2(colmin, size);
+        let mut pos = pos2(colmin, rowmin);
         let mut lineheight = 0.0f32;
+
+        let tab_row_dir = match side {
+            PanelSide::Left | PanelSide::Top => 1.0,
+            PanelSide::Right | PanelSide::Bottom => -1.0,
+        };
 
         for (i, tab) in tabs.iter().enumerate() {
             let text_idx = unwrap_option_or_break!(shape_idx.pop());
@@ -231,7 +334,7 @@ where
 
             let galley = tab_name(tab)
                 .into_galley(
-                    ui,
+                    &panel_ui,
                     Some(false),
                     f32::INFINITY,
                     FontSelection::Style(TextStyle::Monospace),
@@ -241,7 +344,7 @@ where
             let tabsize = galley.size() + tab_inner_margin.sum();
             if pos.x + tabsize.x > colmax {
                 pos.x = colmin;
-                pos.y += lineheight + tab_spacing.y;
+                pos.y += (lineheight + tab_spacing.y) * tab_row_dir;
                 lineheight = 0.0;
             } else if pos.x > colmin {
                 pos.x += tab_spacing.x;
@@ -249,10 +352,14 @@ where
             lineheight = lineheight.max(tabsize.y);
 
             let rect = match side {
-                PanelSide::Left | PanelSide::Right => {
+                PanelSide::Top => Rect::from_min_size(pos, tabsize),
+                PanelSide::Left => {
                     Rect::from_min_size(pos2(pos.y, pos.x), vec2(tabsize.y, tabsize.x))
                 }
-                PanelSide::Top | PanelSide::Bottom => Rect::from_min_size(pos, tabsize),
+                PanelSide::Right => {
+                    Rect::from_min_size(pos2(pos.y - tabsize.y, pos.x), vec2(tabsize.y, tabsize.x))
+                }
+                PanelSide::Bottom => Rect::from_min_size(pos2(pos.x, pos.y - tabsize.y), tabsize),
             };
 
             let (textpos, textangle) = match side {
@@ -261,17 +368,19 @@ where
                     rect.left_top() + tab_inner_margin.left_top() + vec2(galley.size().y, 0.0),
                     TAU * 0.25,
                 ),
-                PanelSide::Right => todo!(),
-                PanelSide::Bottom => todo!(),
+                PanelSide::Right => (
+                    rect.left_top() + tab_inner_margin.left_top() + vec2(0.0, galley.size().x),
+                    TAU * 0.75,
+                ),
+                PanelSide::Bottom => (rect.left_top() + tab_inner_margin.left_top(), 0.0),
             };
 
-            let text_color = ui.style().visuals.text_color().gamma_multiply(
-                if active_tab.is_some_and(|a| *a == *tab) {
-                    1.0
-                } else {
-                    0.6
-                },
-            );
+            let this_tab_active = active_tab.as_ref().is_some_and(|a| *a == *tab);
+            let text_color = panel_ui
+                .style()
+                .visuals
+                .text_color()
+                .gamma_multiply(if this_tab_active { 1.0 } else { 0.6 });
 
             let text = TextShape {
                 pos: textpos,
@@ -281,38 +390,121 @@ where
                 angle: textangle,
             };
 
-            let tabresp = ui.interact(rect, id.with(("tab", i)), Sense::click());
-            resp.response = resp.response.union(tabresp);
+            let tabresp = panel_ui.interact(rect, id.with(("tab", i)), Sense::click());
+            if tabresp.clicked() {
+                if this_tab_active {
+                    active_tab = None;
+                } else {
+                    active_tab = Some(tab.clone());
+                }
+            }
 
             let rect = match side {
-                PanelSide::Top => Rect { min: Pos2 { y: panel_rect.bottom(), ..rect.min}, ..rect},
-                PanelSide::Left => Rect { min: Pos2 { x: panel_rect.right(), ..rect.min}, ..rect},
-                PanelSide::Right => Rect { max: Pos2 { x: panel_rect.left(), ..rect.max}, ..rect},
-                PanelSide::Bottom => Rect { max: Pos2 { y: panel_rect.top(), ..rect.max}, ..rect},
+                PanelSide::Top => Rect {
+                    min: Pos2 {
+                        y: panel_rect.bottom() - 2.0,
+                        ..rect.min
+                    },
+                    ..rect
+                },
+                PanelSide::Left => Rect {
+                    min: Pos2 {
+                        x: panel_rect.right() - 2.0,
+                        ..rect.min
+                    },
+                    ..rect
+                },
+                PanelSide::Right => Rect {
+                    max: Pos2 {
+                        x: panel_rect.left() + 2.0,
+                        ..rect.max
+                    },
+                    ..rect
+                },
+                PanelSide::Bottom => Rect {
+                    max: Pos2 {
+                        y: panel_rect.top() + 2.0,
+                        ..rect.max
+                    },
+                    ..rect
+                },
             };
 
             let rounding = 5.0;
 
             let rounding = match side {
-                PanelSide::Top => Rounding { se: rounding, sw: rounding, ..Default::default() },
-                PanelSide::Left => Rounding { se: rounding, ne: rounding, ..Default::default() },
-                PanelSide::Right => Rounding { sw: rounding, nw: rounding, ..Default::default() },
-                PanelSide::Bottom => Rounding { ne: rounding, nw: rounding, ..Default::default() },
+                PanelSide::Top => Rounding {
+                    se: rounding,
+                    sw: rounding,
+                    ..Default::default()
+                },
+                PanelSide::Left => Rounding {
+                    se: rounding,
+                    ne: rounding,
+                    ..Default::default()
+                },
+                PanelSide::Right => Rounding {
+                    sw: rounding,
+                    nw: rounding,
+                    ..Default::default()
+                },
+                PanelSide::Bottom => Rounding {
+                    ne: rounding,
+                    nw: rounding,
+                    ..Default::default()
+                },
+            };
+            let style = panel_ui.style();
+            let rect_fill = if this_tab_active || tabresp.hovered() {
+                style.visuals.panel_fill.linear_multiply(1.4)
+            } else {
+                style.visuals.panel_fill
             };
 
-            ui.painter().set(
+            let rect_stroke = if this_tab_active || tabresp.hovered() {
+                style.visuals.window_stroke.color.linear_multiply(1.4)
+            } else {
+                style.visuals.window_stroke.color
+            };
+
+            panel_ui.painter().set(
                 rect_idx,
                 Shape::Rect(RectShape::new(
                     rect,
                     rounding,
-                    ui.style().visuals.panel_fill,
-                    ui.style().visuals.window_stroke,
+                    rect_fill,
+                    Stroke::new(1.0, rect_stroke),
                 )),
             );
-            ui.painter().set(text_idx, Shape::Text(text));
+            panel_ui.painter().set(text_idx, Shape::Text(text));
             pos.x += tabsize.x;
+            response = match response {
+                Some(response) => Some(response.union(tabresp)),
+                None => Some(tabresp),
+            };
         }
 
-        resp
+        let mut width_cache = state.map(|s| s.tab_width_cache).unwrap_or_default();
+
+        if let Some(index) = tab_index {
+            while width_cache.len() <= index {
+                width_cache.push(0.0);
+            }
+            if (width_cache[index] - size).abs() > 0.1 {
+                width_cache[index] = size;
+            }
+        }
+
+        let state = SidePanelState {
+            tab: active_tab,
+            tab_width_cache: width_cache,
+        };
+
+        ui.data_mut(|data| data.insert_temp(id, state));
+
+        SidePanelResponse {
+            inner: inner_ret,
+            response,
+        }
     }
 }
