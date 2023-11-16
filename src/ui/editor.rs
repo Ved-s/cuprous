@@ -440,7 +440,6 @@ impl CircuitBoardEditor {
             let text = format!(
                 "[F9] Debug: {debug}\n\
                  [F8] Board reload\n\
-                 [F7] Regenerate design\n\
                  [F4] State reset\n\
                  [R]  Rotate\n\
                  [F]  Flip\n\

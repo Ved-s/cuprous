@@ -82,12 +82,20 @@ fn main() {
     debug::set_this_thread_debug_name("egui main thread");
 
     #[cfg(not(feature = "wasm"))]
-    eframe::run_native(
-        "rls",
-        eframe::NativeOptions::default(),
-        Box::new(|cc| Box::new(app::App::create(cc))),
-    )
-    .unwrap();
+    {
+        let options = eframe::NativeOptions {
+            app_id: Some("cuprous".into()),
+            follow_system_theme: false,
+            ..Default::default()
+        };
+
+        eframe::run_native(
+            "Cuprous Logic Simulator",
+            options,
+            Box::new(|cc| Box::new(app::App::create(cc))),
+        )
+        .unwrap();
+    }
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]

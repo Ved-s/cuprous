@@ -1,19 +1,21 @@
-# RLS
-### Rust Logic Simulator
+## Cuprous Logic Simulator
+Renamed from RLS (Rust Logic Simulator)
 
 Logisim-inspired logic circuits simulator
 
 ### Global TODOs
 
 - [Done] Place circuit boards as circuits
+- [Done] Circuit controls 
 - [Working] Circuit designer for circuit boards
-- [In progress] Circuit controls 
-> special circuit interfaces that can be exposed on containing circuit design and can receive user input
 
-- Rename the project
+- [Done] Rename the project
 
+- UI descriptions, tooltips, hints, etc
+- Better UI, more tabs
 - Proper keybinds, some mobile support
 
+- Fully custom pins that can interface with other wires in other circuits (labels, seamless pins)
 - More components (LEDs, 7-segments...)
 
 - Embed as `iframe`s
@@ -22,8 +24,6 @@ Logisim-inspired logic circuits simulator
 - Figure out themes
 - Proper mobile support
 - Proper errors
-
-- UI descriptions, tooltips, hints, etc
 
 ## Local TODOs
 
@@ -38,5 +38,5 @@ Logisim-inspired logic circuits simulator
 
 ### Web version
 
-Web version is available [here](https://ved-s.github.io/rls).
+Web version is available [here](https://ved-s.github.io/cuprous).
 It's less precise due to browser limitations.

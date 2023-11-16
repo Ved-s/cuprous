@@ -7,9 +7,9 @@ use std::{
 use eframe::{
     egui::{
         self, CollapsingHeader, ComboBox, Frame, Grid, Key, Label, Margin, PointerButton,
-        ScrollArea, Sense, SidePanel, Slider, TextStyle, Ui, Widget,
+        ScrollArea, Sense, SidePanel, Slider, TextStyle, Ui, Widget, TextEdit,
     },
-    epaint::{Color32, FontId, RectShape, Rounding, Shape, Stroke},
+    epaint::{Color32, FontId, Rounding, Shape, Stroke},
 };
 use emath::{pos2, vec2, Align2, Pos2, Rect};
 
@@ -28,13 +28,13 @@ use crate::{
 use super::{
     custom_rect_editor,
     drawing::{self, align_rect_scaled},
-    rect_editor,
+    rect_editor, rect_properties_editor,
     selection::{
         selection_border_color, selection_fill_color, Selection, SelectionImpl,
         SelectionInventoryItem,
     },
     CollapsibleSidePanel, DragState, Inventory, InventoryItemGroup, PaintableInventoryItem,
-    RectVisuals, Sides,
+    RectProperty, RectPropertyChanges, RectVisuals, Sides,
 };
 
 pub struct DesignerResponse {
@@ -151,8 +151,16 @@ impl SelectionImpl for DesignerSelectionImpl {
                     };
 
                     let rect = ctx.screen.world_to_screen_rect(rect).expand(2.0);
-                    shapes.push(Shape::rect_filled(rect, Rounding::ZERO, selection_fill_color()));
-                    ctx.paint.rect_stroke(rect, Rounding::ZERO, Stroke::new(2.0, selection_border_color()));
+                    shapes.push(Shape::rect_filled(
+                        rect,
+                        Rounding::ZERO,
+                        selection_fill_color(),
+                    ));
+                    ctx.paint.rect_stroke(
+                        rect,
+                        Rounding::ZERO,
+                        Stroke::new(2.0, selection_border_color()),
+                    );
                 }
             }
             SelectedDesignObject::Pin(id) => {
@@ -161,15 +169,31 @@ impl SelectionImpl for DesignerSelectionImpl {
                     let pin_rect = Rect::from_center_size(center.into(), vec2(0.5, 0.5));
                     let scr_rect = ctx.screen.world_to_screen_rect(pin_rect);
 
-                    shapes.push(Shape::rect_filled(scr_rect, Rounding::ZERO, selection_fill_color()));
-                    ctx.paint.rect_stroke(scr_rect, Rounding::ZERO, Stroke::new(2.0, selection_border_color()));
+                    shapes.push(Shape::rect_filled(
+                        scr_rect,
+                        Rounding::ZERO,
+                        selection_fill_color(),
+                    ));
+                    ctx.paint.rect_stroke(
+                        scr_rect,
+                        Rounding::ZERO,
+                        Stroke::new(2.0, selection_border_color()),
+                    );
                 }
             }
             SelectedDesignObject::Control(provider, control) => {
                 if let Some(info) = pass.controls.get(&(*provider, *control)) {
                     let scr_rect = ctx.screen.world_to_screen_rect(info.rect).expand(1.0);
-                    shapes.push(Shape::rect_filled(scr_rect, Rounding::ZERO, selection_fill_color()));
-                    ctx.paint.rect_stroke(scr_rect, Rounding::ZERO, Stroke::new(2.0, selection_border_color()));
+                    shapes.push(Shape::rect_filled(
+                        scr_rect,
+                        Rounding::ZERO,
+                        selection_fill_color(),
+                    ));
+                    ctx.paint.rect_stroke(
+                        scr_rect,
+                        Rounding::ZERO,
+                        Stroke::new(2.0, selection_border_color()),
+                    );
                 }
             }
         }
@@ -948,12 +972,10 @@ impl Designer {
         let active = if !self.selection.selection.is_empty() {
             true
         } else if self.selected_id.is_some() {
-            self
-                .selected_id
+            self.selected_id
                 .as_ref()
                 .is_some_and(|s| matches!(s, SelectedItemId::Pin(_) | SelectedItemId::Rect))
-        }
-        else {
+        } else {
             self.provider.has_custom_config()
         };
 
@@ -1014,11 +1036,13 @@ impl Designer {
                                             return None;
                                         }
                                         match d {
-                                            Decoration::Rect { rect: _, visuals } => Some(visuals),
+                                            Decoration::Rect { rect, visuals } => {
+                                                Some((rect, visuals))
+                                            }
                                         }
                                     });
 
-                            Self::rect_properties(iter, ui);
+                            Self::rect_properties(iter, ui, true);
                         }
                         Some(SelectedDesignObjectType::Pin) => {
                             let iter = design.pins.iter_mut().enumerate().filter_map(|(i, p)| {
@@ -1028,7 +1052,18 @@ impl Designer {
 
                             Self::pin_properties(iter, ui);
                         }
-                        Some(SelectedDesignObjectType::Control) => {}
+                        Some(SelectedDesignObjectType::Control) => {
+                            let iter = design.controls.iter_mut().filter_map(
+                                |((provider, control), data)| {
+                                    let key = SelectedDesignObject::Control(*provider, *control);
+                                    self.selection
+                                        .contains(&key)
+                                        .then_some((*provider, *control, data))
+                                },
+                            );
+
+                            Self::control_properties(iter, ui, self.provider.deref());
+                        }
                     };
                 } else if let Some(selected) = &self.selected_id {
                     match selected {
@@ -1038,7 +1073,12 @@ impl Designer {
                         }
                         SelectedItemId::Rect => {
                             let mut visuals = self.default_rect_visuals.write();
-                            Self::rect_properties([visuals.deref_mut()].into_iter(), ui)
+                            let mut dummy = Rect::NOTHING;
+                            Self::rect_properties(
+                                [(&mut dummy, visuals.deref_mut())].into_iter(),
+                                ui,
+                                false,
+                            )
                         }
                         SelectedItemId::Control(_, _) => {}
                     }
@@ -1049,47 +1089,72 @@ impl Designer {
             .full_rect
     }
 
-    fn rect_properties<'a, I>(mut iter: I, ui: &mut Ui)
+    fn rect_properties<'a, I>(mut iter: I, ui: &mut Ui, rect_ediror: bool)
     where
-        I: Iterator<Item = &'a mut RectVisuals>,
+        I: Iterator<Item = (&'a mut Rect, &'a mut RectVisuals)>,
     {
-        let value = unwrap_option_or_return!(iter.next());
+        let (rect, visuals) = unwrap_option_or_return!(iter.next());
 
         let mut fill_changed = false;
         let mut stroke_width_changed = false;
         let mut stroke_color_changed = false;
+        let mut rect_changes = RectPropertyChanges::default();
 
         Grid::new("rect_props").show(ui, |ui| {
             ui.label("Fill color");
-            fill_changed = ui.color_edit_button_srgba(&mut value.fill).changed();
+            fill_changed = ui.color_edit_button_srgba(&mut visuals.fill).changed();
             ui.end_row();
 
             ui.label("Stroke width");
             stroke_width_changed = ui
-                .add(Slider::new(&mut value.stroke.width, 0.0..=1.0))
+                .add(Slider::new(&mut visuals.stroke.width, 0.0..=1.0))
                 .changed();
             ui.end_row();
 
             ui.label("Stroke color");
             stroke_color_changed = ui
-                .color_edit_button_srgba(&mut value.stroke.color)
+                .color_edit_button_srgba(&mut visuals.stroke.color)
                 .changed();
             ui.end_row();
         });
-        let value = *value;
+        if rect_ediror {
+            rect_changes = rect_properties_editor(rect, ui, "rect_edit", "Rectangle", |_, _| {});
+        }
+        let visuals = *visuals;
+        let rect = *rect;
 
-        let changed = fill_changed || stroke_color_changed || stroke_width_changed;
+        let changed =
+            fill_changed || stroke_color_changed || stroke_width_changed || rect_changes.any();
 
         if changed {
-            for rect in iter {
+            for (other_rect, other_vis) in iter {
                 if fill_changed {
-                    rect.fill = value.fill;
+                    other_vis.fill = visuals.fill;
                 }
                 if stroke_width_changed {
-                    rect.stroke.width = value.stroke.width;
+                    other_vis.stroke.width = visuals.stroke.width;
                 }
                 if stroke_color_changed {
-                    rect.stroke.color = value.stroke.color;
+                    other_vis.stroke.color = visuals.stroke.color;
+                }
+
+                if rect_changes.any() {
+                    for prop in rect_changes.iter() {
+                        match prop {
+                            RectProperty::Top => {
+                                let height = other_rect.height();
+                                other_rect.set_top(rect.top());
+                                other_rect.set_height(height);
+                            }
+                            RectProperty::Left => {
+                                let width = other_rect.width();
+                                other_rect.set_left(rect.left());
+                                other_rect.set_width(width);
+                            }
+                            RectProperty::Width => other_rect.set_width(rect.width()),
+                            RectProperty::Height => other_rect.set_height(rect.height()),
+                        }
+                    }
                 }
             }
         }
@@ -1130,6 +1195,83 @@ impl Designer {
 
             for v in iter {
                 *v = value;
+            }
+        }
+    }
+
+    fn control_properties<'a, I>(mut iter: I, ui: &mut Ui, design_provider: &dyn DesignProvider)
+    where
+        I: Iterator<Item = (usize, usize, &'a mut CircuitDesignControl)>,
+    {
+        let (provider, control, value) = unwrap_option_or_return!(iter.next());
+        let mut name_changed = false;
+
+        let constrain = |prop: RectProperty, orig_rect: Option<Rect>, rect: &mut Rect| {
+            if let Some(orig_rect) = orig_rect {
+                match prop {
+                    RectProperty::Width => {
+                        rect.set_height((rect.width() / orig_rect.width()) * orig_rect.height())
+                    }
+                    RectProperty::Height => {
+                        rect.set_width((rect.height() / orig_rect.height()) * orig_rect.width())
+                    }
+                    _ => {}
+                }
+            }
+        };
+
+        Grid::new("control_props").show(ui, |ui| {
+            ui.label("Name");
+            name_changed = TextEdit::singleline(value.display_name.get_mut())
+                .min_size(vec2(100.0, 0.0))
+                .ui(ui)
+                .changed();
+            ui.end_row();
+        });
+
+        let orig_rect = design_provider
+            .get_control_info(provider, control)
+            .map(|i| i.rect);
+
+        let rect_changes = rect_properties_editor(
+            &mut value.rect,
+            ui,
+            "rect_edit",
+            "Rectangle",
+            |prop, rect| constrain(prop, orig_rect, rect),
+        );
+
+        if name_changed || rect_changes.any() {
+            for (provider, control, other_value) in iter {
+                if name_changed {
+                    other_value.display_name = value.display_name.clone();
+                }
+
+                if rect_changes.any() {
+                    let orig_rect = design_provider
+                        .get_control_info(provider, control)
+                        .map(|i| i.rect);
+
+                    for prop in rect_changes.iter() {
+                        match prop {
+                            RectProperty::Top => {
+                                let height = other_value.rect.height();
+                                other_value.rect.set_top(value.rect.top());
+                                other_value.rect.set_height(height);
+                            }
+                            RectProperty::Left => {
+                                let width = other_value.rect.width();
+                                other_value.rect.set_left(value.rect.left());
+                                other_value.rect.set_width(width);
+                            }
+                            RectProperty::Width => other_value.rect.set_width(value.rect.width()),
+                            RectProperty::Height => {
+                                other_value.rect.set_height(value.rect.height())
+                            }
+                        }
+                        constrain(prop, orig_rect, &mut other_value.rect);
+                    }
+                }
             }
         }
     }
