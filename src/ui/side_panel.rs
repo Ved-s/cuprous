@@ -1,9 +1,4 @@
-use std::{
-    f32::consts::TAU,
-    num::NonZeroUsize,
-    ops::Neg,
-    sync::Arc,
-};
+use std::{f32::consts::TAU, num::NonZeroUsize, ops::Neg, sync::Arc};
 
 use eframe::{
     egui::{
@@ -14,7 +9,7 @@ use eframe::{
 };
 use emath::{pos2, vec2, Pos2, Rangef, Rect, Vec2};
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(unused)]
 pub enum PanelSide {
     Top,
@@ -175,18 +170,13 @@ impl SidePanel {
 
         let state = ui.data(|data| data.get_temp::<SidePanelState>(id));
 
-        let rem_rect = ui
-            .data(|data| {
-                data.get_temp::<SidePanelUiState>(ui.id().with("__side_panel_state"))
-                    .and_then(|s| (s.frame == ui.ctx().frame_nr()).then_some(s.rem_rect))
-            })
-            .unwrap_or_else(|| ui.max_rect());
+        let rem_rect = remaining_rect(ui);
 
         let mut shape_idx: Vec<_> = (0..2 * tab_names.len())
             .map(|_| ui.painter().add(Shape::Noop))
             .collect();
 
-        let mut active_tab = state.as_ref().map(|s| s.tab).unwrap_or(default_tab);
+        let active_tab = state.as_ref().map(|s| s.tab).unwrap_or(default_tab);
 
         let frame = frame.unwrap_or_else(|| Frame::side_top_panel(ui.style()));
         let empty_tab_size = match side {
@@ -346,6 +336,8 @@ impl SidePanel {
             PanelSide::Right | PanelSide::Bottom => -1.0,
         };
 
+        let mut new_active_tab = active_tab;
+
         for (i, tab_name) in tab_names.iter().enumerate() {
             let text_idx = unwrap_option_or_break!(shape_idx.pop());
             let rect_idx = unwrap_option_or_break!(shape_idx.pop());
@@ -402,9 +394,9 @@ impl SidePanel {
             let tabresp = panel_ui.interact(rect, id.with(("tab", i)), Sense::click());
             if tabresp.clicked() {
                 if this_tab_active {
-                    active_tab = None;
+                    new_active_tab = None;
                 } else {
-                    active_tab = Some(i);
+                    new_active_tab = Some(i);
                 }
             }
 
@@ -493,6 +485,14 @@ impl SidePanel {
             };
         }
 
+        let outer_pos = pos.y + lineheight;
+        let total_size = match side {
+            PanelSide::Top => outer_pos - rem_rect.top(),
+            PanelSide::Left => outer_pos - rem_rect.left(),
+            PanelSide::Right => outer_pos - rem_rect.right(),
+            PanelSide::Bottom => outer_pos - rem_rect.bottom(),
+        };
+
         let mut width_cache = state.map(|s| s.tab_width_cache).unwrap_or_default();
 
         if let Some(index) = active_tab {
@@ -500,17 +500,53 @@ impl SidePanel {
                 width_cache.push(0.0);
             }
             if (width_cache[index] - size).abs() > 0.1 {
+                println!("{side:?}: width_cache[{index}] = {size}");
                 width_cache[index] = size;
             }
         }
 
         let state = SidePanelState {
-            tab: active_tab,
+            tab: new_active_tab,
             tab_width_cache: width_cache,
         };
 
-        ui.data_mut(|data| data.insert_temp(id, state));
+        let rem_rect = match side {
+            PanelSide::Top => Rect::from_min_size(
+                pos2(panel_rect.left(), outer_pos),
+                vec2(panel_rect.width(), rem_rect.height() - total_size),
+            ),
+            PanelSide::Left => Rect::from_min_size(
+                pos2(outer_pos, panel_rect.top()),
+                vec2(rem_rect.width() - total_size, panel_rect.height()),
+            ),
+            PanelSide::Right => Rect::from_min_size(
+                pos2(rem_rect.left(), panel_rect.top()),
+                vec2(rem_rect.width() - total_size, panel_rect.height()),
+            ),
+            PanelSide::Bottom => Rect::from_min_size(
+                pos2(panel_rect.left(), rem_rect.top()),
+                vec2(panel_rect.width(), rem_rect.height() - total_size),
+            ),
+        };
+
+        let ui_state = SidePanelUiState {
+            frame: ui.ctx().frame_nr(),
+            rem_rect,
+        };
+
+        ui.data_mut(|data| {
+            data.insert_temp(id, state);
+            data.insert_temp(ui.id().with("__side_panel_state"), ui_state);
+        });
 
         response
     }
+}
+
+pub fn remaining_rect(ui: &Ui) -> Rect {
+    ui.data(|data| {
+        data.get_temp::<SidePanelUiState>(ui.id().with("__side_panel_state"))
+            .and_then(|s| (s.frame == ui.ctx().frame_nr()).then_some(s.rem_rect))
+    })
+    .unwrap_or_else(|| ui.ctx().available_rect())
 }

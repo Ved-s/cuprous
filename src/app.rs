@@ -1,7 +1,7 @@
 use std::{collections::HashMap, ops::Deref, sync::Arc, num::NonZeroUsize};
 
 use eframe::{
-    egui::{self, Grid, Margin},
+    egui::{self, Grid, Margin, TopBottomPanel},
     epaint::{Color32, Rounding},
     CreationContext,
 };
@@ -107,34 +107,34 @@ impl eframe::App for App {
                         },
                     );
 
-                // SidePanel::new(PanelSide::Top, "top")
-                //     .default_tab(None)
-                //     .frame(
-                //         egui::Frame::side_top_panel(&ctx.style())
-                //             .fill(Color32::from_gray(30))
-                //             .stroke(ctx.style().visuals.window_stroke)
-                //             .outer_margin(Margin::symmetric(10.0, 0.0))
-                //             .rounding(Rounding {
-                //                 nw: 0.0,
-                //                 ne: 0.0,
-                //                 sw: 6.0,
-                //                 se: 6.0,
-                //             }),
-                //     )
-                //     .show_separator_line(false)
-                //     .show(
-                //         ui,
-                //         &std::array::from_fn::<_, 16, _>(|i| i),
-                //         |tab| format!("Tab {tab}").into(),
-                //         |tab, ui| {
-                //             ui.vertical(|ui| {
-                //                 for i in 0..=*tab {
-                //                     ui.label(format!("Label {i}"));
-                //                     ui.end_row();
-                //                 }
-                //             });
-                //         },
-                //     );
+                SidePanel::new(PanelSide::Top, "top")
+                    .default_tab(None)
+                    .frame(
+                        egui::Frame::side_top_panel(&ctx.style())
+                            .fill(Color32::from_gray(30))
+                            .stroke(ctx.style().visuals.window_stroke)
+                            .outer_margin(Margin::symmetric(10.0, 0.0))
+                            .rounding(Rounding {
+                                nw: 0.0,
+                                ne: 0.0,
+                                sw: 6.0,
+                                se: 6.0,
+                            }),
+                    )
+                    .show_separator_line(false)
+                    .show(
+                        ui,
+                        NonZeroUsize::new(16).unwrap(),
+                        |i| format!("Tab {i}").into(),
+                        |i, ui| {
+                            ui.vertical(|ui| {
+                                for i in 0..= (i % 3) {
+                                    ui.label(format!("Label {i}"));
+                                    ui.end_row();
+                                }
+                            });
+                        },
+                    );
 
                 // SidePanel::new(PanelSide::Right, "right")
                 //     .default_tab(None)
