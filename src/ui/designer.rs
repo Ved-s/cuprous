@@ -6,12 +6,12 @@ use std::{
 
 use eframe::{
     egui::{
-        self, CollapsingHeader, ComboBox, Frame, Grid, Key, Label, Margin, PointerButton,
-        ScrollArea, Sense, SidePanel, Slider, TextStyle, Ui, Widget, TextEdit,
+        CollapsingHeader, ComboBox, Frame, Grid, Key, Label, Margin, PointerButton,
+        ScrollArea, Sense, Slider, TextEdit, TextStyle, Ui, Widget,
     },
     epaint::{Color32, FontId, Rounding, Shape, Stroke},
 };
-use emath::{pos2, vec2, Align2, Pos2, Rect};
+use emath::{pos2, vec2, Align2, Pos2, Rangef, Rect};
 
 use crate::{
     board::{
@@ -33,7 +33,8 @@ use super::{
         selection_border_color, selection_fill_color, Selection, SelectionImpl,
         SelectionInventoryItem,
     },
-    CollapsibleSidePanel, DragState, Inventory, InventoryItemGroup, PaintableInventoryItem,
+    side_panel::{PanelSide, SidePanel},
+    DragState, Inventory, InventoryItemGroup, PaintableInventoryItem,
     RectProperty, RectPropertyChanges, RectVisuals, Sides,
 };
 
@@ -696,15 +697,12 @@ impl Designer {
             }
         }
 
-        let components_rect = self.components_ui(ui, design);
-        let properties_rect = self.properties_ui(ui, design);
+        self.components_ui(ui, design);
+        self.properties_ui(ui, design);
 
         drop(designs);
 
-        let mut rect = ui.clip_rect();
-        rect.min.x = components_rect.right();
-        rect.max.x = properties_rect.left();
-        rect = rect.shrink(10.0);
+        let rect = crate::ui::side_panel::remaining_rect(ui).shrink(10.0);
         let mut ui = ui.child_ui(rect, *ui.layout());
 
         if ui.input(|input| input.key_pressed(Key::Escape))
@@ -781,144 +779,71 @@ impl Designer {
         }
     }
 
-    fn components_ui(&mut self, ui: &mut Ui, design: &mut CircuitDesign) -> Rect {
+    fn components_ui(&mut self, ui: &mut Ui, design: &mut CircuitDesign) {
         let style = ui.style().clone();
-        CollapsibleSidePanel::new("components-ui", "Components")
-            .header_offset(20.0)
-            .side(egui::panel::Side::Left)
-            .panel_transformer(Some(Box::new(move |panel: SidePanel| {
-                panel
-                    .frame(
-                        Frame::side_top_panel(&style)
-                            .rounding(Rounding {
-                                ne: 5.0,
-                                nw: 0.0,
-                                se: 5.0,
-                                sw: 0.0,
-                            })
-                            .outer_margin(Margin::symmetric(0.0, 8.0))
-                            .inner_margin(Margin::symmetric(5.0, 5.0))
-                            .stroke(style.visuals.window_stroke),
-                    )
-                    .show_separator_line(false)
-            })))
-            .show(ui, |ui| {
-                ScrollArea::vertical().show(ui, |ui| {
-                    let font = TextStyle::Monospace.resolve(ui.style());
+        SidePanel::new(PanelSide::Left, "components-ui")
+            .frame(
+                Frame::side_top_panel(&style)
+                    .rounding(Rounding {
+                        ne: 5.0,
+                        nw: 0.0,
+                        se: 5.0,
+                        sw: 0.0,
+                    })
+                    .outer_margin(Margin::symmetric(0.0, 8.0))
+                    .inner_margin(Margin::symmetric(5.0, 5.0))
+                    .stroke(style.visuals.window_stroke),
+            )
+            .show_separator_line(false)
+            .default_tab(Some(0))
+            .show(
+                ui,
+                1,
+                |_| "Components".into(),
+                |_, ui| {
+                    ScrollArea::vertical().show(ui, |ui| {
+                        let font = TextStyle::Monospace.resolve(ui.style());
 
-                    let pins = self.provider.get_pin_ids();
+                        let pins = self.provider.get_pin_ids();
 
-                    if !pins.is_empty() {
-                        CollapsingHeader::new("Pins")
-                            .default_open(true)
-                            .show(ui, |ui| {
-                                for id in pins {
-                                    let info =
-                                        unwrap_option_or_continue!(self.provider.get_pin(&id));
-
-                                    ui.horizontal(|ui| {
-                                        let resp = ui.allocate_response(
-                                            vec2(font.size * 1.15, font.size),
-                                            Sense::hover(),
-                                        );
-
-                                        let paint_ctx =
-                                            PaintContext::new_on_ui(ui, resp.rect, font.size);
-
-                                        let pico = match info.dir {
-                                            InternalPinDirection::StateDependent { default: _ } => {
-                                                None
-                                            }
-                                            InternalPinDirection::Inside => Some(true),
-                                            InternalPinDirection::Outside => Some(false),
-                                            InternalPinDirection::Custom => None,
-                                        };
-                                        let angle =
-                                            if pico == Some(true) { TAU * 0.5 } else { 0.0 };
-                                        crate::graphics::outside_pin(
-                                            WireState::False,
-                                            true,
-                                            pico,
-                                            angle,
-                                            &paint_ctx,
-                                        );
-
-                                        let selected = match &self.selected_id {
-                                            Some(SelectedItemId::Pin(sel_id)) => {
-                                                sel_id.deref() == id.deref()
-                                            }
-                                            _ => false,
-                                        };
-
-                                        if ui
-                                            .selectable_label(selected, info.display_name.deref())
-                                            .clicked()
-                                        {
-                                            let existing_pin =
-                                                design.pins.iter().find_index(|p| p.id == id);
-
-                                            if let Some(existing_pin) = existing_pin {
-                                                self.selection.clear();
-                                                self.selection.selection.insert(
-                                                    SelectedDesignObject::Pin(existing_pin),
-                                                );
-
-                                                if let Some(pin) = design.pins.get(existing_pin) {
-                                                    let center =
-                                                        pin.pos.convert(|v| v as f32 + 0.5);
-
-                                                    self.pan_zoom.center_pos = center;
-                                                    self.pan_zoom.scale =
-                                                        self.pan_zoom.scale.max(8.0)
-                                                }
-                                            } else {
-                                                self.selected_id = match selected {
-                                                    true => None,
-                                                    false => Some(SelectedItemId::Pin(id.clone())),
-                                                };
-                                                self.selected_pin_dir = info.display_dir;
-                                            }
-                                        }
-                                    });
-                                }
-                            });
-                    }
-
-                    let control_providers = self.provider.get_control_provider_data();
-                    if !control_providers.is_empty() {
-                        CollapsingHeader::new("Controls")
-                            .default_open(true)
-                            .show(ui, |ui| {
-                                for provider_data in control_providers {
-                                    for control in 0..provider_data.count {
-                                        let control_data = self
-                                            .provider
-                                            .get_control_info(provider_data.id, control);
-                                        let control_data = unwrap_option_or_continue!(control_data);
+                        if !pins.is_empty() {
+                            CollapsingHeader::new("Pins")
+                                .default_open(true)
+                                .show(ui, |ui| {
+                                    for id in pins {
+                                        let info =
+                                            unwrap_option_or_continue!(self.provider.get_pin(&id));
 
                                         ui.horizontal(|ui| {
                                             let resp = ui.allocate_response(
-                                                vec2(font.size, font.size),
+                                                vec2(font.size * 1.15, font.size),
                                                 Sense::hover(),
                                             );
-                                            let (rect, scale) = align_rect_scaled(
-                                                resp.rect.left_top(),
-                                                resp.rect.size(),
-                                                control_data.rect.size(),
-                                            );
 
-                                            let ctx = PaintContext::new_on_ui(ui, rect, scale);
+                                            let paint_ctx =
+                                                PaintContext::new_on_ui(ui, resp.rect, font.size);
 
-                                            self.provider.paint_control(
-                                                provider_data.id,
-                                                control,
-                                                &ctx,
+                                            let pico = match info.dir {
+                                                InternalPinDirection::StateDependent {
+                                                    default: _,
+                                                } => None,
+                                                InternalPinDirection::Inside => Some(true),
+                                                InternalPinDirection::Outside => Some(false),
+                                                InternalPinDirection::Custom => None,
+                                            };
+                                            let angle =
+                                                if pico == Some(true) { TAU * 0.5 } else { 0.0 };
+                                            crate::graphics::outside_pin(
+                                                WireState::False,
+                                                true,
+                                                pico,
+                                                angle,
+                                                &paint_ctx,
                                             );
 
                                             let selected = match &self.selected_id {
-                                                Some(SelectedItemId::Control(prov_id, ctl_id)) => {
-                                                    *prov_id == provider_data.id
-                                                        && *ctl_id == control
+                                                Some(SelectedItemId::Pin(sel_id)) => {
+                                                    sel_id.deref() == id.deref()
                                                 }
                                                 _ => false,
                                             };
@@ -926,47 +851,130 @@ impl Designer {
                                             if ui
                                                 .selectable_label(
                                                     selected,
-                                                    control_data.display_name.deref(),
+                                                    info.display_name.deref(),
                                                 )
                                                 .clicked()
                                             {
-                                                if let Some(info) = design
-                                                    .controls
-                                                    .get(&(provider_data.id, control))
-                                                {
+                                                let existing_pin =
+                                                    design.pins.iter().find_index(|p| p.id == id);
+
+                                                if let Some(existing_pin) = existing_pin {
                                                     self.selection.clear();
                                                     self.selection.selection.insert(
-                                                        SelectedDesignObject::Control(
-                                                            provider_data.id,
-                                                            control,
-                                                        ),
+                                                        SelectedDesignObject::Pin(existing_pin),
                                                     );
 
-                                                    self.pan_zoom.center_pos =
-                                                        info.rect.center().into();
-                                                    self.pan_zoom.scale =
-                                                        self.pan_zoom.scale.max(8.0)
+                                                    if let Some(pin) = design.pins.get(existing_pin)
+                                                    {
+                                                        let center =
+                                                            pin.pos.convert(|v| v as f32 + 0.5);
+
+                                                        self.pan_zoom.center_pos = center;
+                                                        self.pan_zoom.scale =
+                                                            self.pan_zoom.scale.max(8.0)
+                                                    }
                                                 } else {
                                                     self.selected_id = match selected {
                                                         true => None,
-                                                        false => Some(SelectedItemId::Control(
-                                                            provider_data.id,
-                                                            control,
-                                                        )),
+                                                        false => {
+                                                            Some(SelectedItemId::Pin(id.clone()))
+                                                        }
                                                     };
+                                                    self.selected_pin_dir = info.display_dir;
                                                 }
                                             }
                                         });
                                     }
-                                }
-                            });
-                    }
-                })
-            })
-            .full_rect
+                                });
+                        }
+
+                        let control_providers = self.provider.get_control_provider_data();
+                        if !control_providers.is_empty() {
+                            CollapsingHeader::new("Controls")
+                                .default_open(true)
+                                .show(ui, |ui| {
+                                    for provider_data in control_providers {
+                                        for control in 0..provider_data.count {
+                                            let control_data = self
+                                                .provider
+                                                .get_control_info(provider_data.id, control);
+                                            let control_data =
+                                                unwrap_option_or_continue!(control_data);
+
+                                            ui.horizontal(|ui| {
+                                                let resp = ui.allocate_response(
+                                                    vec2(font.size, font.size),
+                                                    Sense::hover(),
+                                                );
+                                                let (rect, scale) = align_rect_scaled(
+                                                    resp.rect.left_top(),
+                                                    resp.rect.size(),
+                                                    control_data.rect.size(),
+                                                );
+
+                                                let ctx = PaintContext::new_on_ui(ui, rect, scale);
+
+                                                self.provider.paint_control(
+                                                    provider_data.id,
+                                                    control,
+                                                    &ctx,
+                                                );
+
+                                                let selected = match &self.selected_id {
+                                                    Some(SelectedItemId::Control(
+                                                        prov_id,
+                                                        ctl_id,
+                                                    )) => {
+                                                        *prov_id == provider_data.id
+                                                            && *ctl_id == control
+                                                    }
+                                                    _ => false,
+                                                };
+
+                                                if ui
+                                                    .selectable_label(
+                                                        selected,
+                                                        control_data.display_name.deref(),
+                                                    )
+                                                    .clicked()
+                                                {
+                                                    if let Some(info) = design
+                                                        .controls
+                                                        .get(&(provider_data.id, control))
+                                                    {
+                                                        self.selection.clear();
+                                                        self.selection.selection.insert(
+                                                            SelectedDesignObject::Control(
+                                                                provider_data.id,
+                                                                control,
+                                                            ),
+                                                        );
+
+                                                        self.pan_zoom.center_pos =
+                                                            info.rect.center().into();
+                                                        self.pan_zoom.scale =
+                                                            self.pan_zoom.scale.max(8.0)
+                                                    } else {
+                                                        self.selected_id = match selected {
+                                                            true => None,
+                                                            false => Some(SelectedItemId::Control(
+                                                                provider_data.id,
+                                                                control,
+                                                            )),
+                                                        };
+                                                    }
+                                                }
+                                            });
+                                        }
+                                    }
+                                });
+                        }
+                    })
+                },
+            );
     }
 
-    fn properties_ui(&mut self, ui: &mut Ui, design: &mut CircuitDesign) -> Rect {
+    fn properties_ui(&mut self, ui: &mut Ui, design: &mut CircuitDesign) {
         let style = ui.style().clone();
 
         let active = if !self.selection.selection.is_empty() {
@@ -979,58 +987,55 @@ impl Designer {
             self.provider.has_custom_config()
         };
 
-        CollapsibleSidePanel::new("prop-ui", "Properties editor")
-            .active(active)
-            .header_offset(20.0)
-            .side(egui::panel::Side::Right)
-            .panel_transformer(Some(Box::new(move |panel: SidePanel| {
-                panel
-                    .frame(
-                        Frame::side_top_panel(&style)
-                            .rounding(Rounding {
-                                nw: 5.0,
-                                ne: 0.0,
-                                sw: 5.0,
-                                se: 0.0,
-                            })
-                            .outer_margin(Margin::symmetric(0.0, 8.0))
-                            .inner_margin(Margin::symmetric(5.0, 5.0))
-                            .stroke(style.visuals.window_stroke),
-                    )
-                    .show_separator_line(false)
-            })))
-            .show(ui, |ui| {
-                if !self.selection.selection.is_empty() {
-                    let same_type = self
-                        .selection
-                        .iter()
-                        .filter_map(|o| match o {
-                            SelectedDesignObject::Decoration(id) => design
-                                .decorations
-                                .get(*id)
-                                .map(|d| SelectedDesignObjectType::Decoration(d.ty())),
-                            SelectedDesignObject::Pin(id) => {
-                                design.pins.get(*id).map(|_| SelectedDesignObjectType::Pin)
-                            }
-                            SelectedDesignObject::Control(provider, control) => design
-                                .controls
-                                .contains_key(&(*provider, *control))
-                                .then_some(SelectedDesignObjectType::Control),
-                        })
-                        .same();
-                    match same_type {
-                        None => {
-                            ui.vertical_centered(|ui| {
-                                Label::new("No editable properties").wrap(false).ui(ui);
-                            });
-                        }
-                        Some(SelectedDesignObjectType::Decoration(DecorationType::Rect)) => {
-                            let iter =
-                                design
+        let tabs = if active { 1 } else { 0 };
+        SidePanel::new(PanelSide::Right, "prop-ui")
+            .frame(
+                Frame::side_top_panel(&style)
+                    .rounding(Rounding {
+                        nw: 5.0,
+                        ne: 0.0,
+                        sw: 5.0,
+                        se: 0.0,
+                    })
+                    .outer_margin(Margin::symmetric(0.0, 8.0))
+                    .inner_margin(Margin::symmetric(5.0, 5.0))
+                    .stroke(style.visuals.window_stroke),
+            )
+            .show_separator_line(false)
+            .default_tab(Some(0))
+            .size_range(Rangef::new(120.0, f32::MAX))
+            .show(
+                ui,
+                tabs,
+                |_| "Properties editor".into(),
+                |_, ui| {
+                    if !self.selection.selection.is_empty() {
+                        let same_type = self
+                            .selection
+                            .iter()
+                            .filter_map(|o| match o {
+                                SelectedDesignObject::Decoration(id) => design
                                     .decorations
-                                    .iter_mut()
-                                    .enumerate()
-                                    .filter_map(|(i, d)| {
+                                    .get(*id)
+                                    .map(|d| SelectedDesignObjectType::Decoration(d.ty())),
+                                SelectedDesignObject::Pin(id) => {
+                                    design.pins.get(*id).map(|_| SelectedDesignObjectType::Pin)
+                                }
+                                SelectedDesignObject::Control(provider, control) => design
+                                    .controls
+                                    .contains_key(&(*provider, *control))
+                                    .then_some(SelectedDesignObjectType::Control),
+                            })
+                            .same();
+                        match same_type {
+                            None => {
+                                ui.vertical_centered(|ui| {
+                                    Label::new("No editable properties").wrap(false).ui(ui);
+                                });
+                            }
+                            Some(SelectedDesignObjectType::Decoration(DecorationType::Rect)) => {
+                                let iter = design.decorations.iter_mut().enumerate().filter_map(
+                                    |(i, d)| {
                                         let key = SelectedDesignObject::Decoration(i);
                                         if !self.selection.contains(&key) {
                                             return None;
@@ -1040,53 +1045,56 @@ impl Designer {
                                                 Some((rect, visuals))
                                             }
                                         }
+                                    },
+                                );
+
+                                Self::rect_properties(iter, ui, true);
+                            }
+                            Some(SelectedDesignObjectType::Pin) => {
+                                let iter =
+                                    design.pins.iter_mut().enumerate().filter_map(|(i, p)| {
+                                        let key = SelectedDesignObject::Pin(i);
+                                        self.selection.contains(&key).then_some(&mut p.display_dir)
                                     });
 
-                            Self::rect_properties(iter, ui, true);
-                        }
-                        Some(SelectedDesignObjectType::Pin) => {
-                            let iter = design.pins.iter_mut().enumerate().filter_map(|(i, p)| {
-                                let key = SelectedDesignObject::Pin(i);
-                                self.selection.contains(&key).then_some(&mut p.display_dir)
-                            });
+                                Self::pin_properties(iter, ui);
+                            }
+                            Some(SelectedDesignObjectType::Control) => {
+                                let iter = design.controls.iter_mut().filter_map(
+                                    |((provider, control), data)| {
+                                        let key =
+                                            SelectedDesignObject::Control(*provider, *control);
+                                        self.selection
+                                            .contains(&key)
+                                            .then_some((*provider, *control, data))
+                                    },
+                                );
 
-                            Self::pin_properties(iter, ui);
+                                Self::control_properties(iter, ui, self.provider.deref());
+                            }
+                        };
+                    } else if let Some(selected) = &self.selected_id {
+                        match selected {
+                            SelectedItemId::Selection => {}
+                            SelectedItemId::Pin(_) => {
+                                Self::pin_properties([&mut self.selected_pin_dir].into_iter(), ui);
+                            }
+                            SelectedItemId::Rect => {
+                                let mut visuals = self.default_rect_visuals.write();
+                                let mut dummy = Rect::NOTHING;
+                                Self::rect_properties(
+                                    [(&mut dummy, visuals.deref_mut())].into_iter(),
+                                    ui,
+                                    false,
+                                )
+                            }
+                            SelectedItemId::Control(_, _) => {}
                         }
-                        Some(SelectedDesignObjectType::Control) => {
-                            let iter = design.controls.iter_mut().filter_map(
-                                |((provider, control), data)| {
-                                    let key = SelectedDesignObject::Control(*provider, *control);
-                                    self.selection
-                                        .contains(&key)
-                                        .then_some((*provider, *control, data))
-                                },
-                            );
-
-                            Self::control_properties(iter, ui, self.provider.deref());
-                        }
-                    };
-                } else if let Some(selected) = &self.selected_id {
-                    match selected {
-                        SelectedItemId::Selection => {}
-                        SelectedItemId::Pin(_) => {
-                            Self::pin_properties([&mut self.selected_pin_dir].into_iter(), ui);
-                        }
-                        SelectedItemId::Rect => {
-                            let mut visuals = self.default_rect_visuals.write();
-                            let mut dummy = Rect::NOTHING;
-                            Self::rect_properties(
-                                [(&mut dummy, visuals.deref_mut())].into_iter(),
-                                ui,
-                                false,
-                            )
-                        }
-                        SelectedItemId::Control(_, _) => {}
+                    } else if self.provider.has_custom_config() {
+                        self.provider.custom_config_ui(ui);
                     }
-                } else if self.provider.has_custom_config() {
-                    self.provider.custom_config_ui(ui);
-                }
-            })
-            .full_rect
+                },
+            );
     }
 
     fn rect_properties<'a, I>(mut iter: I, ui: &mut Ui, rect_ediror: bool)

@@ -1,9 +1,9 @@
-use std::{f32::consts::TAU, num::NonZeroUsize, ops::Neg, sync::Arc};
+use std::{f32::consts::TAU, ops::Neg, sync::Arc};
 
 use eframe::{
     egui::{
         self, FontSelection, Frame, Id, Margin, Response, Sense, TextStyle, TopBottomPanel, Ui,
-        WidgetText,
+        WidgetText, panel::PanelState,
     },
     epaint::{Galley, RectShape, Rounding, Shape, Stroke, TextShape},
 };
@@ -115,14 +115,14 @@ impl SidePanel {
         }
     }
 
-    pub fn show<R: 'static>(
+    pub fn show<'a, R: 'static>(
         self,
         ui: &mut Ui,
-        tab_count: NonZeroUsize,
+        tab_count: usize,
         tab_name: impl Fn(usize) -> WidgetText,
-        tab_contents: impl FnOnce(usize, &mut Ui) -> R + 'static,
+        tab_contents: impl FnOnce(usize, &mut Ui) -> R + 'a,
     ) -> SidePanelResponse<R> {
-        let tab_names: Vec<_> = (0..tab_count.get())
+        let tab_names: Vec<_> = (0..tab_count)
             .map(|i| {
                 tab_name(i)
                     .into_galley(
@@ -192,7 +192,11 @@ impl SidePanel {
 
         let offset = tab_width
             .map(|w| {
-                let target = if active_tab.is_some() { w } else { 0.0 };
+                let target = if active_tab.is_some() && !tab_names.is_empty() {
+                    w
+                } else {
+                    0.0
+                };
                 w - ui.ctx().animate_value_with_time(
                     id.with("__size_anim"),
                     target,
@@ -229,6 +233,17 @@ impl SidePanel {
         };
 
         let add_contents = |ui: &mut Ui| {
+
+            // HACK
+            if let Some(tab_width) = tab_width {
+                let ui_min_size = ui.min_size();
+                let min_size = match side {
+                    PanelSide::Top | PanelSide::Bottom => vec2(ui_min_size.x, ui_min_size.y.max(tab_width - 20.0)),
+                    PanelSide::Left | PanelSide::Right => vec2(ui_min_size.x.max(tab_width - 20.0), ui_min_size.y),
+                };
+                ui.set_min_size(min_size);
+            }
+
             let rect = ui.max_rect();
             let mut inner_ui = ui.child_ui(rect.translate(inner_ui_translation), *ui.layout());
             if let Some(tab) = active_tab.as_ref() {
@@ -246,6 +261,11 @@ impl SidePanel {
         });
 
         let resp = if panel_visible {
+
+            if let Some(old_state) = PanelState::load(panel_ui.ctx(), panel_id) {
+                ui.interact(old_state.rect, panel_id.with("interaction"), Sense::click_and_drag());
+            }
+
             let resp = match side {
                 PanelSide::Top => TopBottomPanel::top(panel_id)
                     .frame(frame)
@@ -304,7 +324,12 @@ impl SidePanel {
         let size = match side {
             PanelSide::Top | PanelSide::Bottom => panel_rect.height(),
             PanelSide::Left | PanelSide::Right => panel_rect.width(),
-        } - panel_additional_size;
+        };
+        let size = if size > panel_additional_size {
+            size - panel_additional_size
+        } else {
+            size
+        };
 
         let (colmin, rowmin, colmax) = match side {
             PanelSide::Top => (
@@ -500,7 +525,6 @@ impl SidePanel {
                 width_cache.push(0.0);
             }
             if (width_cache[index] - size).abs() > 0.1 {
-                println!("{side:?}: width_cache[{index}] = {size}");
                 width_cache[index] = size;
             }
         }
