@@ -102,11 +102,14 @@ impl CircuitBoard {
         preview: &CircuitPreview,
         props_override: Option<CircuitPropertyStore>,
         imp_data: Option<&Intermediate>,
+        process_formatting: bool,
     ) -> usize {
-        let mut circuits = self.circuits.write();
+        let circuits = self.circuits.read();
         let id = circuits.first_free_pos();
-        let circ = Circuit::create(id, pos, preview, self.clone(), props_override, imp_data);
-        circuits.set(circ, id);
+        let circ = Circuit::create(id, pos, preview, self.clone(), props_override, imp_data, process_formatting);
+
+        drop(circuits);
+        self.circuits.write().set(circ, id);
         id
     }
 
@@ -277,7 +280,7 @@ impl CircuitBoard {
                 .not()
                 .then_some(&c.imp);
 
-            let circ = Circuit::create(i, c.pos, preview, board.clone(), Some(props), data);
+            let circ = Circuit::create(i, c.pos, preview, board.clone(), Some(props), data, false);
             {
                 let mut info = circ.info.write();
                 for (pin_name, wire) in c.pin_wires.iter() {
@@ -1948,7 +1951,7 @@ impl ActiveCircuitBoard {
 
         let cid = {
             self.board
-                .create_circuit(place_pos, preview, props_override, imp_data)
+                .create_circuit(place_pos, preview, props_override, imp_data, true)
         };
 
         self.set_circuit_nodes(size, place_pos, Some(cid));
@@ -2223,7 +2226,7 @@ impl ActiveCircuitBoard {
         old_value: &dyn CircuitPropertyImpl,
     ) {
         if !self.try_updating_circuit_property(circuit, property) {
-            let circuits = self.board.circuits.write();
+            let circuits = self.board.circuits.read();
             if let Some(circuit) = circuits.get(circuit) {
                 circuit
                     .props

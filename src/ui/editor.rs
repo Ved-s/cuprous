@@ -1,4 +1,4 @@
-use std::{f32::consts::PI, ops::Deref, sync::Arc};
+use std::{collections::HashSet, f32::consts::PI, ops::Deref, sync::Arc};
 
 use eframe::{
     egui::{
@@ -6,7 +6,7 @@ use eframe::{
     },
     epaint::{Color32, PathShape, Rounding, Shape, Stroke},
 };
-use emath::{pos2, vec2, Pos2, Rect, Rangef};
+use emath::{pos2, vec2, Pos2, Rangef, Rect};
 
 use crate::{
     app::SimulationContext,
@@ -19,8 +19,9 @@ use crate::{
         CircuitPreview,
     },
     state::WireState,
+    string::StringFormatterState,
     vector::{Vec2f, Vec2i},
-    Direction4, DynStaticStr, PaintContext, PanAndZoom, PastePreview, Screen,
+    ArcString, Direction4, DynStaticStr, PaintContext, PanAndZoom, PastePreview, Screen,
 };
 
 use super::{
@@ -28,8 +29,8 @@ use super::{
     drawing,
     selection::SelectionInventoryItem,
     side_panel::{PanelSide, SidePanel},
-    DoubleSelectableLabel, Inventory, InventoryItem, InventoryItemGroup,
-    PropertyEditor, PropertyStoreItem,
+    DoubleSelectableLabel, Inventory, InventoryItem, InventoryItemGroup, PropertyEditor,
+    PropertyStoreItem,
 };
 
 #[derive(Debug, PartialEq, Eq, Clone, Hash)]
@@ -340,22 +341,51 @@ impl CircuitBoardEditor {
                     SelectedBoardObject::Circuit { id } => Some(*id),
                     _ => None,
                 });
-                let circuits = self.board.board.circuits.read();
+                let board = self.board.board.clone();
+                let circuits = board.circuits.read();
                 let stores: Vec<_> = selected_circuit_props
                     .filter_map(|id| circuits.get(id).map(|c| (id, &c.props).into()))
                     .collect();
 
                 let response = Self::properties_ui(&mut self.props_ui, ui, Some(stores));
                 drop(selection);
-                drop(circuits);
 
                 if let Some(changes) = response {
                     for property in changes {
-                        for circuit in property.affected_values {
+                        let str_arc = property
+                            .new
+                            .downcast_ref::<ArcString>()
+                            .map(|s| s.get_arc());
+                        let mut formatter =
+                            str_arc.as_ref().map(|str| StringFormatterState::new(str));
+                        if let Some(formatter) = &mut formatter {
+                            let affected_circuits: HashSet<_> = HashSet::from_iter(
+                                property.affected_values.iter().map(|(id, _)| *id),
+                            );
+
+                            for circuit in circuits.iter() {
+                                if affected_circuits.contains(&circuit.id) {
+                                    continue;
+                                }
+                                circuit.props.read(&property.id, |s: &ArcString| {
+                                    formatter.add_evironment_string(&s.get_str());
+                                });
+                            }
+
+                            let mut affected_circuits: Vec<_> = property.affected_values.iter().filter_map(|(id, _)| circuits.get(*id).cloned()).collect();
+                            affected_circuits.sort_by_key(|c| c.id);
+
+                            for circuit in affected_circuits {
+                                circuit.props.write(&property.id, |s: &mut ArcString| {
+                                    formatter.process_string(s.get_mut());
+                                });
+                            }
+                        }
+                        for (circuit, old) in property.affected_values {
                             self.board.circuit_property_changed(
                                 circuit,
                                 &property.id,
-                                property.old_value.as_ref(),
+                                old.as_ref(),
                             );
                         }
                     }
@@ -566,7 +596,8 @@ impl CircuitBoardEditor {
                 |_| "Properties editor".into(),
                 |_, ui| props.map(|props| editor.ui(ui, props).changes),
             )
-            .inner.flatten()
+            .inner
+            .flatten()
     }
 
     fn components_ui(&mut self, ui: &mut Ui) -> ComponentsUiResponse {

@@ -49,6 +49,7 @@ mod wires;
 
 mod state;
 use state::State;
+mod string;
 
 mod board;
 

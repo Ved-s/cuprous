@@ -33,6 +33,7 @@ impl eframe::App for App {
         #[cfg(feature = "single_thread")]
         //let sim_time =
         {
+            use crate::time::Instant;
             let start_time = Instant::now();
 
             // Run simulation ethier 500 times or for 10ms

@@ -2,15 +2,17 @@ use std::{
     any::{Any, TypeId},
     collections::HashMap,
     ops::{Deref, RangeInclusive},
+    sync::Arc,
 };
 
 use eframe::{
-    egui::{ComboBox, DragValue, Ui, Widget, self},
+    egui::{self, ComboBox, DragValue, Ui, Widget},
     epaint::{Color32, Rounding, Stroke},
 };
 
 use crate::{
-    unwrap_option_or_continue, unwrap_option_or_return, ArcString, Direction4, DynStaticStr, RwLock,
+    unwrap_option_or_return, unwrap_option_or_continue, ArcString, Direction4, DynStaticStr, Mutex,
+    RwLock,
 };
 
 pub struct CircuitPropertyStore(RwLock<HashMap<DynStaticStr, CircuitProperty>>);
@@ -376,23 +378,51 @@ impl CircuitPropertyImpl for ArcString {
     fn ui(&mut self, ui: &mut Ui, not_equal: bool) -> Option<Box<dyn CircuitPropertyImpl>> {
         let old = self.get_arc();
 
+        let id = ui.auto_id_with("arcstr_prop_ui");
+        ui.skip_ahead_auto_ids(1);
+        let memory_id = id.with("__memory");
+
+        #[derive(Clone, Default)]
+        struct State {
+            locked: bool,
+            arc: Arc<Mutex<String>>,
+        }
+
+        let state = ui.data_mut(|data| data.get_temp_mut_or_default::<State>(memory_id).clone());
+        let mut locked_string = state.arc.lock();
         let mut empty = String::new();
-        let r = if not_equal {
+
+        let edit_string = if state.locked {
+            &mut locked_string
+        } else if not_equal {
             &mut empty
         } else {
             self.get_mut()
         };
 
-        if ui.text_edit_singleline(r).changed() {
-            if not_equal {
-                let string = self.get_mut();
-                string.clear();
-                string.push_str(&empty);
-            }
-            Some(Box::new(ArcString::from(old.deref())))
+        let resp = ui.text_edit_singleline(edit_string);
+        let old = if resp.changed() {
+            let str = self.get_mut();
+            str.clear();
+            str.push_str(&locked_string);
+            Some(Box::new(ArcString::from(old.deref())) as _)
         } else {
             None
-        }
+        };
+
+        if resp.gained_focus() {
+            let self_str = self.get_str();
+            let current_str = if not_equal { empty.as_str() } else { &self_str };
+            locked_string.clear();
+            locked_string.push_str(current_str);
+            ui.data_mut(|data| data.get_temp_mut_or_default::<State>(memory_id).locked = true);
+        };
+
+        if state.locked && !resp.has_focus() {
+            ui.data_mut(|data| data.get_temp_mut_or_default::<State>(memory_id).locked = false);
+        };
+
+        old
     }
 
     fn clone(&self) -> Box<dyn CircuitPropertyImpl> {
@@ -461,7 +491,7 @@ impl CircuitPropertyImpl for Color32 {
 
 impl<T> CircuitPropertyImpl for RangedValue<T>
 where
-    T: emath::Numeric + Send + Sync
+    T: emath::Numeric + Send + Sync,
 {
     fn equals(&self, other: &dyn CircuitPropertyImpl) -> bool {
         other.is_type_and(|s: &Self| s.value == self.value)
@@ -470,7 +500,11 @@ where
     fn ui(&mut self, ui: &mut Ui, not_equal: bool) -> Option<Box<dyn CircuitPropertyImpl>> {
         let old = Clone::clone(self);
 
-        let mut value = if not_equal { *self.range.start() } else { self.value };
+        let mut value = if not_equal {
+            *self.range.start()
+        } else {
+            self.value
+        };
 
         let resp = DragValue::new(&mut value)
             .clamp_range(self.range.clone())
@@ -480,8 +514,7 @@ where
         if resp.changed() {
             self.set(value);
             Some(Box::new(old))
-        }
-        else {
+        } else {
             None
         }
     }
@@ -515,17 +548,35 @@ impl CircuitPropertyImpl for Rounding {
     fn ui(&mut self, ui: &mut Ui, _: bool) -> Option<Box<dyn CircuitPropertyImpl>> {
         let old = *self;
         let changed = egui::Grid::new(ui.next_auto_id().with("rounding_grid")).show(ui, |ui| {
-            let nw = DragValue::new(&mut self.nw).clamp_range(0.0 ..= f32::MAX).speed(0.05).ui(ui).changed();
-            let ne = DragValue::new(&mut self.ne).clamp_range(0.0 ..= f32::MAX).speed(0.05).ui(ui).changed();
+            let nw = DragValue::new(&mut self.nw)
+                .clamp_range(0.0..=f32::MAX)
+                .speed(0.05)
+                .ui(ui)
+                .changed();
+            let ne = DragValue::new(&mut self.ne)
+                .clamp_range(0.0..=f32::MAX)
+                .speed(0.05)
+                .ui(ui)
+                .changed();
             ui.end_row();
-            let sw = DragValue::new(&mut self.sw).clamp_range(0.0 ..= f32::MAX).speed(0.05).ui(ui).changed();
-            let se = DragValue::new(&mut self.se).clamp_range(0.0 ..= f32::MAX).speed(0.05).ui(ui).changed();
+            let sw = DragValue::new(&mut self.sw)
+                .clamp_range(0.0..=f32::MAX)
+                .speed(0.05)
+                .ui(ui)
+                .changed();
+            let se = DragValue::new(&mut self.se)
+                .clamp_range(0.0..=f32::MAX)
+                .speed(0.05)
+                .ui(ui)
+                .changed();
             ui.end_row();
 
             nw || ne || sw || se
         });
 
-        changed.inner.then(|| Box::new(old) as Box<dyn CircuitPropertyImpl>)
+        changed
+            .inner
+            .then(|| Box::new(old) as Box<dyn CircuitPropertyImpl>)
     }
 
     fn clone(&self) -> Box<dyn CircuitPropertyImpl> {
@@ -557,13 +608,19 @@ impl CircuitPropertyImpl for Stroke {
     fn ui(&mut self, ui: &mut Ui, _: bool) -> Option<Box<dyn CircuitPropertyImpl>> {
         let old = *self;
         let changed = ui.horizontal(|ui| {
-            let width = DragValue::new(&mut self.width).clamp_range(0.0 ..= f32::MAX).speed(0.05).ui(ui).changed();
+            let width = DragValue::new(&mut self.width)
+                .clamp_range(0.0..=f32::MAX)
+                .speed(0.05)
+                .ui(ui)
+                .changed();
             let color = ui.color_edit_button_srgba(&mut self.color).changed();
 
             width || color
         });
 
-        changed.inner.then(|| Box::new(old) as Box<dyn CircuitPropertyImpl>)
+        changed
+            .inner
+            .then(|| Box::new(old) as Box<dyn CircuitPropertyImpl>)
     }
 
     fn clone(&self) -> Box<dyn CircuitPropertyImpl> {

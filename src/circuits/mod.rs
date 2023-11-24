@@ -15,7 +15,9 @@ use crate::{
     board::CircuitBoard,
     io::CircuitCopyData,
     state::{CircuitState, InternalCircuitState, State, StateCollection, WireState},
+    string::StringFormatterState,
     time::Instant,
+    unwrap_option_or_continue,
     vector::{Vec2i, Vec2u, Vector},
     ArcString, Direction4, DynStaticStr, OptionalInt, PaintContext, RwLock,
 };
@@ -301,9 +303,34 @@ impl Circuit {
         board: Arc<CircuitBoard>,
         props_override: Option<CircuitPropertyStore>,
         imp_data: Option<&Intermediate>,
+        process_formatting: bool,
     ) -> Arc<Self> {
         let imp = preview.imp.create_impl();
         let props = props_override.unwrap_or_else(|| preview.props.clone());
+
+        let mut props_map = props.inner().write();
+
+        if process_formatting {
+            for (prop_id, prop) in props_map.iter_mut() {
+                let string_prop = prop.imp_mut().downcast_mut::<ArcString>();
+                let string_prop = unwrap_option_or_continue!(string_prop);
+                let string_arc = string_prop.get_arc();
+
+                let mut formatter = StringFormatterState::new(&string_arc);
+                if !formatter.has_formatting() {
+                    continue;
+                }
+                let circuits = board.circuits.read();
+                for circuit in circuits.iter() {
+                    circuit.props.read(prop_id, |s: &ArcString| {
+                        formatter.add_evironment_string(&s.get_str());
+                    });
+                }
+
+                formatter.process_string(string_prop.get_mut());
+            }
+        }
+        drop(props_map);
 
         let circuit = Arc::new(Self {
             ty: preview.imp.type_name(),
@@ -561,7 +588,7 @@ pub trait CircuitImpl: Any + Send + Sync {
         state: Option<&CircuitStateContext>,
         ctx: &PaintContext,
         interactive: bool,
-        uid: Id
+        uid: Id,
     ) {
     }
 

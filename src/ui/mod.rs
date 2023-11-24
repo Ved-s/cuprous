@@ -508,8 +508,10 @@ pub struct PropertyEditorResponse<T> {
 
 pub struct ChangedProperty<T> {
     pub id: DynStaticStr,
-    pub affected_values: Vec<T>,
-    pub old_value: Box<dyn CircuitPropertyImpl>,
+
+    pub new: Box<dyn CircuitPropertyImpl>,
+    /// (T, old)
+    pub affected_values: Vec<(T, Box<dyn CircuitPropertyImpl>)>,
 }
 
 // awful code
@@ -580,17 +582,18 @@ impl PropertyEditor {
                 if let Some(old) = props[0].1.imp_mut().ui(ui, !equal) {
                     let mut vec = vec![];
                     let (id, prop) = props.remove(0);
-                    vec.push(id);
+                    vec.push((id, old));
                     for other_prop in props {
                         if !other_prop.1.imp().equals(prop.imp()) {
+                            let old = other_prop.1.imp().clone();
                             prop.imp().copy_into(other_prop.1.imp_mut());
-                            vec.push(other_prop.0);
+                            vec.push((other_prop.0, old));
                         }
                     }
                     changes.push(ChangedProperty {
                         id: prop.id(),
+                        new: prop.imp().clone(),
                         affected_values: vec,
-                        old_value: old,
                     });
                 }
                 none = false;
