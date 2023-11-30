@@ -415,19 +415,19 @@ impl Gate2497 {
         );
 
         let fill = [
-            PathItem::MoveTo(pos2(4.5, 1.5)),
+            PathItem::MoveTo(pos2(4.25, 1.5)),
             PathItem::QuadraticBezier(pos2(3.25, 0.0), pos2(2.25, 0.0)),
             PathItem::LineTo(pos2(0.25, 0.0)),
             PathItem::CubicBezier(pos2(1.2, 0.8), pos2(1.2, 2.2), pos2(0.25, 3.0)),
             PathItem::LineTo(pos2(2.25, 3.0)),
-            PathItem::QuadraticBezier(pos2(3.25, 3.0), pos2(5.0 - 0.5, 1.5)),
+            PathItem::QuadraticBezier(pos2(3.25, 3.0), pos2(4.25, 1.5)),
             PathItem::ClosePath,
         ];
 
         let outer = [
             PathItem::MoveTo(pos2(0.26, 0.0)),
             PathItem::LineTo(pos2(2.25, 0.0)),
-            PathItem::QuadraticBezier(pos2(3.25, 0.0), pos2(4.5, 1.5)),
+            PathItem::QuadraticBezier(pos2(3.25, 0.0), pos2(4.25, 1.5)),
             PathItem::QuadraticBezier(pos2(3.25, 3.0), pos2(2.25, 3.0)),
             PathItem::LineTo(pos2(0.25, 3.0)),
         ];
@@ -520,6 +520,14 @@ impl Gate2497 {
             0.15 * ctx.screen.scale,
             fill_color,
             Stroke::new(0.1 * ctx.screen.scale, border_color),
+        );
+
+        let circle_pos = transformer(pos2(4.32, 1.5));
+        ctx.paint.circle(
+            circle_pos,
+            0.2 * ctx.screen.scale,
+            fill_color,
+            Stroke::new(0.15 * ctx.screen.scale, border_color),
         );
     }
 
