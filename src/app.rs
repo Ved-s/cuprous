@@ -99,24 +99,13 @@ impl App {
     pub fn create(cc: &CreationContext) -> Self {
         let previews = [
             Box::new(circuits::button::ButtonPreview {}) as Box<dyn CircuitPreviewImpl>,
-            Box::new(circuits::gates::gate::GatePreview {
-                template: circuits::gates::or::TEMPLATE,
-            }),
-            Box::new(circuits::gates::gate::GatePreview {
-                template: circuits::gates::nor::TEMPLATE,
-            }),
-            Box::new(circuits::gates::gate::GatePreview {
-                template: circuits::gates::xor::TEMPLATE,
-            }),
-            Box::new(circuits::gates::gate::GatePreview {
-                template: circuits::gates::xnor::TEMPLATE,
-            }),
-            Box::new(circuits::gates::gate::GatePreview {
-                template: circuits::gates::and::TEMPLATE,
-            }),
-            Box::new(circuits::gates::gate::GatePreview {
-                template: circuits::gates::nand::TEMPLATE,
-            }),
+            Box::<circuits::gates::gate::GatePreview::<circuits::gates::or::Or>>::default(),
+            Box::<circuits::gates::gate::GatePreview::<circuits::gates::xor::Xor>>::default(),
+            Box::<circuits::gates::gate::GatePreview::<circuits::gates::nor::Nor>>::default(),
+            Box::<circuits::gates::gate::GatePreview::<circuits::gates::xnor::Xnor>>::default(),
+            Box::<circuits::gates::gate::GatePreview::<circuits::gates::and::And>>::default(),
+            Box::<circuits::gates::gate::GatePreview::<circuits::gates::nand::Nand>>::default(),
+            Box::new(circuits::gates::gate::Gate2497Preview),
             Box::new(circuits::gates::not::NotPreview {}),
             Box::new(circuits::pullup::PullupPreview {}),
             Box::new(circuits::transistor::TransistorPreview {}),
@@ -146,14 +135,17 @@ impl App {
 
         if let Some(storage) = cc.storage {
             if let Some(boards) = storage.get_string("boards") {
-                if let Ok(data) = ron::from_str::<Vec<crate::io::CircuitBoardData>>(&boards) {
-                    for data in &data {
-                        let board = CircuitBoard::load(data, &ctx);
-                        let uid = board.uid;
-                        ctx.boards
-                            .write()
-                            .insert(uid, StoredCircuitBoard::new(board));
+                match ron::from_str::<Vec<crate::io::CircuitBoardData>>(&boards) {
+                    Ok(data) => {
+                        for data in &data {
+                            let board = CircuitBoard::load(data, &ctx);
+                            let uid = board.uid;
+                            ctx.boards
+                                .write()
+                                .insert(uid, StoredCircuitBoard::new(board));
+                        }
                     }
+                    Err(e) => eprintln!("{e:?}"),
                 }
             } else if let Some(main_board) = storage.get_string("board") {
                 // TODO: do something with loading errors

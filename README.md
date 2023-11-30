@@ -33,6 +33,7 @@ Logisim-inspired logic circuits simulator
 - Make pins use random ID and store it in board data
 - When copying pins, preserve their ID and design data
 - Maybe show circuit pin labels in paste
+- Update SVGs
 
 ![](progress_preview.png)
 

@@ -1,7 +1,7 @@
 use std::{
     any::{Any, TypeId},
     collections::HashMap,
-    ops::{Deref, RangeInclusive},
+    ops::{Deref, RangeInclusive, RangeFrom},
     sync::Arc,
 };
 
@@ -256,6 +256,14 @@ where
     T: emath::Numeric + Send + Sync,
 {
     pub fn new(range: RangeInclusive<T>, change_speed: T, value: T) -> Self {
+        Self {
+            range,
+            change_speed,
+            value,
+        }
+    }
+    pub fn new_from(range: RangeFrom<T>, change_speed: T, value: T) -> Self {
+        let range = range.start ..= T::MAX;
         Self {
             range,
             change_speed,

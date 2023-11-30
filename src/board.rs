@@ -106,7 +106,15 @@ impl CircuitBoard {
     ) -> usize {
         let circuits = self.circuits.read();
         let id = circuits.first_free_pos();
-        let circ = Circuit::create(id, pos, preview, self.clone(), props_override, imp_data, process_formatting);
+        let circ = Circuit::create(
+            id,
+            pos,
+            preview,
+            self.clone(),
+            props_override,
+            imp_data,
+            process_formatting,
+        );
 
         drop(circuits);
         self.circuits.write().set(circ, id);
@@ -883,9 +891,10 @@ impl ActiveCircuitBoard {
         pos: Vec2i,
         ctx: &PaintContext,
     ) {
-        if !node.origin_dist.is_zero()
-            && pos.x() != bounds.tiles_tl.x()
-            && pos.y() != bounds.tiles_tl.y()
+        if !(node.origin_dist.is_zero()
+            || pos.x() == bounds.tiles_tl.x() && pos.y() == bounds.tiles_tl.y()
+            || node.origin_dist.y() == 0 && pos.x() == bounds.tiles_tl.x()
+            || node.origin_dist.x() == 0 && pos.y() == bounds.tiles_tl.y())
         {
             return;
         }
@@ -2712,7 +2721,9 @@ impl DesignProvider for BoardDesignProvider {
             .on_hover_text("Whether or not all controls on this design\nshould be grouped into one")
             .changed()
         {
-            self.board.single_outer_control.store(single_outer_control, Ordering::Relaxed);
+            self.board
+                .single_outer_control
+                .store(single_outer_control, Ordering::Relaxed);
         }
     }
 }

@@ -2,7 +2,7 @@ use std::{collections::HashSet, f32::consts::PI, ops::Deref, sync::Arc};
 
 use eframe::{
     egui::{
-        self, CollapsingHeader, Frame, Key, Margin, PointerButton, Sense, TextEdit, TextStyle, Ui,
+        self, CollapsingHeader, Frame, Key, Margin, PointerButton, Sense, TextEdit, TextStyle, Ui, Id, Event,
     },
     epaint::{Color32, PathShape, Rounding, Shape, Stroke},
 };
@@ -293,6 +293,29 @@ impl CircuitBoardEditor {
 
             if ui.input(|input| input.key_pressed(Key::P)) {
                 self.board.state.set_frozen(!self.board.state.is_frozen());
+            }
+
+            let sequence = ui.data(|data| data.get_temp(Id::from("sequence"))).unwrap_or(0);
+            let seq_keys = [Key::Num2, Key::Num4, Key::Num9, Key::Num7];
+
+            let key = ui.input(|input| input.events.iter().filter_map(|e| {
+                match e {
+                    Event::Key { key, pressed: true, .. } => Some(*key),
+                    _ => None
+                }
+            }).next());
+
+            if let Some(key) = key {
+                let seq_key = seq_keys.get(sequence).copied();
+                match seq_key {
+                    Some(seq_key) if seq_key == key => {
+                        ui.data_mut(|data| data.insert_temp(Id::from("sequence"), sequence + 1));
+                        if sequence == seq_keys.len() - 1 {
+                            self.selected_id = Some(SelectedItemId::Circuit("gate2497".into()))
+                        }
+                    },
+                    _ => ui.data_mut(|data| data.insert_temp(Id::from("sequence"), 0)),
+                }
             }
         }
 

@@ -19,7 +19,7 @@ pub trait PathItemIterator: Iterator<Item = PathItem> {
         stroke: impl Into<Stroke>,
         bezier_straightness: f32,
         point_proc: impl Fn(Pos2) -> Pos2,
-        consumer: impl Fn(usize, PathShape),
+        mut consumer: impl FnMut(usize, PathShape),
     ) {
         let fill = fill.into();
         let stroke = stroke.into();
@@ -95,7 +95,7 @@ pub trait PathItemIterator: Iterator<Item = PathItem> {
                         .filter(|(i, p)| *i > 0 || *p != pos)
                         .map(|(_, p)| p),
                     );
-                    pos = b;
+                    pos = c;
                 }
                 PathItem::ClosePath => {
                     if !points.is_empty() {
