@@ -27,6 +27,7 @@ use crate::{
         InternalPinDirection,
     },
     containers::{Chunks2D, ChunksLookaround, FixedVec},
+    error::ErrorList,
     random_u128,
     state::{State, StateCollection, WireState},
     ui::{
@@ -103,6 +104,7 @@ impl CircuitBoard {
         props_override: Option<CircuitPropertyStore>,
         imp_data: Option<&Intermediate>,
         process_formatting: bool,
+        errors: &mut ErrorList,
     ) -> usize {
         let circuits = self.circuits.read();
         let id = circuits.first_free_pos();
@@ -114,6 +116,7 @@ impl CircuitBoard {
             props_override,
             imp_data,
             process_formatting,
+            errors,
         );
 
         drop(circuits);
@@ -256,7 +259,13 @@ impl CircuitBoard {
         data
     }
 
-    pub fn load(data: &crate::io::CircuitBoardData, ctx: &Arc<SimulationContext>) -> Arc<Self> {
+    pub fn load(
+        data: &crate::io::CircuitBoardData,
+        ctx: &Arc<SimulationContext>,
+        errors: &mut ErrorList,
+    ) -> Arc<Self> {
+        let mut errors = errors.enter_context(|| format!("loading board {}", &data.name));
+
         let designs = Arc::new(RwLock::new(CircuitDesignStorage::load(&data.designs)));
 
         let board = Arc::new(CircuitBoard {
@@ -278,9 +287,19 @@ impl CircuitBoard {
 
         for (i, c) in data.circuits.iter().enumerate() {
             let c = unwrap_option_or_continue!(c);
+            let mut errors = errors.enter_context(|| {
+                format!(
+                    "loading circuit {} {} at {},{}",
+                    i,
+                    c.ty.deref(),
+                    c.pos.x(),
+                    c.pos.y()
+                )
+            });
 
             let preview = ctx.previews.get(&c.ty);
-            let preview = unwrap_option_or_continue!(preview); // TODO: Errors
+            let preview = errors.report_none(preview, || "unknown circuit id");
+            let preview = unwrap_option_or_continue!(preview);
             let props = preview.imp.default_props();
             props.load(&c.props);
 
@@ -288,7 +307,16 @@ impl CircuitBoard {
                 .not()
                 .then_some(&c.imp);
 
-            let circ = Circuit::create(i, c.pos, preview, board.clone(), Some(props), data, false);
+            let circ = Circuit::create(
+                i,
+                c.pos,
+                preview,
+                board.clone(),
+                Some(props),
+                data,
+                false,
+                &mut errors,
+            );
             {
                 let mut info = circ.info.write();
                 for (pin_name, wire) in c.pin_wires.iter() {
@@ -304,7 +332,7 @@ impl CircuitBoard {
 
         for (i, w) in data.wires.iter().enumerate() {
             let w = unwrap_option_or_continue!(w);
-            let wire = Wire::load(w, i, &circuits);
+            let wire = Wire::load(w, i, &circuits, &mut errors);
             wires.set(wire, i);
         }
 
@@ -313,7 +341,7 @@ impl CircuitBoard {
         let mut states = board.states.states.write();
         for (i, s) in data.states.iter().enumerate() {
             let s = unwrap_option_or_continue!(s);
-            states.set(State::load(s, board.clone(), i), i);
+            states.set(State::load(s, board.clone(), i, &mut errors), i);
         }
         drop(states);
 
@@ -447,6 +475,7 @@ impl ActiveCircuitBoard {
         bounds: TileDrawBounds,
         selected: Option<SelectedItem>,
         debug: bool,
+        errors: &mut ErrorList,
     ) {
         self.selection.borrow_mut().pre_update_selection(
             self,
@@ -605,7 +634,7 @@ impl ActiveCircuitBoard {
 
         self.draw_hovered_circuit_pin_names(ctx);
 
-        self.update_previews(ctx, selected);
+        self.update_previews(ctx, selected, errors);
         self.selection.borrow_mut().update_selection(self, ctx);
     }
 
@@ -1046,7 +1075,7 @@ impl ActiveCircuitBoard {
         }
     }
 
-    fn update_previews(&mut self, ctx: &PaintContext, selected: Option<SelectedItem>) {
+    fn update_previews(&mut self, ctx: &PaintContext, selected: Option<SelectedItem>, errors: &mut ErrorList) {
         let selected = match selected {
             Some(selected) => selected,
             None => return,
@@ -1110,7 +1139,7 @@ impl ActiveCircuitBoard {
 
             if interaction.clicked_by(eframe::egui::PointerButton::Primary) {
                 fn empty_handler(_: &mut ActiveCircuitBoard, _: usize) {}
-                self.place_circuit(place_pos, true, p.as_ref(), None, None, &empty_handler);
+                self.place_circuit(place_pos, true, p.as_ref(), None, None, &mut empty_handler);
             }
         } else if let SelectedItem::Paste(p) = selected {
             let size = p.size;
@@ -1125,7 +1154,7 @@ impl ActiveCircuitBoard {
             p.draw(self, place_pos, &ctx.with_rect(rect));
             let interaction = ctx.ui.interact(ctx.rect, ctx.ui.id(), Sense::click());
             if interaction.clicked_by(eframe::egui::PointerButton::Primary) {
-                p.place(self, place_pos);
+                p.place(self, place_pos, errors);
             }
         }
     }
@@ -1948,7 +1977,7 @@ impl ActiveCircuitBoard {
         preview: &CircuitPreview,
         props_override: Option<CircuitPropertyStore>,
         imp_data: Option<&Intermediate>,
-        handler: &dyn Fn(&mut ActiveCircuitBoard, usize),
+        handler: &mut dyn FnMut(&mut ActiveCircuitBoard, usize),
     ) -> Option<usize> {
         let size = preview.describe().size;
         if !self.can_place_circuit_at(size, place_pos, None) {
@@ -1959,8 +1988,14 @@ impl ActiveCircuitBoard {
         let sim_lock = { lock_sim.then(|| sim_lock.write()) };
 
         let cid = {
-            self.board
-                .create_circuit(place_pos, preview, props_override, imp_data, true)
+            self.board.create_circuit(
+                place_pos,
+                preview,
+                props_override,
+                imp_data,
+                true,
+                &mut ErrorList::new(), // Ignore placement errorsmaybe a later TODO
+            )
         };
 
         self.set_circuit_nodes(size, place_pos, Some(cid));

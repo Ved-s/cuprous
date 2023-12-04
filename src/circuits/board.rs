@@ -14,7 +14,7 @@ use crate::{
     board::{CircuitBoard, CircuitDesign},
     circuits::*,
     state::StateParent,
-    unwrap_option_or_return, unwrap_option_or_continue,
+    unwrap_option_or_return, unwrap_option_or_continue, error::ResultReport,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -629,11 +629,13 @@ impl CircuitImpl for Board {
 
     fn load_internal(
         &self,
-        _: &CircuitStateContext,
+        _ctx: &CircuitStateContext,
         data: &serde_intermediate::Intermediate,
         paste: bool,
+        errors: &mut ErrorList
     ) -> Option<Box<dyn InternalCircuitState>> {
-        if let Ok(data) = serde_intermediate::from_intermediate::<CircuitStateDataModel>(data) {
+        let data = serde_intermediate::from_intermediate::<CircuitStateDataModel>(data).report_error(errors);
+        if let Some(data) = data {
             return Some(Box::new(BoardState {
                 parent_error: false,
                 pasted: paste,
@@ -663,8 +665,8 @@ impl CircuitImpl for Board {
         serde_intermediate::to_intermediate(&model).unwrap_or_default()
     }
 
-    fn load(&mut self, _: &Arc<Circuit>, data: &serde_intermediate::Intermediate, _: bool) {
-        let model = serde_intermediate::from_intermediate::<CircuitDataModel>(data).ok();
+    fn load(&mut self, _circ: &Arc<Circuit>, data: &serde_intermediate::Intermediate, _paste: bool, errors: &mut ErrorList) {
+        let model = serde_intermediate::from_intermediate::<CircuitDataModel>(data).report_error(errors);
         let model = unwrap_option_or_return!(model);
 
         self.board_id = Some(model.board);
@@ -739,11 +741,12 @@ impl CircuitPreviewImpl for BoardPreview {
 
     fn load_copy_data(
         &self,
-        data: &serde_intermediate::Intermediate,
-        _: &serde_intermediate::Intermediate,
+        imp: &serde_intermediate::Intermediate,
+        _internal: &serde_intermediate::Intermediate,
         ctx: &Arc<SimulationContext>,
+        errors: &mut ErrorList
     ) -> Option<Box<dyn CircuitPreviewImpl>> {
-        let model = serde_intermediate::from_intermediate::<CircuitDataModel>(data).ok();
+        let model = serde_intermediate::from_intermediate::<CircuitDataModel>(imp).report_error(errors);
 
         let board = model
             .as_ref()

@@ -6,6 +6,7 @@ use eframe::egui::{ComboBox, Sense, Ui, CursorIcon};
 use emath::{vec2, Rect};
 
 use crate::circuits::props::CircuitProperty;
+use crate::error::ResultReport;
 use crate::state::SafeWireState;
 use crate::{
     circuits::*, describe_directional_circuit, unwrap_option_or_break, unwrap_option_or_return,
@@ -394,12 +395,13 @@ impl CircuitImpl for Pin {
 
     fn load_internal(
         &self,
-        _: &CircuitStateContext,
+        _ctx: &CircuitStateContext,
         data: &serde_intermediate::Intermediate,
-        _: bool,
+        _paste: bool,
+        errors: &mut ErrorList
     ) -> Option<Box<dyn InternalCircuitState>> {
         serde_intermediate::de::intermediate::deserialize::<PinState>(data)
-            .ok()
+            .report_error(errors)
             .map(|s| Box::new(s) as Box<dyn InternalCircuitState>)
     }
 
@@ -481,9 +483,10 @@ impl CircuitPreviewImpl for Preview {
 
     fn load_copy_data(
         &self,
-        _: &serde_intermediate::Intermediate,
-        _: &serde_intermediate::Intermediate,
-        _: &Arc<SimulationContext>,
+        _imp: &serde_intermediate::Intermediate,
+        _internal: &serde_intermediate::Intermediate,
+        _ctx: &Arc<SimulationContext>,
+        _errors: &mut ErrorList,
     ) -> Option<Box<dyn CircuitPreviewImpl>> {
         Some(Box::new(Preview {}))
     }

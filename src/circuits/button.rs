@@ -4,7 +4,7 @@ use eframe::{
 };
 use emath::{pos2, vec2, Align2};
 
-use crate::{unwrap_option_or_return, Direction4};
+use crate::{error::ResultReport, unwrap_option_or_return, Direction4};
 
 use super::{
     props::{CircuitProperty, RangedValue},
@@ -38,7 +38,7 @@ impl Button {
                 font_color: Color32::WHITE,
                 rounding: Rounding::same(0.75),
                 font_scale: 0.5,
-                stroke: Stroke::NONE
+                stroke: Stroke::NONE,
             },
         }
     }
@@ -179,13 +179,7 @@ impl CircuitImpl for Button {
             return;
         }
 
-        Self::draw_button(
-            state,
-            &self.text,
-            &self.visuals,
-            ctx,
-            false,
-        );
+        Self::draw_button(state, &self.text, &self.visuals, ctx, false);
         if !interactive {
             return;
         }
@@ -282,12 +276,13 @@ impl CircuitImpl for Button {
 
     fn load_internal(
         &self,
-        _: &CircuitStateContext,
+        _ctx: &CircuitStateContext,
         data: &serde_intermediate::Intermediate,
-        _: bool,
+        _paste: bool,
+        errors: &mut ErrorList,
     ) -> Option<Box<dyn InternalCircuitState>> {
         serde_intermediate::de::intermediate::deserialize::<ButtonState>(data)
-            .ok()
+            .report_error(errors)
             .map(|s| Box::new(s) as Box<dyn InternalCircuitState>)
     }
 
@@ -335,13 +330,7 @@ impl CircuitPreviewImpl for ButtonPreview {
             rounding,
         };
 
-        Button::draw_button(
-            None,
-            text,
-            &visuals,
-            &button_ctx,
-            in_world,
-        );
+        Button::draw_button(None, text, &visuals, &button_ctx, in_world);
     }
 
     fn create_impl(&self) -> Box<dyn CircuitImpl> {
@@ -354,9 +343,10 @@ impl CircuitPreviewImpl for ButtonPreview {
 
     fn load_copy_data(
         &self,
-        _: &serde_intermediate::Intermediate,
-        _: &serde_intermediate::Intermediate,
-        _: &Arc<SimulationContext>,
+        _imp: &serde_intermediate::Intermediate,
+        _internal: &serde_intermediate::Intermediate,
+        _ctx: &Arc<SimulationContext>,
+        _errors: &mut ErrorList,
     ) -> Option<Box<dyn CircuitPreviewImpl>> {
         Some(Box::new(ButtonPreview {}))
     }

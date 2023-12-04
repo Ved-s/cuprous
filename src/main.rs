@@ -26,6 +26,7 @@ use eframe::{
 };
 use emath::{vec2, Rect};
 
+use error::{ErrorList, OptionReport};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_intermediate::Intermediate;
 #[cfg(feature = "wasm")]
@@ -45,6 +46,7 @@ use crate::containers::*;
 mod circuits;
 use circuits::{CircuitPreview, CircuitStateContext};
 
+mod error;
 mod wires;
 
 mod state;
@@ -836,6 +838,12 @@ impl From<Arc<str>> for DynStaticStr {
     }
 }
 
+impl From<String> for DynStaticStr {
+    fn from(val: String) -> Self {
+        DynStaticStr::Dynamic(val.into())
+    }
+}
+
 pub struct PastePreview {
     wires: Vec<crate::io::WirePartCopyData>,
     circuits: Vec<(crate::io::CircuitCopyData, CircuitPreview)>,
@@ -843,7 +851,12 @@ pub struct PastePreview {
 }
 
 impl PastePreview {
-    pub fn new(data: crate::io::CopyPasteData, ctx: &Arc<SimulationContext>) -> Self {
+    pub fn new(
+        data: crate::io::CopyPasteData,
+        ctx: &Arc<SimulationContext>,
+        errors: &mut ErrorList,
+    ) -> Self {
+        let mut errors = errors.enter_context(|| "loading paste data");
         let wires = data.wires;
         let circuits: Vec<_> = data
             .circuits
@@ -851,7 +864,10 @@ impl PastePreview {
             .filter_map(|d| {
                 ctx.previews
                     .get(&d.ty)
-                    .and_then(|p| p.load_copy(&d, ctx).map(|b| (d, b)))
+                    .report_none(&mut errors, || {
+                        format!("circuit {} does not exist", d.ty.deref())
+                    })
+                    .and_then(|p| p.load_copy(&d, ctx, &mut errors).map(|b| (d, b)))
             })
             .collect();
 
@@ -914,7 +930,7 @@ impl PastePreview {
         }
     }
 
-    fn place(&self, board: &mut ActiveCircuitBoard, pos: Vec2i) {
+    fn place(&self, board: &mut ActiveCircuitBoard, pos: Vec2i, errors: &mut ErrorList) {
         if self.circuits.iter().any(|(c, p)| {
             !board.can_place_circuit_at(p.describe().size, pos + c.pos.convert(|v| v as i32), None)
         }) {
@@ -947,7 +963,7 @@ impl PastePreview {
                 preview,
                 None,
                 data,
-                &|board, id| {
+                &mut |board, id| {
                     if let Some(circuit) = board.board.circuits.read().get(id).cloned() {
                         if !matches!(
                             circuit_data.internal,
@@ -955,11 +971,21 @@ impl PastePreview {
                         ) {
                             for state in board.board.states.states.read().iter() {
                                 let ctx = CircuitStateContext::new(state.clone(), circuit.clone());
+                                let mut errors = errors.enter_context(|| {
+                                    format!(
+                                        "loading state for {} {} at {},{}",
+                                        circuit.ty.deref(),
+                                        circuit.id,
+                                        circuit.pos.x(),
+                                        circuit.pos.y()
+                                    )
+                                });
                                 state.write_circuit(id, |state| {
                                     state.internal = circuit.imp.write().load_internal(
                                         &ctx,
                                         &circuit_data.internal,
                                         true,
+                                        &mut errors
                                     );
                                 });
                             }

@@ -2,11 +2,12 @@ use std::{collections::HashSet, f32::consts::PI, ops::Deref, sync::Arc};
 
 use eframe::{
     egui::{
-        self, CollapsingHeader, Frame, Key, Margin, PointerButton, Sense, TextEdit, TextStyle, Ui, Id, Event,
+        self, CollapsingHeader, Event, Frame, Id, Key, Margin, PointerButton, Sense, TextEdit,
+        TextStyle, Ui,
     },
     epaint::{Color32, PathShape, Rounding, Shape, Stroke},
 };
-use emath::{pos2, vec2, Pos2, Rangef, Rect};
+use emath::{pos2, vec2, Pos2, Rangef, Rect, Align2};
 
 use crate::{
     app::SimulationContext,
@@ -18,6 +19,7 @@ use crate::{
         props::{CircuitPropertyImpl, CircuitPropertyStore},
         CircuitPreview,
     },
+    error::{ErrorList, ResultReport},
     state::WireState,
     string::StringFormatterState,
     vector::{Vec2f, Vec2i},
@@ -79,6 +81,7 @@ pub struct CircuitBoardEditor {
     board: ActiveCircuitBoard,
 
     debug: bool,
+    errors: ErrorList,
 
     paste: Option<Arc<PastePreview>>,
     inventory: Arc<[InventoryItemGroup<SelectedItemId>]>,
@@ -209,6 +212,7 @@ impl CircuitBoardEditor {
             pan_zoom: PanAndZoom::default(),
             board,
             debug: false,
+            errors: ErrorList::new(),
             paste: None,
             inventory: vec![
                 InventoryItemGroup::SingleItem(Box::new(SelectionInventoryItem::new(
@@ -243,13 +247,17 @@ impl CircuitBoardEditor {
                             egui::Event::Paste(s) => Some(s),
                             _ => None,
                         })
-                        .and_then(|p| ron::from_str::<crate::io::CopyPasteData>(p).ok())
+                        .and_then(|p| ron::from_str::<crate::io::CopyPasteData>(p).report_error(&mut self.errors.enter_context(|| "loading paste")))
                 });
             }
         }
 
         if let Some(paste) = paste {
-            self.paste = Some(Arc::new(PastePreview::new(paste, &self.sim)));
+            self.paste = Some(Arc::new(PastePreview::new(
+                paste,
+                &self.sim,
+                &mut self.errors,
+            )));
             self.selected_id = Some(SelectedItemId::Paste);
         }
 
@@ -295,15 +303,23 @@ impl CircuitBoardEditor {
                 self.board.state.set_frozen(!self.board.state.is_frozen());
             }
 
-            let sequence = ui.data(|data| data.get_temp(Id::from("sequence"))).unwrap_or(0);
+            let sequence = ui
+                .data(|data| data.get_temp(Id::from("sequence")))
+                .unwrap_or(0);
             let seq_keys = [Key::Num2, Key::Num4, Key::Num9, Key::Num7];
 
-            let key = ui.input(|input| input.events.iter().filter_map(|e| {
-                match e {
-                    Event::Key { key, pressed: true, .. } => Some(*key),
-                    _ => None
-                }
-            }).next());
+            let key = ui.input(|input| {
+                input
+                    .events
+                    .iter()
+                    .filter_map(|e| match e {
+                        Event::Key {
+                            key, pressed: true, ..
+                        } => Some(*key),
+                        _ => None,
+                    })
+                    .next()
+            });
 
             if let Some(key) = key {
                 let seq_key = seq_keys.get(sequence).copied();
@@ -313,7 +329,7 @@ impl CircuitBoardEditor {
                         if sequence == seq_keys.len() - 1 {
                             self.selected_id = Some(SelectedItemId::Circuit("gate2497".into()))
                         }
-                    },
+                    }
                     _ => ui.data_mut(|data| data.insert_temp(Id::from("sequence"), 0)),
                 }
             }
@@ -333,8 +349,13 @@ impl CircuitBoardEditor {
 
         let tile_bounds = self.calc_draw_bounds(&screen);
 
-        self.board
-            .update(&ctx, tile_bounds, selected_item, self.debug);
+        self.board.update(
+            &ctx,
+            tile_bounds,
+            selected_item,
+            self.debug,
+            &mut self.errors,
+        );
 
         if let Some(SelectedItemId::Board(board_id)) = self.selected_id {
             if let Some(board) = self.sim.boards.write().get_mut(&board_id) {
@@ -395,7 +416,11 @@ impl CircuitBoardEditor {
                                 });
                             }
 
-                            let mut affected_circuits: Vec<_> = property.affected_values.iter().filter_map(|(id, _)| circuits.get(*id).cloned()).collect();
+                            let mut affected_circuits: Vec<_> = property
+                                .affected_values
+                                .iter()
+                                .filter_map(|(id, _)| circuits.get(*id).cloned())
+                                .collect();
                             affected_circuits.sort_by_key(|c| c.id);
 
                             for circuit in affected_circuits {
@@ -502,6 +527,23 @@ impl CircuitBoardEditor {
             );
 
             ui.monospace(text);
+        }
+
+        if !self.errors.is_empty() {
+            let mut open = true;
+            egui::Window::new("Errors")
+                .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
+                .fixed_pos(ui.max_rect().center())
+                .resizable(false)
+                .open(&mut open)
+                .vscroll(true)
+                .collapsible(false)
+                .show(ui.ctx(), |ui| {
+                    self.errors.show_ui(ui);
+                });
+            if !open {
+                self.errors.clear();
+            }
         }
 
         EditorResponse {

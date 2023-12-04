@@ -12,7 +12,7 @@ use std::{
 #[cfg(not(feature = "single_thread"))]
 use std::thread::{self, JoinHandle};
 
-use crate::{containers::Queue, time::Instant, unwrap_option_or_continue};
+use crate::{containers::Queue, time::Instant, unwrap_option_or_continue, error::ErrorList};
 use eframe::epaint::Color32;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -177,13 +177,13 @@ impl CircuitState {
         }
     }
 
-    fn load(data: &crate::io::CircuitStateData, circ: &CircuitStateContext) -> Self {
+    fn load(data: &crate::io::CircuitStateData, circ: &CircuitStateContext, errors: &mut ErrorList) -> Self {
         Self {
             pins: FixedVec::from_option_vec(data.pins.clone()),
             pin_dirs: FixedVec::from_option_vec(data.pin_dirs.clone()),
             internal: match &data.internal {
                 serde_intermediate::Intermediate::Unit => None,
-                data => circ.circuit.imp.read().load_internal(circ, data, false),
+                data => circ.circuit.imp.read().load_internal(circ, data, false, errors),
             },
         }
     }
@@ -484,7 +484,8 @@ impl State {
         }
     }
 
-    pub fn load(data: &crate::io::StateData, board: Arc<CircuitBoard>, id: usize) -> Arc<State> {
+    pub fn load(data: &crate::io::StateData, board: Arc<CircuitBoard>, id: usize, errors: &mut ErrorList) -> Arc<State> {
+        let mut errors = errors.enter_context(|| format!("loading state {}", id));
         let now = Instant::now();
 
         let wires = data.wires.iter().map(|w| w.map(RwLock::new)).collect();
@@ -520,9 +521,12 @@ impl State {
         let mut state_circuits = state.circuits.write();
         for (i, c) in data.circuits.iter().enumerate() {
             let c = unwrap_option_or_continue!(c);
-            let circuit = unwrap_option_or_continue!(board_circuits.get(i));
+            let circuit = board_circuits.get(i);
+            let circuit = errors.report_none(circuit, || format!("circuit {i} did not exist"));
+            let circuit = unwrap_option_or_continue!(circuit);
+            let mut errors = errors.enter_context(|| format!("loading state for circuit {i}"));
             let ctx = CircuitStateContext::new(state.clone(), circuit.clone());
-            let loaded = RwLock::new(CircuitState::load(c, &ctx));
+            let loaded = RwLock::new(CircuitState::load(c, &ctx, &mut errors));
             state_circuits.set(loaded, i);
         }
         drop((board_circuits, state_circuits));

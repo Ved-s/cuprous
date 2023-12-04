@@ -1,11 +1,11 @@
-use std::{collections::HashMap, num::NonZeroU32, sync::Arc};
+use std::{collections::HashMap, num::NonZeroU32, ops::Deref, sync::Arc};
 
 use eframe::epaint::Color32;
-
 
 use crate::{
     circuits::{Circuit, CircuitPin},
     containers::FixedVec,
+    error::{ErrorList, OptionReport},
     state::StateCollection,
     vector::{Vec2i, Vector},
     Direction2, Direction4, DirectionPosItreator, OptionalInt, OptionalNonzeroInt, RwLock, State,
@@ -69,9 +69,11 @@ impl Wire {
                 let pos_diff = current_diff_pos - target_diff_pos;
 
                 if forward {
-                    (target_eq_pos == current_eq_pos && pos_diff > 0).then_some((pos, pos_diff as u32))
+                    (target_eq_pos == current_eq_pos && pos_diff > 0)
+                        .then_some((pos, pos_diff as u32))
                 } else {
-                    (target_eq_pos == current_eq_pos && pos_diff < 0).then_some((pos, -pos_diff as u32))
+                    (target_eq_pos == current_eq_pos && pos_diff < 0)
+                        .then_some((pos, -pos_diff as u32))
                 }
             })
             .min_by(|a, b| a.1.cmp(&b.1))
@@ -87,13 +89,22 @@ impl Wire {
         }
     }
 
-    pub fn load(data: &crate::io::WireData, id: usize, circuits: &FixedVec<Arc<Circuit>>) -> Self {
+    pub fn load(
+        data: &crate::io::WireData,
+        id: usize,
+        circuits: &FixedVec<Arc<Circuit>>,
+        errors: &mut ErrorList,
+    ) -> Self {
+        let mut errors = errors.enter_context(|| format!("loading wire {}", id));
         Self {
             id,
             points: data
                 .points
                 .iter()
-                .map(|(pos, data)| (*pos, WirePoint::load(data, circuits)))
+                .map(|(pos, data)| {
+                    let mut errors = errors.enter_context(|| format!("loading wire point at {}, {}", pos.x(), pos.y())); 
+                    (*pos, WirePoint::load(data, circuits, &mut errors))
+                })
                 .collect(),
         }
     }
@@ -135,16 +146,30 @@ impl WirePoint {
         }
     }
 
-    fn load(data: &crate::io::WirePointData, circuits: &FixedVec<Arc<Circuit>>) -> Self {
+    fn load(
+        data: &crate::io::WirePointData,
+        circuits: &FixedVec<Arc<Circuit>>,
+        errors: &mut ErrorList,
+    ) -> Self {
+        let mut errors = errors.enter_context(|| "connecting pin");
         let pin = data.pin.as_ref().and_then(|data| {
             circuits
                 .get(data.circuit)
+                .report_none(&mut errors, || format!("circuit {} did not exist", data.circuit))
                 .and_then(|circ| {
                     circ.info
                         .read()
                         .pins
                         .iter()
                         .find(|i| i.name == *data.name)
+                        .report_none(&mut errors, || {
+                            format!(
+                                "pin {} did not exist on circuit {} {}",
+                                data.name.deref(),
+                                circ.id,
+                                circ.ty.deref()
+                            )
+                        })
                         .map(|info| info.pin.clone())
                 })
         });
@@ -205,7 +230,6 @@ impl WireNode {
         }
     }
 }
-
 
 #[allow(unused)]
 pub struct FoundWireNode {

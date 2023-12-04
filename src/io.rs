@@ -153,6 +153,7 @@ pub struct CopyPasteData {
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct CircuitPropertyStoreData(pub HashMap<DynStaticStr, Intermediate>);
 
+// TODO: circuit previews don't have proper custom data saving
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct CircuitPreviewData {
     #[serde(skip_serializing_if = "is_prop_store_empty")]

@@ -13,6 +13,7 @@ use serde_intermediate::Intermediate;
 use crate::{
     app::SimulationContext,
     board::CircuitBoard,
+    error::ErrorList,
     io::CircuitCopyData,
     state::{CircuitState, InternalCircuitState, State, StateCollection, WireState},
     string::StringFormatterState,
@@ -296,6 +297,8 @@ pub struct Circuit {
 }
 
 impl Circuit {
+
+    #[allow(clippy::too_many_arguments)] // TODO: cleanup
     pub fn create(
         id: usize,
         pos: Vec2i,
@@ -304,6 +307,7 @@ impl Circuit {
         props_override: Option<CircuitPropertyStore>,
         imp_data: Option<&Intermediate>,
         process_formatting: bool,
+        errors: &mut ErrorList,
     ) -> Arc<Self> {
         let imp = preview.imp.create_impl();
         let props = props_override.unwrap_or_else(|| preview.props.clone());
@@ -344,7 +348,8 @@ impl Circuit {
 
         let mut imp = circuit.imp.write();
         if let Some(data) = imp_data {
-            imp.load(&circuit, data, false);
+            let mut errors = errors.enter_context(|| "loading data");
+            imp.load(&circuit, data, false, &mut errors);
         }
 
         imp.apply_props(&circuit, None);
@@ -603,7 +608,14 @@ pub trait CircuitImpl: Any + Send + Sync {
         ().into()
     }
 
-    fn load(&mut self, circ: &Arc<Circuit>, data: &serde_intermediate::Intermediate, paste: bool) {}
+    fn load(
+        &mut self,
+        circ: &Arc<Circuit>,
+        data: &serde_intermediate::Intermediate,
+        paste: bool,
+        errors: &mut ErrorList,
+    ) {
+    }
 
     /// Load data for internal state. Global states may not be loaded yet.
     fn load_internal(
@@ -611,6 +623,7 @@ pub trait CircuitImpl: Any + Send + Sync {
         ctx: &CircuitStateContext,
         data: &serde_intermediate::Intermediate,
         paste: bool,
+        errors: &mut ErrorList,
     ) -> Option<Box<dyn InternalCircuitState>> {
         None
     }
@@ -658,8 +671,9 @@ impl CircuitPreview {
         Self::new(imp, props)
     }
 
-    pub fn load_copy(&self, data: &CircuitCopyData, ctx: &Arc<SimulationContext>) -> Option<Self> {
-        let imp = self.imp.load_copy_data(&data.imp, &data.internal, ctx)?;
+    pub fn load_copy(&self, data: &CircuitCopyData, ctx: &Arc<SimulationContext>, errors: &mut ErrorList) -> Option<Self> {
+        let mut errors = errors.enter_context(|| format!("loading preview for {}", data.ty.deref()));
+        let imp = self.imp.load_copy_data(&data.imp, &data.internal, ctx, &mut errors)?;
         let props = imp.default_props();
         props.load(&data.props);
         let description = RwLock::new(imp.describe(&props));
@@ -717,6 +731,7 @@ pub trait CircuitPreviewImpl: Send + Sync {
         imp: &serde_intermediate::Intermediate,
         internal: &serde_intermediate::Intermediate,
         ctx: &Arc<SimulationContext>,
+        errors: &mut ErrorList,
     ) -> Option<Box<dyn CircuitPreviewImpl>>;
     fn default_props(&self) -> CircuitPropertyStore;
 }

@@ -60,7 +60,8 @@ impl CircuitPreviewImpl for TemplatePreview {
         &self,
         imp: &serde_intermediate::Intermediate,
         internal: &serde_intermediate::Intermediate,
-        ctx: &Arc<SimulationContext>
+        ctx: &Arc<SimulationContext>,
+        errors: &mut ErrorList,
     ) -> Option<Box<dyn CircuitPreviewImpl>> {
         Some(Box::new(TemplatePreview {}))
     }

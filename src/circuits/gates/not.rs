@@ -12,7 +12,7 @@ use crate::{
     describe_directional_circuit,
     state::WireState,
     vector::{Vec2f, Vec2u},
-    Direction4, DynStaticStr, PaintContext,
+    Direction4, DynStaticStr, PaintContext, error::ErrorList,
 };
 
 struct Not {
@@ -144,9 +144,10 @@ impl CircuitPreviewImpl for NotPreview {
 
     fn load_copy_data(
         &self,
-        _: &serde_intermediate::Intermediate,
-        _: &serde_intermediate::Intermediate,
-        _: &Arc<SimulationContext>,
+        _imp: &serde_intermediate::Intermediate,
+        _internal: &serde_intermediate::Intermediate,
+        _ctx: &Arc<SimulationContext>,
+        _errors: &mut ErrorList,
     ) -> Option<Box<dyn CircuitPreviewImpl>> {
         Some(Box::new(NotPreview {}))
     }
