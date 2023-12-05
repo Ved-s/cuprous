@@ -167,8 +167,8 @@ impl CircuitState {
 
     pub fn save(&self) -> crate::io::CircuitStateData {
         crate::io::CircuitStateData {
-            pins: self.pins.inner().clone(),
-            pin_dirs: self.pin_dirs.inner().clone(),
+            pins: self.pins.inner.clone(),
+            pin_dirs: self.pin_dirs.inner.clone(),
             internal: self
                 .internal
                 .as_ref()
@@ -463,14 +463,14 @@ impl State {
             wires: self
                 .wires
                 .read()
-                .inner()
+                .inner
                 .iter()
                 .map(|ws| ws.as_ref().map(|ws| *ws.read()))
                 .collect(),
             circuits: self
                 .circuits
                 .read()
-                .inner()
+                .inner
                 .iter()
                 .map(|cs| cs.as_ref().map(|cs| cs.read().save()))
                 .collect(),

@@ -120,6 +120,11 @@ pub struct CircuitBoardData {
     pub single_outer_control: bool,
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+pub struct SaveStateData {
+    pub boards: Vec<CircuitBoardData>
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct CircuitCopyData {
     pub ty: DynStaticStr,

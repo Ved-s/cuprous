@@ -16,7 +16,7 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub struct FixedVec<T> {
-    vec: Vec<Option<T>>,
+    pub inner: Vec<Option<T>>,
     first_free: Option<usize>,
 }
 
@@ -25,7 +25,7 @@ impl<T: Serialize> Serialize for FixedVec<T> {
     where
         S: serde::Serializer,
     {
-        self.vec.serialize(serializer)
+        self.inner.serialize(serializer)
     }
 }
 impl<'de, T: Deserialize<'de>> Deserialize<'de> for FixedVec<T> {
@@ -38,7 +38,7 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for FixedVec<T> {
             Some(_) => None,
             None => Some(i),
         });
-        Ok(Self { vec, first_free })
+        Ok(Self { inner: vec, first_free })
     }
 }
 
@@ -57,14 +57,14 @@ impl<T> FixedVec<T> {
 
     pub fn new() -> Self {
         Self {
-            vec: vec![],
+            inner: vec![],
             first_free: None,
         }
     }
 
     pub fn from_vec(mut vec: Vec<T>) -> Self {
         Self {
-            vec: vec.drain(..).map(|v| Some(v)).collect(),
+            inner: vec.drain(..).map(|v| Some(v)).collect(),
             first_free: None,
         }
     }
@@ -75,17 +75,17 @@ impl<T> FixedVec<T> {
             .enumerate()
             .find(|(_, v)| v.is_none())
             .map(|(i, _)| i);
-        Self { vec, first_free }
+        Self { inner: vec, first_free }
     }
 
     pub fn get_nth_existing_index(&self, pos: usize) -> Option<usize> {
-        if pos >= self.vec.len() {
+        if pos >= self.inner.len() {
             return None;
         }
 
         let mut n = 0;
-        for i in 0..self.vec.len() {
-            if self.vec[i].is_some() {
+        for i in 0..self.inner.len() {
+            if self.inner[i].is_some() {
                 if n == pos {
                     return Some(i);
                 }
@@ -100,13 +100,13 @@ impl<T> FixedVec<T> {
         pos: usize,
         f: impl Fn(&T) -> bool,
     ) -> Option<usize> {
-        if pos >= self.vec.len() {
+        if pos >= self.inner.len() {
             return None;
         }
 
         let mut n = 0;
-        for i in 0..self.vec.len() {
-            if self.vec[i].as_ref().is_some_and(&f) {
+        for i in 0..self.inner.len() {
+            if self.inner[i].as_ref().is_some_and(&f) {
                 if n == pos {
                     return Some(i);
                 }
@@ -117,36 +117,36 @@ impl<T> FixedVec<T> {
     }
 
     pub fn get(&self, pos: usize) -> Option<&T> {
-        self.vec.get(pos)?.as_ref()
+        self.inner.get(pos)?.as_ref()
     }
 
     pub fn get_clone(&self, pos: usize) -> Option<T>
     where
         T: Clone,
     {
-        self.vec.get(pos)?.as_ref().cloned()
+        self.inner.get(pos)?.as_ref().cloned()
     }
 
     pub fn get_mut(&mut self, pos: usize) -> Option<&mut T> {
-        self.vec.get_mut(pos)?.as_mut()
+        self.inner.get_mut(pos)?.as_mut()
     }
 
     pub fn get_or_create_mut(&mut self, pos: usize, creator: impl FnOnce() -> T) -> &mut T {
-        if pos >= self.vec.len() {
+        if pos >= self.inner.len() {
             return self.set(creator(), pos).value_ref;
         }
         self.update_first_free_set(pos);
 
-        let option = &mut self.vec[pos];
+        let option = &mut self.inner[pos];
         option.get_or_insert_with(creator)
     }
 
     pub fn remove(&mut self, pos: usize) -> Option<T> {
-        if pos >= self.vec.len() {
+        if pos >= self.inner.len() {
             return None;
         }
 
-        let item = &mut self.vec[pos];
+        let item = &mut self.inner[pos];
 
         if item.is_some() {
             match &mut self.first_free {
@@ -157,11 +157,11 @@ impl<T> FixedVec<T> {
 
         let value = item.take();
 
-        if pos == self.vec.len() - 1 {
-            self.vec.remove(pos);
+        if pos == self.inner.len() - 1 {
+            self.inner.remove(pos);
             self.strip_inner();
             if let Some(v) = self.first_free {
-                if v >= self.vec.len() {
+                if v >= self.inner.len() {
                     self.first_free = None;
                 }
             }
@@ -173,39 +173,39 @@ impl<T> FixedVec<T> {
     }
 
     fn strip_inner(&mut self) {
-        while !self.vec.is_empty() && self.vec[self.vec.len() - 1].is_none() {
-            self.vec.remove(self.vec.len() - 1);
+        while !self.inner.is_empty() && self.inner[self.inner.len() - 1].is_none() {
+            self.inner.remove(self.inner.len() - 1);
         }
     }
 
     pub fn exists(&self, pos: usize) -> bool {
-        self.vec.get(pos).is_some_and(|v| v.is_some())
+        self.inner.get(pos).is_some_and(|v| v.is_some())
     }
 
     pub fn set(&mut self, value: T, into: usize) -> VecSetResult<'_, T> {
-        if into >= self.vec.len() {
-            if self.vec.len() != into && self.first_free.is_none() {
-                self.first_free = Some(self.vec.len())
+        if into >= self.inner.len() {
+            if self.inner.len() != into && self.first_free.is_none() {
+                self.first_free = Some(self.inner.len())
             }
-            self.vec.reserve(into + 1 - self.vec.len());
-            while self.vec.len() < into {
-                self.vec.push(None)
+            self.inner.reserve(into + 1 - self.inner.len());
+            while self.inner.len() < into {
+                self.inner.push(None)
             }
-            self.vec.push(Some(value));
+            self.inner.push(Some(value));
             return VecSetResult {
-                value_ref: self.vec[into].as_mut().unwrap(),
+                value_ref: self.inner[into].as_mut().unwrap(),
                 prev: None,
             };
         };
 
         self.update_first_free_set(into);
 
-        let prev = self.vec.get_mut(into).unwrap().replace(value);
+        let prev = self.inner.get_mut(into).unwrap().replace(value);
 
         self.test_free_correct();
 
         return VecSetResult {
-            value_ref: self.vec[into].as_mut().unwrap(),
+            value_ref: self.inner[into].as_mut().unwrap(),
             prev,
         };
     }
@@ -213,7 +213,7 @@ impl<T> FixedVec<T> {
     fn update_first_free_set(&mut self, into: usize) {
         if let Some(ff) = self.first_free {
             if ff == into {
-                self.first_free = (ff + 1..self.vec.len()).find(|i| self.vec[*i].is_none());
+                self.first_free = (ff + 1..self.inner.len()).find(|i| self.inner[*i].is_none());
             }
         }
     }
@@ -221,13 +221,13 @@ impl<T> FixedVec<T> {
     pub fn first_free_pos(&self) -> usize {
         match self.first_free {
             Some(v) => v,
-            None => self.vec.len(),
+            None => self.inner.len(),
         }
     }
     /// Warning: will not return intil `f` returns true
     pub fn first_free_pos_filtered(&self, f: impl Fn(usize) -> bool) -> usize {
         for i in 0.. {
-            if self.vec.get(i).and_then(|o| o.as_ref()).is_none() && f(i) {
+            if self.inner.get(i).and_then(|o| o.as_ref()).is_none() && f(i) {
                 return i;
             }
         }
@@ -236,17 +236,13 @@ impl<T> FixedVec<T> {
 
     pub fn iter(&self) -> FixedVecIterator<'_, T> {
         FixedVecIterator {
-            vec: &self.vec,
+            vec: &self.inner,
             pos: 0,
         }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.vec.is_empty()
-    }
-
-    pub fn inner(&self) -> &Vec<Option<T>> {
-        &self.vec
+        self.inner.is_empty()
     }
 
     fn test_free_correct(&self) {
@@ -254,12 +250,12 @@ impl<T> FixedVec<T> {
     }
 
     pub fn clear(&mut self) {
-        self.vec.clear();
+        self.inner.clear();
         self.first_free = None;
     }
 
     fn len(&self) -> usize {
-        self.vec.iter().filter(|o| o.is_some()).count()
+        self.inner.iter().filter(|o| o.is_some()).count()
     }
 
     pub fn drain(&mut self, range: impl RangeBounds<usize>) -> FixedVecDrain<'_, T> {
@@ -271,10 +267,10 @@ impl<T> FixedVec<T> {
         let end = match range.end_bound() {
             Bound::Included(i) => *i + 1,
             Bound::Excluded(e) => *e,
-            Bound::Unbounded => self.vec.len(),
+            Bound::Unbounded => self.inner.len(),
         };
-        if end > self.vec.len() {
-            panic!("invalid: end {end} > length {}", self.vec.len());
+        if end > self.inner.len() {
+            panic!("invalid: end {end} > length {}", self.inner.len());
         }
         if end < start {
             panic!("invalid: end {end} < start {start}");
@@ -325,14 +321,14 @@ impl<T> Drop for FixedVecDrain<'_, T> {
         }
 
         for i in self.start+self.pos..self.start+self.len {
-            self.vec.vec[i] = None;
+            self.vec.inner[i] = None;
         }
         self.vec.strip_inner();
         self.vec.first_free = match self.vec.first_free {
             None => None,
             Some(ff) => {
                 let ff = ff.min(self.start);
-                if ff >= self.vec.vec.len() {
+                if ff >= self.vec.inner.len() {
                     None
                 }
                 else {
@@ -812,7 +808,7 @@ impl<T: Serialize, H: BuildHasher> Serialize for RandomQueue<T, H> {
     where
         S: serde::Serializer,
     {
-        self.vec.inner().serialize(serializer)
+        self.vec.inner.serialize(serializer)
     }
 }
 

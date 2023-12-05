@@ -4,15 +4,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>Cuprous Logic Simulator</title>
     <script src="coi-serviceworker.js"></script>
-    <script type="module">
-        import init, { web_main } from "./wasm/cuprous.js"
-
-        async function run() {
-            await init();
-            await web_main("main");
-        }
-        run()
-    </script>
+    <script type="module" src="/web/index.js"></script>
 </head>
 <body>
     <style> 

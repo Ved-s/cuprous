@@ -1109,3 +1109,55 @@ pub fn rect_properties_editor(
         .map(|resp| resp.inner)
         .unwrap_or_default()
 }
+
+#[macro_export]
+macro_rules! __count {
+    () => (0usize);
+    ( $x:tt $($xs:tt)* ) => (1usize + $crate::__count!($($xs)*));
+}
+
+// https://gist.github.com/RocketPrinter/d292d1c7a5a6066139f8daf1901a0048
+/// ONE MACRO TO RULE ALL THE DUMB TRICKS
+#[macro_export]
+macro_rules! evenly_spaced_out {
+    ($ui:ident, horizontal, $(|$item_ui:ident|$item: tt,)+) => {
+        $ui.horizontal(|ui|{
+            const SIZE: usize = $crate::__count!($($item_ui)*);
+
+            let id = ui.id().with("_ultimate_centerer");
+
+            let mut width_arr = ui.data(|data|data.get_temp::<[f32;SIZE]>(id).unwrap_or_default());
+            let expected_space = (ui.available_width() - width_arr.iter().sum::<f32>()) / (SIZE + 1) as f32;
+
+            let mut width_changed = false;
+            // != 0 if the previous element has changed width
+            let mut last_width_change = 0.;
+
+            let mut i = 0;
+            $(
+                // if the previous item was longer or shorter than it needs to be we account for that so the rest of the items don't shift
+                ui.add_space((expected_space -  last_width_change).max(0.));
+
+                let new_width = ui.scope(|$item_ui| $item).response.rect.width();
+
+                #[allow(unused_assignments)]{last_width_change = new_width - width_arr[i];}
+
+                if width_arr[i] != new_width {
+                    width_changed = true;
+                    width_arr[i] = new_width;
+                }
+
+                #[allow(unused_assignments)]{i+=1;}
+            )+
+
+            ui.data_mut(|data|data.insert_temp(id, width_arr));
+            if width_changed {
+                ui.ctx().request_repaint();
+            }
+        });
+
+    };
+    ($ui:ident, vertical, $($item: tt,)+) => {
+        // to implement when needed
+    };
+}

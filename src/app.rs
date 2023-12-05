@@ -1,7 +1,12 @@
-use std::{collections::HashMap, ops::Deref, sync::Arc};
+use std::{
+    collections::HashMap,
+    ops::{Deref, Not},
+    sync::Arc,
+};
 
 use eframe::{
-    egui::{self, Margin, ScrollArea},
+    egui::{self, Frame, Margin, RichText, ScrollArea, Ui},
+    epaint::Rounding,
     CreationContext,
 };
 use emath::{vec2, Align2};
@@ -10,7 +15,8 @@ use crate::{
     board::{ActiveCircuitBoard, CircuitBoard, StoredCircuitBoard},
     circuits::{self, CircuitPreview, CircuitPreviewImpl},
     error::{ErrorList, ResultReport},
-    ui::editor::CircuitBoardEditor,
+    evenly_spaced_out,
+    ui::{editor::CircuitBoardEditor, side_panel::PanelSide},
     DynStaticStr, RwLock,
 };
 
@@ -19,11 +25,22 @@ pub struct SimulationContext {
     pub boards: RwLock<HashMap<u128, StoredCircuitBoard>>,
 }
 
+impl SimulationContext {
+    pub fn reset(&self) {
+        for board in self.boards.write().drain() {
+            board.1.board.destroy();
+        }
+    }
+}
+
 pub struct App {
     editor: crate::ui::editor::CircuitBoardEditor,
     designer: Option<crate::ui::designer::Designer>,
 
     state_loading_errors: ErrorList,
+    state_saving_errors: ErrorList,
+    state_name: Option<String>,
+    state_to_load: Option<(Option<String>, crate::io::SaveStateData)>,
     pub sim: Arc<SimulationContext>,
 }
 
@@ -55,16 +72,79 @@ impl eframe::App for App {
             //Instant::now() - start_time
         };
 
+        #[cfg(feature = "wasm")]
+        {
+            if let Some((name, string)) = crate::web::take_state_input() {
+                let state = ron::from_str::<crate::io::SaveStateData>(&string).report_error(
+                    &mut self
+                        .state_loading_errors
+                        .enter_context(|| "deserializing savestate"),
+                );
+
+                if let Some(state) = state {
+                    self.state_to_load = Some((Some(name), state));
+                }
+            }
+        }
+
+        let dropped_file = ctx.input(|input| {
+            input.raw.dropped_files.get(0).and_then(|f| {
+                let text = f
+                    .path
+                    .as_ref()
+                    .and_then(|p| {
+                        std::fs::read_to_string(p).report_error(&mut self.state_loading_errors)
+                    })
+                    .or_else(|| {
+                        f.bytes.as_ref().and_then(|bytes| {
+                            std::str::from_utf8(bytes)
+                                .report_error(&mut self.state_loading_errors)
+                                .map(String::from)
+                        })
+                    });
+                
+                text.map(|t| {
+                    let name = f.name.is_empty().not().then(|| f.name.clone()).or_else(|| {
+                        f.path
+                            .as_ref()
+                            .and_then(|p| p.file_name())
+                            .map(|n| n.to_string_lossy().into_owned())
+                    });
+                    (name, t)
+                })
+            })
+        });
+        if let Some((name, string)) = dropped_file {
+            let state = ron::from_str::<crate::io::SaveStateData>(&string).report_error(
+                &mut self
+                    .state_loading_errors
+                    .enter_context(|| "deserializing savestate"),
+            );
+
+            if let Some(state) = state {
+                self.state_to_load = Some((name, state));
+            }
+        }
+
         egui::CentralPanel::default()
             .frame(egui::Frame::central_panel(ctx.style().as_ref()).inner_margin(Margin::same(0.0)))
             .show(ctx, |ui| {
+                match &mut self.designer {
+                    Some(designer) => {
+                        designer.background_update(ui);
+                    }
+                    None => {
+                        self.editor.background_update(ui);
+                    }
+                };
+
                 let close_designer = match &mut self.designer {
                     Some(designer) => {
-                        let result = designer.update(ui);
+                        let result = designer.ui_update(ui);
                         result.close
                     }
                     None => {
-                        let result = self.editor.update(ui);
+                        let result = self.editor.ui_update(ui);
 
                         if let Some(designer) = result.designer_request {
                             self.designer = Some(designer);
@@ -72,6 +152,8 @@ impl eframe::App for App {
                         false
                     }
                 };
+
+                self.bottom_panel(ui);
 
                 if close_designer {
                     self.designer = None;
@@ -104,21 +186,123 @@ impl eframe::App for App {
             if !open {
                 self.state_loading_errors.clear();
             }
+        } else if !self.state_saving_errors.is_empty() {
+            let mut open = true;
+            egui::Window::new("Loading errors")
+                .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
+                .fixed_pos(ctx.screen_rect().center())
+                .resizable(false)
+                .open(&mut open)
+                .collapsible(false)
+                .show(ctx, |ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.label("Some errors were encountered while saving save state")
+                    });
+                    ui.add_space(10.0);
+                    ScrollArea::new([false, true])
+                        .min_scrolled_height(200.0)
+                        .show(ui, |ui| {
+                            self.state_saving_errors.show_ui(ui);
+                        });
+                });
+            if !open {
+                self.state_saving_errors.clear();
+            }
+        } else if let Some(mut state) = self.state_to_load.take() {
+            let mut open = true;
+            let mut discard_state = false;
+            let title = format!("Loading {}", state.0.as_deref().unwrap_or("state"));
+            egui::Window::new(title)
+                .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
+                .fixed_pos(ctx.screen_rect().center())
+                .resizable(false)
+                .open(&mut open)
+                .collapsible(false)
+                .show(ctx, |ui| {
+                    ui.vertical_centered(|ui| {
+                    ui.label("Save existing before loading?");
+                    ui.add_space(20.0);
+
+                    #[derive(Debug, Clone, Copy)]
+                    enum Action {
+                        Yes,
+                        No,
+                        Cancel,
+                    }
+                    let mut action = None;
+
+                    evenly_spaced_out! {
+                        ui, horizontal,
+                        |ui| {
+                            if ui.button(" Yes ").clicked() { action = Some(Action::Yes); };
+                            if ui.button(" No ").clicked() { action = Some(Action::No); };
+                            if ui.button(" Cancel ").clicked() { action = Some(Action::Cancel); }
+                        },
+                    }
+
+                    if let Some(action) = action {
+                        match action {
+                            Action::Cancel => {
+                                discard_state = true;
+                            }
+                            _ => {
+                                let c = if matches!(action, Action::Yes) {
+                                    self.save_state()
+                                } else {
+                                    true
+                                };
+                                if c {
+                                    self.sim.reset();
+                                    Self::load_boards(
+                                        &state.1.boards,
+                                        &self.sim,
+                                        &mut self.state_loading_errors,
+                                    );
+                                    self.state_name = state.0.take();
+
+                                    let boards = self.sim.boards.read();
+                                    for board in boards.values() {
+                                        board.board.activate();
+                                    }
+
+                                    let board = boards.values().next().expect("Boards must exist!");
+                                    self.editor.board =
+                                        ActiveCircuitBoard::new_main(board.board.clone());
+
+                                    discard_state = true;
+                                }
+                            }
+                        }
+                    }
+                });
+                    ui.add_space(10.0);
+                    ScrollArea::new([false, true])
+                        .min_scrolled_height(200.0)
+                        .show(ui, |ui| {
+                            self.state_saving_errors.show_ui(ui);
+                        });
+                });
+            if !open || discard_state {
+                self.state_to_load = None;
+            } else {
+                self.state_to_load = Some(state)
+            }
         }
     }
 
-    fn save(&mut self, _storage: &mut dyn eframe::Storage) {
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
         if !self.state_loading_errors.is_empty() {
             return;
         }
 
-        let boards = self.sim.boards.read();
-        let locks: Vec<_> = boards.values().map(|b| b.board.sim_lock.write()).collect();
-        let data: Vec<_> = boards.values().map(|b| b.board.save(false)).collect();
-
-        drop(locks);
-
-        _storage.set_string("boards", ron::to_string(&data).unwrap());
+        let boards = self.save_boards();
+        if let Some(string) = ron::to_string(&boards).report_error(
+            &mut self
+                .state_saving_errors
+                .enter_context(|| "serializing savestate"),
+        ) {
+            storage.set_string("boards", string);
+        }
 
         let previews = crate::io::CircuitPreviewCollectionData(HashMap::from_iter(
             self.sim
@@ -126,7 +310,7 @@ impl eframe::App for App {
                 .iter()
                 .filter_map(|(ty, p)| p.save().map(|d| (ty.clone(), d))),
         ));
-        _storage.set_string("previews", ron::to_string(&previews).unwrap());
+        storage.set_string("previews", ron::to_string(&previews).unwrap());
     }
 }
 
@@ -175,15 +359,7 @@ impl App {
         if let Some(storage) = cc.storage {
             if let Some(boards) = storage.get_string("boards") {
                 match ron::from_str::<Vec<crate::io::CircuitBoardData>>(&boards) {
-                    Ok(data) => {
-                        for data in &data {
-                            let board = CircuitBoard::load(data, &ctx, &mut errors);
-                            let uid = board.uid;
-                            ctx.boards
-                                .write()
-                                .insert(uid, StoredCircuitBoard::new(board));
-                        }
-                    }
+                    Ok(data) => Self::load_boards(&data, &ctx, &mut errors),
                     Err(e) => errors.enter_context(|| "loading board data").push_error(e),
                 }
             } else if let Some(main_board) = storage.get_string("board") {
@@ -238,7 +414,188 @@ impl App {
             editor,
             designer: None,
             state_loading_errors: errors,
+            state_saving_errors: Default::default(),
             sim: ctx,
+            state_name: None,
+            state_to_load: None,
+        }
+    }
+
+    fn bottom_panel(&mut self, ui: &mut Ui) {
+        type TabFn = fn(&mut App, &mut Ui);
+        let tabs: &[(TabFn, &str)] = &[
+            (Self::state_tab, "State"),
+            #[cfg(debug_assertions)]
+            (Self::debug_tab, "Debug"),
+        ];
+
+        crate::ui::side_panel::SidePanel::new(PanelSide::Bottom, "bottom_panel")
+            .frame(
+                Frame::side_top_panel(ui.style())
+                    .rounding(Rounding {
+                        ne: 5.0,
+                        nw: 5.0,
+                        se: 0.0,
+                        sw: 0.0,
+                    })
+                    .outer_margin(Margin::symmetric(8.0, 0.0))
+                    .inner_margin(Margin::symmetric(5.0, 5.0))
+                    .stroke(ui.style().visuals.window_stroke),
+            )
+            .show_separator_line(false)
+            .default_tab(Some(0))
+            .show(
+                ui,
+                tabs.len(),
+                |i| tabs[i].1.into(),
+                |tab, ui| (tabs[tab].0)(self, ui),
+            );
+    }
+
+    #[cfg(debug_assertions)]
+    fn debug_tab<'a>(&'a mut self, ui: &'a mut Ui) {
+        if ui.button("Reset simulation").clicked() {
+            self.sim.reset();
+        }
+    }
+
+    fn state_tab(&mut self, ui: &mut Ui) {
+        ui.add_space(5.0);
+        ui.horizontal(|ui| {
+            ui.add_space(5.0);
+            ui.label("Drag and drop save state files here to load them,\nor use buttons below for manual selection:");
+        });
+        ui.add_space(5.0);
+        ui.horizontal(|ui| {
+            ui.add_space(5.0);
+            if ui
+                .button(RichText::new(" Save state ").size(14.0))
+                .clicked()
+            {
+                self.save_state();
+            }
+
+            if ui
+                .button(RichText::new(" Load state ").size(14.0))
+                .clicked()
+            {
+                self.load_state();
+            }
+        });
+        ui.add_space(10.0);
+    }
+
+    fn save_state(&mut self) -> bool {
+        #[cfg(not(feature = "wasm"))]
+        {
+            use std::io::Write;
+            let fd = rfd::FileDialog::new()
+                .set_title("Save state")
+                .set_file_name(
+                    self.state_name
+                        .clone()
+                        .unwrap_or_else(|| "state.ron".into()),
+                )
+                .add_filter("RON file", &["ron"]);
+            let path = fd.save_file();
+
+            if let Some(path) = path {
+                let boards = self.save_boards();
+
+                let save_state = crate::io::SaveStateData { boards };
+                let string = ron::to_string(&save_state).report_error(
+                    &mut self
+                        .state_saving_errors
+                        .enter_context(|| "serializing savestate"),
+                );
+                if let Some(string) = string {
+                    return std::fs::File::create(path)
+                        .and_then(|mut f| f.write_all(string.as_bytes()))
+                        .report_error(
+                            &mut self
+                                .state_saving_errors
+                                .enter_context(|| "saving savestate"),
+                        )
+                        .is_some();
+                }
+            }
+            false
+        }
+        #[cfg(feature = "wasm")]
+        {
+            let boards = self.save_boards();
+
+            let save_state = crate::io::SaveStateData { boards };
+            let string = ron::to_string(&save_state).report_error(
+                &mut self
+                    .state_saving_errors
+                    .enter_context(|| "serializing savestate"),
+            );
+            if let Some(string) = string {
+                let name = self
+                    .state_name
+                    .clone()
+                    .unwrap_or_else(|| "state.ron".into());
+                crate::web::save_state(name, string);
+            }
+            true
+        }
+    }
+
+    fn load_state(&mut self) {
+        #[cfg(not(feature = "wasm"))]
+        {
+            let fd = rfd::FileDialog::new()
+                .set_title("Load state")
+                .add_filter("RON file", &["ron"]);
+            let path = fd.pick_file();
+            if let Some(path) = path {
+                let string = std::fs::read_to_string(&path).report_error(
+                    &mut self
+                        .state_loading_errors
+                        .enter_context(|| "loading savestate"),
+                );
+                if let Some(string) = string {
+                    let state = ron::from_str::<crate::io::SaveStateData>(&string).report_error(
+                        &mut self
+                            .state_loading_errors
+                            .enter_context(|| "deserializing savestate"),
+                    );
+
+                    if let Some(state) = state {
+                        self.state_to_load = Some((
+                            path.file_name().map(|n| n.to_string_lossy().into_owned()),
+                            state,
+                        ));
+                    }
+                }
+            }
+        }
+        #[cfg(feature = "wasm")]
+        {
+            crate::web::request_load();
+        }
+    }
+
+    fn save_boards(&mut self) -> Vec<crate::io::CircuitBoardData> {
+        let boards = self.sim.boards.read();
+        let locks: Vec<_> = boards.values().map(|b| b.board.sim_lock.write()).collect();
+        let res = boards.values().map(|b| b.board.save(false)).collect();
+        drop(locks);
+        res
+    }
+
+    fn load_boards(
+        data: &Vec<crate::io::CircuitBoardData>,
+        ctx: &Arc<SimulationContext>,
+        errors: &mut ErrorList,
+    ) {
+        for data in data {
+            let board = CircuitBoard::load(data, ctx, errors);
+            let uid = board.uid;
+            ctx.boards
+                .write()
+                .insert(uid, StoredCircuitBoard::new(board));
         }
     }
 }

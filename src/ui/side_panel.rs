@@ -238,8 +238,8 @@ impl SidePanel {
             if let Some(tab_width) = tab_width {
                 let ui_min_size = ui.min_size();
                 let min_size = match side {
-                    PanelSide::Top | PanelSide::Bottom => vec2(ui_min_size.x, ui_min_size.y.max(tab_width - 20.0)),
-                    PanelSide::Left | PanelSide::Right => vec2(ui_min_size.x.max(tab_width - 20.0), ui_min_size.y),
+                    PanelSide::Top | PanelSide::Bottom => vec2(ui_min_size.x, ui_min_size.y.max(tab_width * 0.5)),
+                    PanelSide::Left | PanelSide::Right => vec2(ui_min_size.x.max(tab_width * 0.5), ui_min_size.y),
                 };
                 ui.set_min_size(min_size);
             }
@@ -510,12 +510,11 @@ impl SidePanel {
             };
         }
 
-        let outer_pos = pos.y + lineheight;
         let total_size = match side {
-            PanelSide::Top => outer_pos - rem_rect.top(),
-            PanelSide::Left => outer_pos - rem_rect.left(),
-            PanelSide::Right => outer_pos - rem_rect.right(),
-            PanelSide::Bottom => outer_pos - rem_rect.bottom(),
+            PanelSide::Top => (pos.y + lineheight) - rem_rect.top(),
+            PanelSide::Left => (pos.y + lineheight) - rem_rect.left(),
+            PanelSide::Right => rem_rect.right() - (pos.y - lineheight),
+            PanelSide::Bottom => rem_rect.bottom() - (pos.y - lineheight),
         };
 
         let mut width_cache = state.map(|s| s.tab_width_cache).unwrap_or_default();
@@ -536,11 +535,11 @@ impl SidePanel {
 
         let rem_rect = match side {
             PanelSide::Top => Rect::from_min_size(
-                pos2(panel_rect.left(), outer_pos),
+                pos2(panel_rect.left(), pos.y + lineheight),
                 vec2(panel_rect.width(), rem_rect.height() - total_size),
             ),
             PanelSide::Left => Rect::from_min_size(
-                pos2(outer_pos, panel_rect.top()),
+                pos2(pos.y + lineheight, panel_rect.top()),
                 vec2(rem_rect.width() - total_size, panel_rect.height()),
             ),
             PanelSide::Right => Rect::from_min_size(

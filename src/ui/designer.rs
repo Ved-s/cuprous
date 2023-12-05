@@ -263,7 +263,7 @@ impl Designer {
         }
     }
 
-    pub fn update(&mut self, ui: &mut Ui) -> DesignerResponse {
+    pub fn background_update(&mut self, ui: &mut Ui) {
         let rect = ui.max_rect();
 
         self.pan_zoom.update(ui, rect, self.selected_id.is_none());
@@ -696,6 +696,13 @@ impl Designer {
                 }
             }
         }
+    }
+
+    pub fn ui_update(&mut self, ui: &mut Ui) -> DesignerResponse {
+
+        let designs = self.storage.clone();
+        let mut designs = designs.write();
+        let design = designs.current_mut();
 
         self.components_ui(ui, design);
         self.properties_ui(ui, design);

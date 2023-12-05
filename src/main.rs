@@ -68,6 +68,11 @@ mod graphics;
 mod io;
 mod path;
 mod time;
+
+#[cfg(feature = "wasm")]
+mod web;
+
+#[macro_use]
 mod ui;
 
 #[cfg(all(feature = "deadlock_detection", not(feature = "single_thread")))]
@@ -89,6 +94,7 @@ fn main() {
         let options = eframe::NativeOptions {
             app_id: Some("cuprous".into()),
             follow_system_theme: false,
+            drag_and_drop_support: true,
             ..Default::default()
         };
 

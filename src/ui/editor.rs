@@ -78,7 +78,7 @@ struct ComponentsUiResponse {
 
 pub struct CircuitBoardEditor {
     pan_zoom: PanAndZoom,
-    board: ActiveCircuitBoard,
+    pub board: ActiveCircuitBoard,
 
     debug: bool,
     errors: ErrorList,
@@ -228,7 +228,7 @@ impl CircuitBoardEditor {
         }
     }
 
-    pub fn update(&mut self, ui: &mut Ui) -> EditorResponse {
+    pub fn background_update(&mut self, ui: &mut Ui) {
         let rect = ui.max_rect();
         self.pan_zoom.update(ui, rect, self.selected_id.is_none());
 
@@ -368,6 +368,9 @@ impl CircuitBoardEditor {
                 }
             }
         }
+    }
+
+    pub fn ui_update(&mut self, ui: &mut Ui) -> EditorResponse {
 
         let components_response = self.components_ui(ui);
 
@@ -877,7 +880,9 @@ impl CircuitBoardEditor {
 
                             if let Some(uid) = queued_deletion {
                                 let mut boards = self.sim.boards.write();
-                                boards.remove(&uid);
+                                if let Some(board) = boards.remove(&uid) {
+                                    board.board.destroy();
+                                };
                                 if self.board.board.uid == uid {
                                     let board = boards.values().next().expect("Boards must exist!");
                                     self.board = ActiveCircuitBoard::new_main(board.board.clone());

@@ -232,14 +232,14 @@ impl CircuitBoard {
             wires: self
                 .wires
                 .read()
-                .inner()
+                .inner
                 .iter()
                 .map(|w| w.as_ref().map(|w| w.save()))
                 .collect(),
             circuits: self
                 .circuits
                 .read()
-                .inner()
+                .inner
                 .iter()
                 .map(|c| c.as_ref().map(|c| c.save()))
                 .collect(),
@@ -247,7 +247,7 @@ impl CircuitBoard {
                 .states
                 .states
                 .read()
-                .inner()
+                .inner
                 .iter()
                 .map(|s| s.as_ref().and_then(|s| s.is_being_used().then(|| s.save())))
                 .collect(),
@@ -368,6 +368,15 @@ impl CircuitBoard {
         drop(circuits);
 
         self.states.initialize();
+    }
+
+    pub fn destroy(&self) {
+        self.states.states.write().inner.drain(..).for_each(|s| {
+            if let Some(state) = s {
+                state.set_frozen(true);
+            }
+        });
+        self.circuits.write().clear();
     }
 }
 
@@ -2364,7 +2373,7 @@ impl CircuitDesignStorage {
             current: self.current,
             designs: self
                 .designs
-                .inner()
+                .inner
                 .iter()
                 .map(|d| {
                     d.as_ref().and_then(|d| {
