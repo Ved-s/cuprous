@@ -2,9 +2,8 @@ use std::{any::TypeId, collections::HashSet, hash::Hash, ops::Deref, sync::Arc};
 
 use eframe::{
     egui::{
-        CollapsingHeader, CursorIcon, DragValue, FontSelection, Grid, Id, Key,
-        Label, Margin, PointerButton, Response, Sense, TextStyle, Ui, Widget,
-        WidgetInfo, WidgetText, WidgetType,
+        CollapsingHeader, CursorIcon, DragValue, FontSelection, Grid, Id, Key, Label, Margin,
+        PointerButton, Response, Sense, TextStyle, Ui, Widget, WidgetInfo, WidgetText, WidgetType,
     },
     epaint::{Color32, Rounding, Stroke, TextShape},
 };
@@ -1063,7 +1062,9 @@ impl RectPropertyChanges {
     }
 
     pub fn iter(self) -> impl Iterator<Item = RectProperty> {
-        RectProperty::ALL.into_iter().filter(move |prop| self.get_prop(*prop))
+        RectProperty::ALL
+            .into_iter()
+            .filter(move |prop| self.get_prop(*prop))
     }
 }
 
@@ -1091,8 +1092,16 @@ pub fn rect_properties_editor(
                     let resp = DragValue::new(&mut value).speed(0.05).ui(ui);
                     if resp.changed() {
                         match prop {
-                            RectProperty::Top => { let height = rect.height(); rect.set_top(value); rect.set_height(height); },
-                            RectProperty::Left => { let width = rect.width(); rect.set_left(value); rect.set_width(width); },
+                            RectProperty::Top => {
+                                let height = rect.height();
+                                rect.set_top(value);
+                                rect.set_height(height);
+                            }
+                            RectProperty::Left => {
+                                let width = rect.width();
+                                rect.set_left(value);
+                                rect.set_width(width);
+                            }
                             RectProperty::Width => rect.set_width(value),
                             RectProperty::Height => rect.set_height(value),
                         }
@@ -1160,4 +1169,60 @@ macro_rules! evenly_spaced_out {
     ($ui:ident, vertical, $($item: tt,)+) => {
         // to implement when needed
     };
+}
+
+pub fn align_ui<R>(
+    ui: &mut Ui,
+    id: impl Into<Id>,
+    align: Vec2,
+    ignore_cursor: bool,
+    allocate_space: bool,  
+    add_contents: impl FnOnce(&mut Ui) -> R,
+) -> R {
+    let id = id.into();
+    let memory_id = ui.id().with(id).with("aligned_ui_memory");
+    let size = ui.data(|data| data.get_temp::<Vec2>(memory_id));
+
+    let pref_size_id = Id::from("__align_ui_pref_size");
+
+    let outer_preferred_size = ui.data(|data| data.get_temp(pref_size_id).flatten());
+    // if let Some(outer) = outer_preferred_size {
+    //     let rect = Rect::from_min_size(ui.max_rect().left_top(), outer);
+    //     ui.painter().debug_rect(rect, Color32::LIGHT_GREEN, "");
+    // }
+
+    let outer_size = outer_preferred_size.unwrap_or(ui.max_rect().size());
+    let offset = match size {
+        None => vec2(0.0, 0.0),
+        Some(size) => (outer_size - size) * align,
+    };
+
+    // let offset = vec2(offset.x.max(0.0), offset.y.max(0.0));
+
+    let rect = match ignore_cursor {
+        true => ui.max_rect(),
+        false => Rect::from_min_max(ui.cursor().min, ui.max_rect().max),
+    };
+    let aligned_rect = rect.translate(offset);
+
+    // if let Some(size) = size { 
+    //     let sized_rect = Rect::from_min_size(aligned_rect.left_top(), size);
+    //     ui.painter().rect_stroke(sized_rect, Rounding::ZERO, Stroke::new(1.0, Color32::YELLOW));
+    // }
+
+    let mut aligned_ui = ui.child_ui_with_id_source(aligned_rect, *ui.layout(), id);
+
+    aligned_ui.data_mut(|data| data.insert_temp(pref_size_id, size));
+
+    let res = add_contents(&mut aligned_ui);
+
+    ui.data_mut(|data| {
+        data.insert_temp(memory_id, aligned_ui.min_size());
+        data.insert_temp(pref_size_id, outer_preferred_size);
+    });
+    if allocate_space {
+        ui.allocate_space(aligned_ui.min_size());
+    }
+
+    res
 }

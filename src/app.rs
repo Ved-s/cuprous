@@ -5,11 +5,11 @@ use std::{
 };
 
 use eframe::{
-    egui::{self, Frame, Margin, RichText, ScrollArea, Ui},
+    egui::{self, CollapsingHeader, Frame, Margin, RichText, ScrollArea, Ui},
     epaint::Rounding,
     CreationContext,
 };
-use emath::{vec2, Align2};
+use emath::{vec2, Align, Align2};
 
 use crate::{
     board::{ActiveCircuitBoard, CircuitBoard, StoredCircuitBoard},
@@ -102,7 +102,7 @@ impl eframe::App for App {
                                 .map(String::from)
                         })
                     });
-                
+
                 text.map(|t| {
                     let name = f.name.is_empty().not().then(|| f.name.clone()).or_else(|| {
                         f.path
@@ -424,7 +424,7 @@ impl App {
     fn bottom_panel(&mut self, ui: &mut Ui) {
         type TabFn = fn(&mut App, &mut Ui);
         let tabs: &[(TabFn, &str)] = &[
-            (Self::state_tab, "State"),
+            (Self::general_tab, "General"),
             #[cfg(debug_assertions)]
             (Self::debug_tab, "Debug"),
         ];
@@ -459,30 +459,107 @@ impl App {
         }
     }
 
-    fn state_tab(&mut self, ui: &mut Ui) {
-        ui.add_space(5.0);
-        ui.horizontal(|ui| {
-            ui.add_space(5.0);
-            ui.label("Drag and drop save state files here to load them,\nor use buttons below for manual selection:");
-        });
-        ui.add_space(5.0);
-        ui.horizontal(|ui| {
-            ui.add_space(5.0);
-            if ui
-                .button(RichText::new(" Save state ").size(14.0))
-                .clicked()
-            {
-                self.save_state();
-            }
+    fn general_tab(&mut self, ui: &mut Ui) {
+        ui.set_min_height(100.0);
 
-            if ui
-                .button(RichText::new(" Load state ").size(14.0))
-                .clicked()
-            {
-                self.load_state();
-            }
+        ScrollArea::vertical()
+            .min_scrolled_height(ui.ctx().screen_rect().height() * 0.8)
+            .max_width(ui.max_rect().width() - 220.0)
+            .show(ui, |ui| {
+                ui.vertical(|ui| {
+                    ui.label("Welcome to cuprous!");
+                    CollapsingHeader::new("Controls").show(ui, |ui| {
+                        ui.label("Left-click and drag to pan around");
+                        ui.label("Scroll to zoom");
+                        ui.label("0-9 to select items in inventory");
+                        ui.label("Esc to deselect");
+                        ui.label("While selecting, holding Shift will add to existing selection and Ctrl will remove from it");
+                        ui.add_space(5.0);
+                    });
+                    let editor_text = if self.designer.is_some() { "Editor mode" } else { "Editor mode (current mode)" };
+                    CollapsingHeader::new(editor_text).id_source("tut_editor").show(ui, |ui| {
+                        ui.label("Components panel on the left side contains built-in components and custom circuits");
+                        ui.label("Click on custom circuit once to select it for placement and wice to open it");
+                        ui.label("Designer in custom circuit context menu allows to change its appearance when placed");
+                        ui.add_space(5.0);
+                        ui.label("Property editor panel on the right side contains editable properties for selected components");
+                        ui.add_space(5.0);
+                    });
+                    let designer_text = if self.designer.is_some() { "Designer mode (current mode)" } else { "Designer mode" };
+                    CollapsingHeader::new(designer_text).id_source("tut_designer").show(ui, |ui| {
+                        ui.label("Components panel on the left side contains circuit pins and (later) circuit decorations");
+                        ui.label("Circuit decorations can be selected in the inventory (more will be added later)");
+                        ui.add_space(5.0);
+                        ui.label("Property editor panel on the right side contains editable properties for selected pins or decorations");
+                        ui.add_space(5.0);
+                        ui.label("Resulting circuit size can be adjusted by dragging sides of the purple rectangle");
+                        ui.label("Note that all pins and decorations should be placed inside that size");
+                        ui.add_space(5.0);
+                        ui.label("Rectangle decorations can be moved by dragging them and resized by dragging their edges");
+                        ui.label("Pins can be moved by dragging them");
+                        ui.add_space(5.0);
+                    });
+                    ui.label("Project is in early development stage, a lot of things will be added and will change");
+                });
+            });
+
+        crate::ui::align_ui(ui, "state", vec2(1.0, 0.0), true, false, |ui| {
+            ui.vertical(|ui| {
+                // it makes text jumpy when resizing...
+                crate::ui::align_ui(ui, "state_text_a", vec2(1.0, 0.0), false, true, |ui| {
+                    ui.with_layout(ui.layout().with_cross_align(Align::Max), |ui| {
+                        ui.label("Use buttons below to save or load the state of simulation");
+                    });
+                });
+                crate::ui::align_ui(ui, "state_text_b", vec2(1.0, 0.0), false, true, |ui| {
+                    ui.with_layout(ui.layout().with_cross_align(Align::Max), |ui| {
+                        ui.label("Or drag and drop save state files here to load them");
+                    });
+                });
+                crate::ui::align_ui(ui, "state_buttons", vec2(1.0, 0.0), false, true, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        if ui
+                            .button(RichText::new(" Load state ").size(13.0))
+                            .clicked()
+                        {
+                            self.save_state();
+                        }
+                        if ui
+                            .button(RichText::new(" Save state ").size(13.0))
+                            .clicked()
+                        {
+                            self.load_state();
+                        }
+                    });
+                });
+            });
         });
-        ui.add_space(10.0);
+
+        crate::ui::align_ui(ui, "links", vec2(1.0, 1.0), true, false, |ui| {
+            ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+            ui.vertical(|ui| {
+                crate::ui::align_ui(ui, "egui", vec2(1.0, 0.0), false, true, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label("Powered by ");
+                        ui.hyperlink_to("egui", "https://github.com/emilk/egui");
+                    });
+                });
+                crate::ui::align_ui(ui, "github", vec2(1.0, 0.0), false, true, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label("Cuprous source is available on ");
+                        ui.hyperlink_to("GitHub", "https://github.com/Ved-s/cuprous");
+                    });
+                });
+                crate::ui::align_ui(ui, "support", vec2(1.0, 0.0), false, true, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label("Support me on ");
+                        ui.hyperlink_to("Boosty", "https://boosty.to/ved_s/donate");
+                        ui.label(" or ");
+                        ui.hyperlink_to("DonatePay", "https://new.donatepay.ru/@945314");
+                    });
+                });
+            });
+        });
     }
 
     fn save_state(&mut self) -> bool {

@@ -1016,6 +1016,7 @@ impl Designer {
                 tabs,
                 |_| "Properties editor".into(),
                 |_, ui| {
+                    ui.set_min_width(120.0);
                     if !self.selection.selection.is_empty() {
                         let same_type = self
                             .selection
