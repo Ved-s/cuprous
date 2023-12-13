@@ -270,9 +270,23 @@ impl CircuitBoardEditor {
                 let state = self.board.state.clone();
                 self.board = ActiveCircuitBoard::new(state);
             } else if ui.input(|input| input.key_pressed(Key::F4)) {
-                let state = &self.board.state;
-                state.reset();
-                state.update_everything();
+                if ui.input(|input| input.modifiers.shift) {
+                    for board in self.board.board.ctx.boards.read().values() {
+                        for state in board.board.states.states.read().iter() {
+                            state.reset();
+                        }
+                    }
+                    for board in self.board.board.ctx.boards.read().values() {
+                        for state in board.board.states.states.read().iter() {
+                            state.update_everything();
+                        }
+                    }
+                }
+                else {
+                    let state = &self.board.state;
+                    state.reset();
+                    state.update_everything();
+                }
             }
 
             if let Some(selected) = &selected_item {

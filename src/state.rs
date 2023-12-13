@@ -293,9 +293,8 @@ impl StateCollection {
             state.init_circuit_states(false);
         }
 
-        #[cfg(not(feature = "single_thread"))]
         for state in self.states.read().iter() {
-            state.wake_thread(false);
+            state.set_frozen(false);
         }
     }
 
@@ -319,6 +318,7 @@ pub struct StateParent {
     pub circuit: Arc<Circuit>,
 }
 
+// TODO: remember freezing time to properly restore update timings 
 pub struct State {
     pub id: usize,
 
@@ -484,6 +484,7 @@ impl State {
         }
     }
 
+    // State will be loaded frozen. activate it when ready
     pub fn load(data: &crate::io::StateData, board: Arc<CircuitBoard>, id: usize, errors: &mut ErrorList) -> Arc<State> {
         let mut errors = errors.enter_context(|| format!("loading state {}", id));
         let now = Instant::now();
@@ -513,7 +514,7 @@ impl State {
             board,
             circuit_updates_removes: Default::default(),
             updates: Mutex::new(updates),
-            frozen: AtomicBool::new(false),
+            frozen: AtomicBool::new(true),
             children: AtomicUsize::new(0),
         });
 
