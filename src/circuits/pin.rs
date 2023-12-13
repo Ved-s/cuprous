@@ -407,8 +407,8 @@ impl CircuitImpl for Pin {
 
     fn circuit_init(&mut self, circ: &Arc<Circuit>, first_init: bool) {
         let pos = circ.pos;
-        let hex_x = format!("{}{:x}", if pos.x() < 0 { "-" } else { "" }, pos.x().abs());
-        let hex_y = format!("{}{:x}", if pos.y() < 0 { "-" } else { "" }, pos.y().abs());
+        let hex_x = format!("{}{:x}", if pos.x < 0 { "-" } else { "" }, pos.x.abs());
+        let hex_y = format!("{}{:x}", if pos.y < 0 { "-" } else { "" }, pos.y.abs());
 
         let uid = format!("{:x}:{:x}:{}{}", hex_x.len(), hex_y.len(), hex_x, hex_y);
         let uid_arc: Arc<str> = uid.into();

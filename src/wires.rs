@@ -7,7 +7,7 @@ use crate::{
     containers::FixedVec,
     error::{ErrorList, OptionReport},
     state::StateCollection,
-    vector::{Vec2i, Vector},
+    vector::Vec2i,
     Direction2, Direction4, DirectionPosItreator, OptionalInt, OptionalNonzeroInt, RwLock, State,
 };
 
@@ -30,7 +30,7 @@ impl Wire {
 
     pub fn set_point(
         &mut self,
-        pos: Vector<2, i32>,
+        pos: Vec2i,
         states: &StateCollection,
         point: Option<WirePoint>,
         update_wire: bool,
@@ -55,17 +55,17 @@ impl Wire {
 
     pub fn search_wire_point(
         &self,
-        pos: Vector<2, i32>,
+        pos: Vec2i,
         dir: Direction4,
     ) -> Option<FoundWirePoint> {
         let (dir, forward) = dir.into_dir2();
-        let current_diff_pos = dir.choose_axis_component(pos.x(), pos.y());
-        let current_eq_pos = dir.choose_axis_component(pos.y(), pos.x());
+        let current_diff_pos = dir.choose_axis_component(pos.x, pos.y);
+        let current_eq_pos = dir.choose_axis_component(pos.y, pos.x);
         self.points
             .keys()
             .filter_map(|pos| {
-                let target_diff_pos = dir.choose_axis_component(pos.x(), pos.y());
-                let target_eq_pos = dir.choose_axis_component(pos.y(), pos.x());
+                let target_diff_pos = dir.choose_axis_component(pos.x, pos.y);
+                let target_eq_pos = dir.choose_axis_component(pos.y, pos.x);
                 let pos_diff = current_diff_pos - target_diff_pos;
 
                 if forward {
@@ -102,7 +102,7 @@ impl Wire {
                 .points
                 .iter()
                 .map(|(pos, data)| {
-                    let mut errors = errors.enter_context(|| format!("loading wire point at {}, {}", pos.x(), pos.y())); 
+                    let mut errors = errors.enter_context(|| format!("loading wire point at {}, {}", pos.x, pos.y)); 
                     (*pos, WirePoint::load(data, circuits, &mut errors))
                 })
                 .collect(),

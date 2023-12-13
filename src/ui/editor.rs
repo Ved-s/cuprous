@@ -157,7 +157,7 @@ impl InventoryItem<SelectedItemId> for CircuitInventoryItem {
     fn draw(&self, ctx: &PaintContext) {
         let size = self.preview.describe().size.convert(|v| v as f32);
         let scale = Vec2f::from(ctx.rect.size()) / size;
-        let scale = scale.x().min(scale.y());
+        let scale = scale.x.min(scale.y);
         let size = size * scale;
         let rect = Rect::from_center_size(ctx.rect.center(), size.into());
 

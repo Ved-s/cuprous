@@ -380,7 +380,7 @@ impl Designer {
         paint.text(
             size_rect.left_bottom() + vec2(0.1, 0.1) * screen.scale,
             Align2::LEFT_TOP,
-            format!("Circuit size: {}x{}", design.size.x(), design.size.y()),
+            format!("Circuit size: {}x{}", design.size.x, design.size.y),
             world_font,
             color,
         );
@@ -606,7 +606,7 @@ impl Designer {
 
                         let mouse_tile_pos_i = mouse_tile_pos.convert(|v| v.floor() as i32);
 
-                        if mouse_tile_pos_i.x() < 0 || mouse_tile_pos_i.y() < 0 {
+                        if mouse_tile_pos_i.x < 0 || mouse_tile_pos_i.y < 0 {
                             break 'm;
                         }
                         let mouse_tile_pos_i = mouse_tile_pos_i.convert(|v| v as u32);

@@ -19,7 +19,7 @@ use crate::{
     string::StringFormatterState,
     time::Instant,
     unwrap_option_or_continue,
-    vector::{Vec2i, Vec2u, Vector},
+    vector::{Vec2i, Vec2u},
     ArcString, Direction4, DynStaticStr, OptionalInt, PaintContext, RwLock,
 };
 
@@ -738,7 +738,7 @@ pub trait CircuitPreviewImpl: Send + Sync {
 
 #[derive(Default)]
 pub struct CircuitNode {
-    pub origin_dist: Vector<2, u32>,
+    pub origin_dist: Vec2u,
     pub circuit: OptionalInt<usize>,
 }
 

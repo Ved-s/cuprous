@@ -31,8 +31,8 @@ impl GateImpl for Nor {
         let size: Vec2u = calc_size_from_inputs(wires.count() as u32).into();
         let size_f = size.convert(|v| v as f32);
 
-        let width = size_f.x();
-        let height = size_f.y();
+        let width = size_f.x;
+        let height = size_f.y;
 
         let transformer = |p: Pos2| {
             ctx.rect
@@ -49,8 +49,8 @@ impl GateImpl for Nor {
             &Vec2f::from([0.25, height]),
         );
         for line in inner_bez.as_lines(straightness * 2.0) {
-            let start_y = line.0.y().floor() as usize;
-            let end_y = line.1.y().ceil() as usize;
+            let start_y = line.0.y.floor() as usize;
+            let end_y = line.1.y.ceil() as usize;
 
             for y in start_y..end_y {
                 
@@ -64,11 +64,11 @@ impl GateImpl for Nor {
                     y
                 };
                 let y = y as f32 + 0.5;
-                if line.0.y() > y || line.1.y() < y {
+                if line.0.y > y || line.1.y < y {
                     continue;
                 }
                 
-                let x = remap(y, line.0.y()..=line.1.y(), line.0.x()..=line.1.x());
+                let x = remap(y, line.0.y..=line.1.y, line.0.x..=line.1.x);
                 let start = pos2(0.5, y);
                 let end = pos2(x + 0.02, y);
                 if start.x >= end.x {

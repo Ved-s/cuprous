@@ -16,6 +16,7 @@ use eframe::{
     epaint::{Color32, FontId, RectShape, Rounding, Shape, Stroke, TextShape},
 };
 use emath::{pos2, vec2, Align2, Pos2, Rect, Vec2};
+use num_traits::Zero;
 use serde::{Deserialize, Serialize};
 use serde_intermediate::Intermediate;
 
@@ -39,7 +40,7 @@ use crate::{
         RectVisuals,
     },
     unwrap_option_or_continue, unwrap_option_or_return,
-    vector::{IsZero, Vec2f, Vec2i, Vec2u},
+    vector::{Vec2f, Vec2i, Vec2u},
     wires::{FoundWireNode, TileWires, Wire, WireNode, WirePart, WirePoint},
     ArcString, Direction2, Direction4, DynStaticStr, PaintContext, PastePreview, RwLock, Screen,
 };
@@ -292,8 +293,8 @@ impl CircuitBoard {
                     "loading circuit {} {} at {},{}",
                     i,
                     c.ty.deref(),
-                    c.pos.x(),
-                    c.pos.y()
+                    c.pos.x,
+                    c.pos.y
                 )
             });
 
@@ -454,8 +455,8 @@ impl ActiveCircuitBoard {
                 let id = circuit.id;
                 let info = circuit.info.read();
 
-                for y in 0..info.size.y() {
-                    for x in 0..info.size.x() {
+                for y in 0..info.size.y {
+                    for x in 0..info.size.x {
                         let dist = Vec2u::from([x, y]);
                         let pos = circuit.pos + dist.convert(|v| v as i32);
                         let node = circuits.get_or_create_mut(pos.convert(|v| v as isize));
@@ -530,7 +531,7 @@ impl ActiveCircuitBoard {
                         };
                         min_pos = match min_pos {
                             None => Some(pos),
-                            Some(mp) => Some([mp.x().min(pos.x()), mp.y().min(pos.y())].into()),
+                            Some(mp) => Some([mp.x.min(pos.x), mp.y.min(pos.y)].into()),
                         }
                     }
                     min_pos
@@ -711,8 +712,8 @@ impl ActiveCircuitBoard {
             }
 
             let edge = match info.dir {
-                Direction2::Up => info.pos.y() == bounds.tiles_br.y(),
-                Direction2::Left => info.pos.x() == bounds.tiles_br.x(),
+                Direction2::Up => info.pos.y == bounds.tiles_br.y,
+                Direction2::Left => info.pos.x == bounds.tiles_br.x,
             };
 
             if (info.wire.is_none() || info.dist.is_none()) && !edge {
@@ -930,9 +931,9 @@ impl ActiveCircuitBoard {
         ctx: &PaintContext,
     ) {
         if !(node.origin_dist.is_zero()
-            || pos.x() == bounds.tiles_tl.x() && pos.y() == bounds.tiles_tl.y()
-            || node.origin_dist.y() == 0 && pos.x() == bounds.tiles_tl.x()
-            || node.origin_dist.x() == 0 && pos.y() == bounds.tiles_tl.y())
+            || pos.x == bounds.tiles_tl.x && pos.y == bounds.tiles_tl.y
+            || node.origin_dist.y == 0 && pos.x == bounds.tiles_tl.x
+            || node.origin_dist.x == 0 && pos.y == bounds.tiles_tl.y)
         {
             return;
         }
@@ -1108,7 +1109,7 @@ impl ActiveCircuitBoard {
         if let SelectedItem::Circuit(p) = selected {
             let description = p.describe();
             let size = description.size;
-            if size.x() == 0 || size.y() == 0 {
+            if size.x == 0 || size.y == 0 {
                 return;
             }
             let place_pos = mouse_tile_pos_i - size.convert(|v| v as i32) / 2;
@@ -1152,7 +1153,7 @@ impl ActiveCircuitBoard {
             }
         } else if let SelectedItem::Paste(p) = selected {
             let size = p.size;
-            if size.x() == 0 || size.y() == 0 {
+            if size.x == 0 || size.y == 0 {
                 return;
             }
             let place_pos = mouse_tile_pos_i - size.convert(|v| v as i32) / 2;
@@ -1838,14 +1839,14 @@ impl ActiveCircuitBoard {
             None => None,
             Some(up) => self
                 .wire_nodes
-                .get([pos.x() as isize, (pos.y() - up as i32) as isize])
+                .get([pos.x as isize, (pos.y - up as i32) as isize])
                 .and_then(|n| n.wire.get()),
         };
         let left = match node.left.get() {
             None => None,
             Some(left) => self
                 .wire_nodes
-                .get([(pos.x() - left as i32) as isize, pos.y() as isize])
+                .get([(pos.x - left as i32) as isize, pos.y as isize])
                 .and_then(|n| n.wire.get()),
         };
 
@@ -1923,17 +1924,17 @@ impl ActiveCircuitBoard {
                     let axis = (angle / (TAU / 4.0)).round() as i32 % 4;
 
                     let origin = match axis {
-                        0 => [to.x(), from.y()].into(),
+                        0 => [to.x, from.y].into(),
                         1 => from,
                         2 => from,
-                        3 => [from.x(), to.y()].into(),
+                        3 => [from.x, to.y].into(),
                         _ => unreachable!(),
                     };
                     let length = match axis {
-                        0 => to.x() - from.x(),
-                        1 => from.y() - to.y(),
-                        2 => from.x() - to.x(),
-                        3 => to.y() - from.y(),
+                        0 => to.x - from.x,
+                        1 => from.y - to.y,
+                        2 => from.x - to.x,
+                        3 => to.y - from.y,
                         _ => unreachable!(),
                     } as u32;
 
@@ -2055,8 +2056,8 @@ impl ActiveCircuitBoard {
     }
 
     fn set_circuit_nodes(&mut self, size: Vec2u, pos: Vec2i, id: Option<usize>) {
-        for j in 0..size.y() {
-            for i in 0..size.x() {
+        for j in 0..size.y {
+            for i in 0..size.x {
                 let pos = pos + [i as i32, j as i32];
                 let node = self
                     .circuit_nodes
@@ -2078,8 +2079,8 @@ impl ActiveCircuitBoard {
         pos: Vec2i,
         ignore_circuit: Option<usize>,
     ) -> bool {
-        for j in 0..size.y() as i32 {
-            for i in 0..size.x() as i32 {
+        for j in 0..size.y as i32 {
+            for i in 0..size.x as i32 {
                 let pos = pos + [i, j];
                 if self
                     .circuit_nodes

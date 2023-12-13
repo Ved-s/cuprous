@@ -8,9 +8,8 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    r#const::*,
     unwrap_option_or_continue,
-    vector::{Vec2isize, Vec2usize, Vector},
+    vector::{Vec2isize, Vec2usize},
     Intersect, RwLock,
 };
 
@@ -390,16 +389,16 @@ pub struct Chunks2D<const CHUNK_SIZE: usize, T: Default> {
 pub struct ChunksLookaround<'a, const CHUNK_SIZE: usize, T: Default> {
     chunks: &'a Chunks2D<CHUNK_SIZE, T>,
     chunk: &'a Chunk<CHUNK_SIZE, T>,
-    pos: Vector<2, isize>,
-    in_chunk_pos: Vector<2, usize>,
+    pos: Vec2isize,
+    in_chunk_pos: Vec2usize,
 }
 
 impl<'a, const CHUNK_SIZE: usize, T: Default> ChunksLookaround<'a, CHUNK_SIZE, T> {
     pub fn new(
         chunks: &'a Chunks2D<CHUNK_SIZE, T>,
         chunk: &'a Chunk<CHUNK_SIZE, T>,
-        pos: Vector<2, isize>,
-        in_chunk_pos: Vector<2, usize>,
+        pos: Vec2isize,
+        in_chunk_pos: Vec2usize,
     ) -> Self {
         Self {
             chunks,
@@ -413,14 +412,14 @@ impl<'a, const CHUNK_SIZE: usize, T: Default> ChunksLookaround<'a, CHUNK_SIZE, T
         let rel = rel.into();
         let target = rel + self.in_chunk_pos.convert(|v| v as isize);
 
-        if target.x() < 0
-            || target.x() >= CHUNK_SIZE as isize
-            || target.y() < 0
-            || target.y() >= CHUNK_SIZE as isize
+        if target.x < 0
+            || target.x >= CHUNK_SIZE as isize
+            || target.y < 0
+            || target.y >= CHUNK_SIZE as isize
         {
             self.chunks.get(self.pos + rel)
         } else {
-            Some(&self.chunk[target.x() as usize][target.y() as usize])
+            Some(&self.chunk[target.x as usize][target.y as usize])
         }
     }
 }
@@ -436,24 +435,24 @@ impl<const CHUNK_SIZE: usize, T: Default> Chunks2D<CHUNK_SIZE, T> {
     const QUARTERS_RIGHT: usize = 0x1;
 
     fn to_chunk_pos(pos: Vec2isize) -> (Vec2isize, Vec2usize) {
-        let chunk_x = pos.x().div_floor(CHUNK_SIZE as isize);
-        let chunk_y = pos.y().div_floor(CHUNK_SIZE as isize);
-        let pos_x = (pos.x() - (chunk_x * CHUNK_SIZE as isize)) as usize;
-        let pos_y = (pos.y() - (chunk_y * CHUNK_SIZE as isize)) as usize;
+        let chunk_x = pos.x.div_floor(CHUNK_SIZE as isize);
+        let chunk_y = pos.y.div_floor(CHUNK_SIZE as isize);
+        let pos_x = (pos.x - (chunk_x * CHUNK_SIZE as isize)) as usize;
+        let pos_y = (pos.y - (chunk_y * CHUNK_SIZE as isize)) as usize;
         ([chunk_x, chunk_y].into(), [pos_x, pos_y].into())
     }
 
     fn to_quarter_id_pos(chunk_pos: Vec2isize) -> ((usize, usize), usize) {
-        let (x, right) = if chunk_pos.x() >= 0 {
-            (chunk_pos.x() as usize, true)
+        let (x, right) = if chunk_pos.x >= 0 {
+            (chunk_pos.x as usize, true)
         } else {
-            ((-chunk_pos.x() - 1) as usize, false)
+            ((-chunk_pos.x - 1) as usize, false)
         };
 
-        let (y, bottom) = if chunk_pos.y() >= 0 {
-            (chunk_pos.y() as usize, true)
+        let (y, bottom) = if chunk_pos.y >= 0 {
+            (chunk_pos.y as usize, true)
         } else {
-            ((-chunk_pos.y() - 1) as usize, false)
+            ((-chunk_pos.y - 1) as usize, false)
         };
 
         let quarter = match (right, bottom) {
@@ -534,19 +533,19 @@ impl<const CHUNK_SIZE: usize, T: Default> Chunks2D<CHUNK_SIZE, T> {
         let (chunk_pos, pos) = Self::to_chunk_pos(pos.into());
 
         let chunk = self.get_chunk(chunk_pos)?;
-        Some(&chunk[pos.x()][pos.y()])
+        Some(&chunk[pos.x][pos.y])
     }
 
     pub fn get_mut(&mut self, pos: impl Into<Vec2isize>) -> Option<&mut T> {
         let (chunk_pos, pos) = Self::to_chunk_pos(pos.into());
         let chunk = self.get_chunk_mut(chunk_pos)?;
-        Some(&mut chunk[pos.x()][pos.y()])
+        Some(&mut chunk[pos.x][pos.y])
     }
 
     pub fn get_or_create_mut(&mut self, pos: impl Into<Vec2isize>) -> &mut T {
         let (chunk_pos, pos) = Self::to_chunk_pos(pos.into());
         let chunk = self.get_or_create_chunk_mut(chunk_pos);
-        &mut chunk[pos.x()][pos.y()]
+        &mut chunk[pos.x][pos.y]
     }
 
     pub fn chunk_exists_at(&self, pos: impl Into<Vec2isize>) -> bool {
@@ -586,8 +585,8 @@ impl<const CHUNK_SIZE: usize, T: Default> Chunks2D<CHUNK_SIZE, T> {
 
     pub fn iter_area(
         &self,
-        pos: Vector<2, isize>,
-        size: Vector<2, usize>,
+        pos: Vec2isize,
+        size: Vec2usize,
     ) -> ChunksAreaIterator<'_, CHUNK_SIZE, T> {
         let size = size.convert(|v| v as isize);
 
@@ -597,10 +596,10 @@ impl<const CHUNK_SIZE: usize, T: Default> Chunks2D<CHUNK_SIZE, T> {
         let chunks_tl = pos.convert(|v| v.div_floor(CHUNK_SIZE as isize));
         let chunks_br = (pos + size).convert(|v| v.div_ceil(CHUNK_SIZE as isize));
 
-        let empty = size.x() == 0 || size.y() == 0;
+        let empty = size.x == 0 || size.y == 0;
 
         let in_chunk_start = tiles_tl - chunks_tl * CHUNK_SIZE as isize;
-        let in_chunk_end = Vector::single_value(CHUNK_SIZE as isize)
+        let in_chunk_end = Vec2isize::single_value(CHUNK_SIZE as isize)
             - ((chunks_br * CHUNK_SIZE as isize) - tiles_br);
 
         ChunksAreaIterator {
@@ -618,23 +617,23 @@ impl<const CHUNK_SIZE: usize, T: Default> Chunks2D<CHUNK_SIZE, T> {
 
     pub fn for_each_item<P>(
         &self,
-        tl: Vector<2, isize>,
-        br: Vector<2, isize>,
+        tl: Vec2isize,
+        br: Vec2isize,
         pass: &P,
-        f: impl Fn(Vector<2, isize>, &T, &P),
+        f: impl Fn(Vec2isize, &T, &P),
     ) {
         let chunks_tl = tl.convert(|v| v.div_floor(CHUNK_SIZE as isize));
         let chunks_br = br.convert(|v| v.div_floor(CHUNK_SIZE as isize));
 
-        for cy in chunks_tl.y()..=chunks_br.y() {
+        for cy in chunks_tl.y..=chunks_br.y {
             let rowrange = self.get_chunk_row_range(cy);
             let rowrange = Range {
                 start: rowrange.start,
                 end: rowrange.end,
             };
 
-            for cx in (chunks_tl.x()..chunks_br.x() + 1).intersect(&rowrange) {
-                let chunk_coord: Vector<2, isize> = [cx, cy].into();
+            for cx in (chunks_tl.x..chunks_br.x + 1).intersect(&rowrange) {
+                let chunk_coord: Vec2isize = [cx, cy].into();
                 let chunk_tl = chunk_coord * 16;
                 let chunk = unwrap_option_or_continue!(self.get_chunk(chunk_coord));
 
@@ -642,16 +641,16 @@ impl<const CHUNK_SIZE: usize, T: Default> Chunks2D<CHUNK_SIZE, T> {
                 let chunk_wnd = br - chunk_tl;
 
                 for j in 0..16 {
-                    if j < chunk_start.y() {
+                    if j < chunk_start.y {
                         continue;
-                    } else if j > chunk_wnd.y() {
+                    } else if j > chunk_wnd.y {
                         break;
                     }
 
                     for i in 0..16 {
-                        if i < chunk_start.x() {
+                        if i < chunk_start.x {
                             continue;
-                        } else if i > chunk_wnd.x() {
+                        } else if i > chunk_wnd.x {
                             break;
                         }
 
@@ -670,33 +669,33 @@ impl<const CHUNK_SIZE: usize, T: Default> Chunks2D<CHUNK_SIZE, T> {
 pub struct ChunksAreaIterator<'a, const CHUNK_SIZE: usize, T: Default> {
     chunks: &'a Chunks2D<CHUNK_SIZE, T>,
 
-    chunk_bounds_tl: Vector<2, isize>,
-    chunk_bounds_br_excl: Vector<2, isize>,
+    chunk_bounds_tl: Vec2isize,
+    chunk_bounds_br_excl: Vec2isize,
 
     chunk: Option<&'a Chunk<CHUNK_SIZE, T>>,
-    chunk_pos: Vector<2, isize>,
-    in_chunk_pos: Vector<2, usize>,
+    chunk_pos: Vec2isize,
+    in_chunk_pos: Vec2usize,
 
-    in_chunk_start: Vector<2, usize>,
-    in_chunk_end_excl: Vector<2, usize>,
+    in_chunk_start: Vec2usize,
+    in_chunk_end_excl: Vec2usize,
 
     empty: bool,
 }
 
 impl<'a, const CHUNK_SIZE: usize, T: Default> ChunksAreaIterator<'a, CHUNK_SIZE, T> {
     fn next_chunk(&mut self) -> bool {
-        if self.empty || self.chunk_pos.y() >= self.chunk_bounds_br_excl.y() {
+        if self.empty || self.chunk_pos.y >= self.chunk_bounds_br_excl.y {
             return false;
         }
 
         self.in_chunk_pos = [0, 0].into();
 
         loop {
-            *self.chunk_pos.x_mut() += 1;
-            if self.chunk_pos.x() >= self.chunk_bounds_br_excl.x() {
-                *self.chunk_pos.x_mut() = self.chunk_bounds_tl.x();
-                *self.chunk_pos.y_mut() += 1;
-                if self.chunk_pos.y() >= self.chunk_bounds_br_excl.y() {
+            self.chunk_pos.x += 1;
+            if self.chunk_pos.x >= self.chunk_bounds_br_excl.x {
+                self.chunk_pos.x = self.chunk_bounds_tl.x;
+                self.chunk_pos.y += 1;
+                if self.chunk_pos.y >= self.chunk_bounds_br_excl.y {
                     self.chunk = None;
                     self.empty = true;
                     return false;
@@ -721,31 +720,31 @@ impl<'a, const CHUNK_SIZE: usize, T: Default> ChunksAreaIterator<'a, CHUNK_SIZE,
 
     fn next_item(&mut self) {
         let mut pos = self.in_chunk_pos;
-        *pos.x_mut() += 1;
+        pos.x += 1;
 
-        let x_end = if self.chunk_pos.x() == self.chunk_bounds_br_excl.x() - 1 {
-            self.in_chunk_end_excl.x()
+        let x_end = if self.chunk_pos.x == self.chunk_bounds_br_excl.x - 1 {
+            self.in_chunk_end_excl.x
         } else {
             CHUNK_SIZE
         };
 
-        if pos.x() >= x_end {
-            let x_start = if self.chunk_pos.x() == self.chunk_bounds_tl.x() {
-                self.in_chunk_start.x()
+        if pos.x >= x_end {
+            let x_start = if self.chunk_pos.x == self.chunk_bounds_tl.x {
+                self.in_chunk_start.x
             } else {
                 0
             };
 
-            *pos.x_mut() = x_start;
-            *pos.y_mut() += 1;
+            pos.x = x_start;
+            pos.y += 1;
 
-            let y_end = if self.chunk_pos.y() == self.chunk_bounds_br_excl.y() - 1 {
-                self.in_chunk_end_excl.y()
+            let y_end = if self.chunk_pos.y == self.chunk_bounds_br_excl.y - 1 {
+                self.in_chunk_end_excl.y
             } else {
                 CHUNK_SIZE
             };
 
-            if pos.y() >= y_end {
+            if pos.y >= y_end {
                 self.next_chunk();
                 return;
             }
@@ -755,14 +754,14 @@ impl<'a, const CHUNK_SIZE: usize, T: Default> ChunksAreaIterator<'a, CHUNK_SIZE,
     }
 
     fn set_in_chunk_start_pos(&mut self) {
-        let x_start = if self.chunk_pos.x() == self.chunk_bounds_tl.x() {
-            self.in_chunk_start.x()
+        let x_start = if self.chunk_pos.x == self.chunk_bounds_tl.x {
+            self.in_chunk_start.x
         } else {
             0
         };
 
-        let y_start = if self.chunk_pos.y() == self.chunk_bounds_tl.y() {
-            self.in_chunk_start.y()
+        let y_start = if self.chunk_pos.y == self.chunk_bounds_tl.y {
+            self.in_chunk_start.y
         } else {
             0
         };
@@ -771,7 +770,7 @@ impl<'a, const CHUNK_SIZE: usize, T: Default> ChunksAreaIterator<'a, CHUNK_SIZE,
 }
 
 impl<'a, const CHUNK_SIZE: usize, T: Default> Iterator for ChunksAreaIterator<'a, CHUNK_SIZE, T> {
-    type Item = (Vector<2, isize>, &'a T);
+    type Item = (Vec2isize, &'a T);
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.empty {
@@ -785,9 +784,9 @@ impl<'a, const CHUNK_SIZE: usize, T: Default> Iterator for ChunksAreaIterator<'a
         match self.chunk {
             None => None,
             Some(chunk) => {
-                let item = &chunk[self.in_chunk_pos.x()][self.in_chunk_pos.y()];
-                let tx = Self::transform_coord(self.chunk_pos.x(), self.in_chunk_pos.x());
-                let ty = Self::transform_coord(self.chunk_pos.y(), self.in_chunk_pos.y());
+                let item = &chunk[self.in_chunk_pos.x][self.in_chunk_pos.y];
+                let tx = Self::transform_coord(self.chunk_pos.x, self.in_chunk_pos.x);
+                let ty = Self::transform_coord(self.chunk_pos.y, self.in_chunk_pos.y);
                 let res = ([tx, ty].into(), item);
 
                 self.next_item();
@@ -944,14 +943,11 @@ impl<T, const SIZE: usize> ConstRingBuffer<SIZE, T> {
             None
         }
     }
-}
 
-#[allow(unused)]
-impl<T, const SIZE: usize> ConstRingBuffer<SIZE, T>
-where
-    Bool<{ SIZE > 0 }>: True,
-{
     pub fn push_back(&mut self, value: T) {
+        if SIZE == 0 {
+            return;
+        }
         if self.len >= SIZE {
             unsafe { self.array[self.pos].assume_init_drop() }
         }
@@ -960,6 +956,9 @@ where
         self.pos = (self.pos + 1) % SIZE;
     }
     pub fn push_front(&mut self, value: T) {
+        if SIZE == 0 {
+            return;
+        }
         let pos = (self.pos + SIZE - self.len - 1) % SIZE;
         if self.len >= SIZE {
             unsafe { self.array[pos].assume_init_drop() }
@@ -970,6 +969,9 @@ where
     }
 
     pub fn pop_back(&mut self) -> Option<T> {
+        if SIZE == 0 {
+            return None;
+        }
         if self.len == 0 {
             None
         } else {
@@ -980,6 +982,9 @@ where
     }
 
     pub fn pop_front(&mut self) -> Option<T> {
+        if SIZE == 0 {
+            return None;
+        }
         if self.len == 0 {
             None
         } else {
@@ -990,7 +995,7 @@ where
     }
 
     pub fn iter(&self) -> ConstRingBufferRefIterator<'_, T> {
-        let start = (self.pos + SIZE - self.len) % SIZE;
+        let start = if SIZE == 0 { self.pos } else { (self.pos + SIZE - self.len) % SIZE };
         ConstRingBufferRefIterator {
             buf: unsafe { std::mem::transmute(self.array.as_ref()) },
             start,

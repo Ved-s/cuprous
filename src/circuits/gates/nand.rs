@@ -35,8 +35,8 @@ impl GateImpl for Nand {
         let size: Vec2u = calc_size_from_inputs(wires.count() as u32).into();
         let size_f = size.convert(|v| v as f32);
 
-        let width = size_f.x();
-        let height = size_f.y();
+        let width = size_f.x;
+        let height = size_f.y;
 
         let transformer = |p: Pos2| {
             ctx.rect

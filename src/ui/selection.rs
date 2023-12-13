@@ -106,8 +106,8 @@ where
                     let start = selection_start_pos;
                     let end = mouse_tile_pos;
 
-                    let min = Vec2f::from([start.x().min(end.x()), start.y().min(end.y())]);
-                    let max = Vec2f::from([start.x().max(end.x()), start.y().max(end.y())]);
+                    let min = Vec2f::from([start.x.min(end.x), start.y.min(end.y)]);
+                    let max = Vec2f::from([start.x.max(end.x), start.y.max(end.y)]);
 
                     let rect_min = ctx.screen.world_to_screen(min);
                     let rect_max = ctx.screen.world_to_screen(max);

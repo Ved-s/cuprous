@@ -237,12 +237,12 @@ impl CircuitImpl for Button {
         }
         if matches!(changed, None | Some("width")) {
             if let Some(value) = circ.props.read("width", |v: &RangedValue<u32>| v.get()) {
-                *self.size.x_mut() = value;
+                self.size.x = value;
             }
         }
         if matches!(changed, None | Some("height")) {
             if let Some(value) = circ.props.read("height", |v: &RangedValue<u32>| v.get()) {
-                *self.size.y_mut() = value;
+                self.size.y = value;
             }
         }
         if matches!(changed, None | Some("font_scale")) {

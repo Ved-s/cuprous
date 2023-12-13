@@ -1,7 +1,4 @@
-#![allow(incomplete_features)]
-#![feature(generic_const_exprs)]
 #![feature(int_roundings)]
-#![feature(lazy_cell)]
 
 use std::{
     borrow::Borrow,
@@ -31,8 +28,6 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_intermediate::Intermediate;
 #[cfg(feature = "wasm")]
 use wasm_bindgen::{prelude::*, JsValue};
-
-mod r#const;
 
 mod vector;
 
@@ -170,14 +165,14 @@ impl<'a> PaintContext<'a> {
 
         let screen = &self.screen;
 
-        for cy in chunks_tl.y()..=chunks_br.y() {
+        for cy in chunks_tl.y..=chunks_br.y {
             let rowrange = chunks.get_chunk_row_range(cy as isize);
             let rowrange = Range {
                 start: rowrange.start as i32,
                 end: rowrange.end as i32,
             };
 
-            for cx in (chunks_tl.x()..chunks_br.x() + 1).intersect(&rowrange) {
+            for cx in (chunks_tl.x..chunks_br.x + 1).intersect(&rowrange) {
                 let chunk_coord: Vec2i = [cx, cy].into();
                 let chunk_tl = chunk_coord * 16;
                 let chunk = unwrap_option_or_continue!(
@@ -187,16 +182,16 @@ impl<'a> PaintContext<'a> {
                 let chunk_viewport_br = tiles_br - chunk_tl;
 
                 for j in 0..16 {
-                    if j < chunk_viewport_tl.y() {
+                    if j < chunk_viewport_tl.y {
                         continue;
-                    } else if j > chunk_viewport_br.y() {
+                    } else if j > chunk_viewport_br.y {
                         break;
                     }
 
                     for i in 0..16 {
-                        if i < chunk_viewport_tl.x() {
+                        if i < chunk_viewport_tl.x {
                             continue;
-                        } else if i > chunk_viewport_br.x() {
+                        } else if i > chunk_viewport_br.x {
                             break;
                         }
 
@@ -881,14 +876,14 @@ impl PastePreview {
             let mut size = Vec2u::default();
             for wire in wires.iter() {
                 size = [
-                    size.x().max(wire.pos.x() + 1),
-                    size.y().max(wire.pos.y() + 1),
+                    size.x.max(wire.pos.x + 1),
+                    size.y.max(wire.pos.y + 1),
                 ]
                 .into()
             }
             for (circuit, preview) in circuits.iter() {
                 let br = circuit.pos + preview.describe().size;
-                size = [size.x().max(br.x()), size.y().max(br.y())].into()
+                size = [size.x.max(br.x), size.y.max(br.y)].into()
             }
             size
         };
@@ -924,7 +919,7 @@ impl PastePreview {
 
         for (circuit, preview) in self.circuits.iter() {
             let size = preview.describe().size;
-            if size.x() == 0 || size.y() == 0 {
+            if size.x == 0 || size.y == 0 {
                 return;
             }
             let pos = pos + circuit.pos.convert(|v| v as i32);
@@ -982,8 +977,8 @@ impl PastePreview {
                                         "loading state for {} {} at {},{}",
                                         circuit.ty.deref(),
                                         circuit.id,
-                                        circuit.pos.x(),
-                                        circuit.pos.y()
+                                        circuit.pos.x,
+                                        circuit.pos.y
                                     )
                                 });
                                 state.write_circuit(id, |state| {

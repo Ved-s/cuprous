@@ -45,26 +45,26 @@ pub fn draw_grid(
     let dim_stroke = Stroke::new(1.0, Color32::from_gray(64));
     let highlight_stroke = Stroke::new(1.5, Color32::from_gray(96));
 
-    for i in 0..visible_cells.x() {
-        let x = i + start.x();
-        if highlight_lines.x() > 0 && x % highlight_lines.x() as i32 == 0 {
+    for i in 0..visible_cells.x {
+        let x = i + start.x;
+        if highlight_lines.x > 0 && x % highlight_lines.x as i32 == 0 {
             continue;
         }
 
-        let pos = rect.left() + cell_size.x() * i as f32 - off.x();
+        let pos = rect.left() + cell_size.x * i as f32 - off.x;
         paint.line_segment(
             [pos2(pos, rect.top()), pos2(pos, rect.bottom())],
             dim_stroke,
         );
     }
 
-    for i in 0..visible_cells.y() {
-        let y = i + start.y();
-        if highlight_lines.y() > 0 && y % highlight_lines.y() as i32 == 0 {
+    for i in 0..visible_cells.y {
+        let y = i + start.y;
+        if highlight_lines.y > 0 && y % highlight_lines.y as i32 == 0 {
             continue;
         }
 
-        let pos = rect.top() + cell_size.y() * i as f32 - off.y();
+        let pos = rect.top() + cell_size.y * i as f32 - off.y;
         paint.line_segment(
             [pos2(rect.left(), pos), pos2(rect.right(), pos)],
             dim_stroke,
@@ -78,34 +78,34 @@ pub fn draw_grid(
         );
     let highlight_off = pos % (cell_size * highlight_lines.convert(|v| v as f32));
 
-    for i in 0..hightlight_cells.x() {
+    for i in 0..hightlight_cells.x {
         let pos =
-            rect.left() + cell_size.x() * i as f32 * highlight_lines.x() as f32 - highlight_off.x();
+            rect.left() + cell_size.x * i as f32 * highlight_lines.x as f32 - highlight_off.x;
         paint.line_segment(
             [pos2(pos, rect.top()), pos2(pos, rect.bottom())],
             highlight_stroke,
         );
     }
 
-    for i in 0..hightlight_cells.y() {
+    for i in 0..hightlight_cells.y {
         let pos =
-            rect.top() + cell_size.y() * i as f32 * highlight_lines.y() as f32 - highlight_off.y();
+            rect.top() + cell_size.y * i as f32 * highlight_lines.y as f32 - highlight_off.y;
         paint.line_segment(
             [pos2(rect.left(), pos), pos2(rect.right(), pos)],
             highlight_stroke,
         );
     }
 
-    if start.x() <= 0 && visible_cells.x() + start.x() >= 0 {
-        let pos = rect.left() + cell_size.x() * -start.x() as f32 - off.x();
+    if start.x <= 0 && visible_cells.x + start.x >= 0 {
+        let pos = rect.left() + cell_size.x * -start.x as f32 - off.x;
         paint.line_segment(
             [pos2(pos, rect.top()), pos2(pos, rect.bottom())],
             Stroke::new(1.0, Color32::GREEN),
         );
     }
 
-    if start.y() <= 0 && visible_cells.y() + start.y() >= 0 {
-        let pos = rect.top() + cell_size.y() * -start.y() as f32 - off.y();
+    if start.y <= 0 && visible_cells.y + start.y >= 0 {
+        let pos = rect.top() + cell_size.y * -start.y as f32 - off.y;
         paint.line_segment(
             [pos2(rect.left(), pos), pos2(rect.right(), pos)],
             Stroke::new(1.0, Color32::RED),
@@ -116,8 +116,8 @@ pub fn draw_grid(
 pub fn draw_cross(screen: &Screen, bounds: Rect, paint: &egui::Painter) {
     let mut cross_pos = screen.world_to_screen(0.0.into());
 
-    *cross_pos.x_mut() = cross_pos.x().clamp(bounds.left(), bounds.right());
-    *cross_pos.y_mut() = cross_pos.y().clamp(bounds.top(), bounds.bottom());
+    cross_pos.x = cross_pos.x.clamp(bounds.left(), bounds.right());
+    cross_pos.y = cross_pos.y.clamp(bounds.top(), bounds.bottom());
 
     let unit = Vec2f::single_value(screen.scale);
 
@@ -125,15 +125,15 @@ pub fn draw_cross(screen: &Screen, bounds: Rect, paint: &egui::Painter) {
 
     paint.line_segment(
         [
-            pos2(cross_pos.x() - unit.x(), cross_pos.y()),
-            pos2(cross_pos.x() + unit.x(), cross_pos.y()),
+            pos2(cross_pos.x - unit.x, cross_pos.y),
+            pos2(cross_pos.x + unit.x, cross_pos.y),
         ],
         cross_stroke,
     );
     paint.line_segment(
         [
-            pos2(cross_pos.x(), cross_pos.y() - unit.y()),
-            pos2(cross_pos.x(), cross_pos.y() + unit.y()),
+            pos2(cross_pos.x, cross_pos.y - unit.y),
+            pos2(cross_pos.x, cross_pos.y + unit.y),
         ],
         cross_stroke,
     );
