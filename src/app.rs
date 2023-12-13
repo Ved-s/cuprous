@@ -475,6 +475,17 @@ impl App {
                         ui.label("Esc to deselect");
                         ui.label("While selecting, holding Shift will add to existing selection and Ctrl will remove from it");
                         ui.add_space(5.0);
+                        ui.label("In editor:");
+                        ui.add_space(2.0);
+                        ui.label("  R to rotate selected component (if applicable)");
+                        ui.label("  F to flip selected component (if applicable)");
+                        let paused = if self.editor.board.state.is_frozen() {
+                            "  P to resume current circuit simulation"
+                        } else {
+                            "  P to pause current circuit simulation"
+                        };
+                        ui.label(paused);
+                        ui.add_space(5.0);
                     });
                     let editor_text = if self.designer.is_some() { "Editor mode" } else { "Editor mode (current mode)" };
                     CollapsingHeader::new(editor_text).id_source("tut_editor").show(ui, |ui| {
@@ -497,6 +508,25 @@ impl App {
                         ui.add_space(5.0);
                         ui.label("Rectangle decorations can be moved by dragging them and resized by dragging their edges");
                         ui.label("Pins can be moved by dragging them");
+                        ui.add_space(5.0);
+                    });
+                    CollapsingHeader::new("Editor debug controls").show(ui, |ui| {
+                        let debug = if self.editor.debug {
+                            "F9 to disable visual debug mode"
+                        } else {
+                            "F9 to enable visual debug mode"
+                        };
+                        ui.label(debug);
+                        ui.label("F8 to reload current board editor");
+                        ui.label("F4 to reset current board state");
+                        ui.label("Ctrl+F4 to reset all states of the current board");
+                        ui.label("Shift+F4 to reset all states of all boards");
+                        let queue = if self.editor.board.board.is_ordered_queue() {
+                            "Q to switch current circuit to random queue mode"
+                        } else {
+                            "Q to switch current circuit to ordered queue mode"
+                        };
+                        ui.label(queue);
                         ui.add_space(5.0);
                     });
                     ui.label("Project is in early development stage, a lot of things will be added and will change");

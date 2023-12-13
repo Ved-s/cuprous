@@ -7,7 +7,7 @@ use eframe::{
     },
     epaint::{Color32, PathShape, Rounding, Shape, Stroke},
 };
-use emath::{pos2, vec2, Pos2, Rangef, Rect, Align2};
+use emath::{pos2, vec2, Align2, Pos2, Rangef, Rect};
 
 use crate::{
     app::SimulationContext,
@@ -80,7 +80,7 @@ pub struct CircuitBoardEditor {
     pan_zoom: PanAndZoom,
     pub board: ActiveCircuitBoard,
 
-    debug: bool,
+    pub debug: bool,
     errors: ErrorList,
 
     paste: Option<Arc<PastePreview>>,
@@ -281,8 +281,12 @@ impl CircuitBoardEditor {
                             state.update_everything();
                         }
                     }
-                }
-                else {
+                } else if ui.input(|input| input.modifiers.command) {
+                    for state in self.board.board.states.states.read().iter() {
+                        state.reset();
+                        state.update_everything();
+                    }
+                } else {
                     let state = &self.board.state;
                     state.reset();
                     state.update_everything();
@@ -385,7 +389,6 @@ impl CircuitBoardEditor {
     }
 
     pub fn ui_update(&mut self, ui: &mut Ui) -> EditorResponse {
-
         let components_response = self.components_ui(ui);
 
         if let Some(SelectedItem::Circuit(p)) = self.selected_item() {
@@ -502,8 +505,6 @@ impl CircuitBoardEditor {
                 _ => (),
             }
 
-            let debug = self.debug;
-            let ordered_queue = self.board.board.is_ordered_queue();
             let states = self.board.board.states.states.read().iter().count();
             let frozen_states = self
                 .board
@@ -524,24 +525,7 @@ impl CircuitBoardEditor {
                 .filter(|s| !s.is_being_used())
                 .count();
 
-            let this_frozen = self.board.state.is_frozen();
-            let freeze_text = if this_frozen {
-                "Resume state"
-            } else {
-                "Freeze state"
-            };
-
-            let text = format!(
-                "[F9] Debug: {debug}\n\
-                 [F8] Board reload\n\
-                 [F4] State reset\n\
-                 [R]  Rotate\n\
-                 [F]  Flip\n\
-                 [Q]  Ordered queue: {ordered_queue}\n\
-                 [P]  {freeze_text}\n\
-                 This board has {states} state(s), {frozen_states} are frozen, {unused_states} will be removed
-                "
-            );
+            let text = format!("This board has {states} state(s), {frozen_states} are frozen, {unused_states} will be removed");
 
             ui.monospace(text);
         }
