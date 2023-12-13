@@ -518,9 +518,9 @@ impl App {
                         };
                         ui.label(debug);
                         ui.label("F8 to reload current board editor");
-                        ui.label("F4 to reset current board state");
-                        ui.label("Ctrl+F4 to reset all states of the current board");
-                        ui.label("Shift+F4 to reset all states of all boards");
+                        ui.label("F2 to reset current board state");
+                        ui.label("Ctrl+F2 to reset all states of the current board");
+                        ui.label("Shift+F2 to reset all states of all boards");
                         let queue = if self.editor.board.board.is_ordered_queue() {
                             "Q to switch current circuit to random queue mode"
                         } else {

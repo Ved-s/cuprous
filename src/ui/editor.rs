@@ -269,7 +269,7 @@ impl CircuitBoardEditor {
             } else if ui.input(|input| input.key_pressed(Key::F8)) {
                 let state = self.board.state.clone();
                 self.board = ActiveCircuitBoard::new(state);
-            } else if ui.input(|input| input.key_pressed(Key::F4)) {
+            } else if ui.input(|input| input.key_pressed(Key::F2)) {
                 if ui.input(|input| input.modifiers.shift) {
                     for board in self.board.board.ctx.boards.read().values() {
                         for state in board.board.states.states.read().iter() {
