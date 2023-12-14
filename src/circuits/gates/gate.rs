@@ -38,8 +38,8 @@ impl<'a> GateWireStates<'a> {
 }
 
 pub trait GateImpl {
-    fn id() -> &'static str;
-    fn name() -> &'static str;
+    const TYPE: &'static str;
+    const OP_DESC: &'static str;
 
     fn process(inputs: &[bool], extra: bool) -> bool;
     fn draw(
@@ -295,15 +295,34 @@ where
     I: GateImpl + Send + Sync + 'static,
 {
     _phantom: PhantomData<I>,
+    id: Arc<str>,
+    name: Arc<str>,
+    description: Arc<str>,
 }
 
-impl<I> Default for GatePreview<I>
+impl<I> GatePreview<I>
 where
     I: GateImpl + Send + Sync + 'static,
 {
-    fn default() -> Self {
+    pub fn new() -> Self {
+        let ty = I::TYPE;
+        let ty_upper = ty.to_uppercase();
+        let ty_upper = &&ty_upper;
+        let op_desc = I::OP_DESC;
+        let id = ty.to_lowercase().into();
+        let name = format!("{ty_upper} gate").into();
+        let description = format!("{ty_upper} gate, performing logical {ty_upper} operation.\n\
+                                   {op_desc}\n\
+                                   \n\
+                                   Can be configured to have multiple inputs.\n\
+                                   Inputs with None state are ignored.\n\
+                                   Output is Error when any input is Error.\
+                                  ").into();
         Self {
             _phantom: PhantomData,
+            id,
+            name,
+            description,
         }
     }
 }
@@ -328,7 +347,15 @@ where
     }
 
     fn type_name(&self) -> DynStaticStr {
-        I::id().into()
+        self.id.clone().into()
+    }
+
+    fn display_name(&self) -> DynStaticStr {
+        self.name.clone().into()
+    }
+
+    fn description(&self) -> DynStaticStr {
+        self.description.clone().into()
     }
 
     fn load_copy_data(
@@ -338,7 +365,13 @@ where
         _ctx: &Arc<SimulationContext>,
         _errors: &mut ErrorList,
     ) -> Option<Box<dyn CircuitPreviewImpl>> {
-        Some(Box::<GatePreview<I>>::default())
+        let copy = Self {
+            _phantom: PhantomData,
+            id: self.id.clone(),
+            name: self.name.clone(),
+            description: self.description.clone(),
+        };
+        Some(Box::new(copy))
     }
 
     fn default_props(&self) -> CircuitPropertyStore {
@@ -351,10 +384,6 @@ where
             props.push(CircuitProperty::new("extra", name, false));
         }
         CircuitPropertyStore::new(props)
-    }
-
-    fn display_name(&self) -> DynStaticStr {
-        I::name().into()
     }
 
     fn describe(&self, props: &CircuitPropertyStore) -> DynCircuitDescription {
@@ -383,7 +412,7 @@ impl Gate2497 {
             in_b: description.pins[1].to_info(),
             out: description.pins[2].to_info(),
             dir: Direction4::Right,
-            switch: false
+            switch: false,
         }
     }
 
@@ -564,7 +593,7 @@ impl Gate2497 {
             0 => WireState::None,
             1 => WireState::False,
             2 => WireState::True,
-            _ => WireState::Error
+            _ => WireState::Error,
         }
     }
 }
@@ -593,11 +622,7 @@ impl CircuitImpl for Gate2497 {
     fn update_signals(&self, ctx: &CircuitStateContext, _: Option<usize>) {
         let a = Self::state_to_f32(self.in_a.get_state(ctx));
         let b = Self::state_to_f32(self.in_b.get_state(ctx));
-        let out = if self.switch {
-            a + b
-        } else {
-            a - b
-        };
+        let out = if self.switch { a + b } else { a - b };
         self.out.set_state(ctx, Self::f32_to_state(out));
     }
 
@@ -613,6 +638,18 @@ impl CircuitImpl for Gate2497 {
 pub struct Gate2497Preview;
 
 impl CircuitPreviewImpl for Gate2497Preview {
+    fn type_name(&self) -> DynStaticStr {
+        "gate2497".into()
+    }
+
+    fn display_name(&self) -> DynStaticStr {
+        "NORXONDOR GORGONAX".into()
+    }
+
+    fn description(&self) -> DynStaticStr {
+        "https://xkcd.com/2497".into()
+    }
+
     fn draw_preview(&self, props: &CircuitPropertyStore, ctx: &PaintContext, in_world: bool) {
         let dir = props.read_clone("dir").unwrap_or(Direction4::Right);
         let angle = dir.inverted_ud().angle_to_right();
@@ -621,10 +658,6 @@ impl CircuitPreviewImpl for Gate2497Preview {
 
     fn create_impl(&self) -> Box<dyn CircuitImpl> {
         Box::new(Gate2497::new())
-    }
-
-    fn type_name(&self) -> DynStaticStr {
-        "gate2497".into()
     }
 
     fn load_copy_data(
@@ -640,12 +673,8 @@ impl CircuitPreviewImpl for Gate2497Preview {
     fn default_props(&self) -> CircuitPropertyStore {
         CircuitPropertyStore::new([
             CircuitProperty::new("dir", "Direction", Direction4::Right),
-            CircuitProperty::new("switch", "Switch", false)
+            CircuitProperty::new("switch", "Switch", false),
         ])
-    }
-
-    fn display_name(&self) -> DynStaticStr {
-        "NORXONDOR GORGONAX".into()
     }
 
     fn describe(&self, props: &CircuitPropertyStore) -> DynCircuitDescription {

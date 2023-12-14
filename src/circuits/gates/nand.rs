@@ -13,13 +13,8 @@ use super::gate::{calc_size_from_inputs, GateImpl, GateWireStates};
 pub struct Nand;
 
 impl GateImpl for Nand {
-    fn id() -> &'static str {
-        "nand"
-    }
-
-    fn name() -> &'static str {
-        "NAND gate"
-    }
+    const TYPE: &'static str = "nand";
+    const OP_DESC: &'static str = "Output is True when any input is False, otherwise False.";
 
     fn process(inputs: &[bool], _: bool) -> bool {
         !inputs.iter().all(|&v| v)

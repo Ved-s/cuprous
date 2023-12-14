@@ -27,7 +27,7 @@ impl FreqMeter {
     fn new() -> Self {
         let description = Self::describe(Direction4::Left);
         Self {
-            input: description.pins[0].to_info()
+            input: description.pins[0].to_info(),
         }
     }
 
@@ -108,7 +108,8 @@ impl FreqMeter {
                     Direction4::Left => [0, 1],
                     Direction4::Down => [2, 2],
                     Direction4::Right => [4, 1],
-                }.into(),
+                }
+                .into(),
             }],
         }
     }
@@ -127,8 +128,9 @@ impl CircuitImpl for FreqMeter {
 
     fn update_signals(&self, state_ctx: &CircuitStateContext, changed_pin: Option<usize>) {
         if changed_pin == Some(0) && self.input.get_state(state_ctx) == WireState::True {
-            state_ctx
-                .write_circuit_internal_state(|s: &mut FreqMeterState| s.timings.push_back(Instant::now()))
+            state_ctx.write_circuit_internal_state(|s: &mut FreqMeterState| {
+                s.timings.push_back(Instant::now())
+            })
         }
     }
 
@@ -151,6 +153,14 @@ impl CircuitPreviewImpl for FreqMeterPreview {
         "freq_meter".into()
     }
 
+    fn display_name(&self) -> DynStaticStr {
+        "Frequency meter".into()
+    }
+
+    fn description(&self) -> DynStaticStr {
+        "Displays the frequency of incoming signal, specifically, how many times a second it becomes high/True".into()
+    }
+
     fn draw_preview(&self, _: &CircuitPropertyStore, ctx: &PaintContext, in_world: bool) {
         FreqMeter::draw(ctx, None, in_world);
     }
@@ -171,10 +181,6 @@ impl CircuitPreviewImpl for FreqMeterPreview {
 
     fn default_props(&self) -> CircuitPropertyStore {
         CircuitPropertyStore::new([CircuitProperty::new("dir", "Direction", Direction4::Left)])
-    }
-
-    fn display_name(&self) -> DynStaticStr {
-        "Frequency meter".into()
     }
 
     fn describe(&self, props: &CircuitPropertyStore) -> DynCircuitDescription {

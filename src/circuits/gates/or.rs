@@ -15,13 +15,8 @@ use super::gate::{calc_size_from_inputs, GateImpl, GateWireStates};
 pub struct Or;
 
 impl GateImpl for Or {
-    fn id() -> &'static str {
-        "or"
-    }
-
-    fn name() -> &'static str {
-        "OR gate"
-    }
+    const TYPE: &'static str = "or";
+    const OP_DESC: &'static str = "Output is True if any inputs are True, otherwise False.";
 
     fn process(inputs: &[bool], _: bool) -> bool {
         inputs.iter().any(|b| *b)

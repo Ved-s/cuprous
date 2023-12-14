@@ -15,13 +15,10 @@ use super::gate::{calc_size_from_inputs, GateImpl, GateWireStates};
 pub struct Xnor;
 
 impl GateImpl for Xnor {
-    fn id() -> &'static str {
-        "xnor"
-    }
-
-    fn name() -> &'static str {
-        "XNOR gate"
-    }
+    const TYPE: &'static str = "xnor";
+    const OP_DESC: &'static str = "In One mode, Output is True, if 0 or more than 1 inputs are True, otherwise False.\n\
+                                   In Parity mode, Output is True, only when even amount of inputs are True, otherwise False.\
+                                  ";
 
     fn extra_toggle_name() -> Option<&'static str> {
         Some("Parity mode")

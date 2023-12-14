@@ -718,13 +718,12 @@ impl CircuitBoardEditor {
                                             _ => false,
                                         };
 
-                                        if ui
-                                            .selectable_label(
-                                                selected,
-                                                preview.imp.display_name().deref(),
-                                            )
-                                            .clicked()
-                                        {
+                                        let resp = ui.selectable_label(
+                                            selected,
+                                            preview.imp.display_name().deref(),
+                                        );
+
+                                        if resp.clicked() {
                                             self.selected_id = match selected {
                                                 true => None,
                                                 false => Some(SelectedItemId::Circuit(
@@ -732,6 +731,23 @@ impl CircuitBoardEditor {
                                                 )),
                                             };
                                         }
+
+                                        let style = ui.ctx().style();
+                                        ui.ctx().style_mut(|style| {
+                                            style.visuals.window_fill =
+                                                style.visuals.window_fill.linear_multiply(0.9);
+                                            style.visuals.window_stroke.color = style
+                                                .visuals
+                                                .window_stroke
+                                                .color
+                                                .linear_multiply(0.9);
+                                        });
+
+                                        resp.on_hover_ui(|ui| {
+                                            ui.label(preview.imp.description().deref());
+                                        });
+
+                                        ui.ctx().set_style(style);
                                     });
                                 }
                             }

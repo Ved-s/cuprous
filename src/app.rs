@@ -318,12 +318,12 @@ impl App {
     pub fn create(cc: &CreationContext) -> Self {
         let previews = [
             Box::new(circuits::button::ButtonPreview {}) as Box<dyn CircuitPreviewImpl>,
-            Box::<circuits::gates::gate::GatePreview<circuits::gates::or::Or>>::default(),
-            Box::<circuits::gates::gate::GatePreview<circuits::gates::xor::Xor>>::default(),
-            Box::<circuits::gates::gate::GatePreview<circuits::gates::nor::Nor>>::default(),
-            Box::<circuits::gates::gate::GatePreview<circuits::gates::xnor::Xnor>>::default(),
-            Box::<circuits::gates::gate::GatePreview<circuits::gates::and::And>>::default(),
-            Box::<circuits::gates::gate::GatePreview<circuits::gates::nand::Nand>>::default(),
+            Box::new(circuits::gates::gate::GatePreview::<circuits::gates::or::Or>::new()),
+            Box::new(circuits::gates::gate::GatePreview::<circuits::gates::xor::Xor>::new()),
+            Box::new(circuits::gates::gate::GatePreview::<circuits::gates::nor::Nor>::new()),
+            Box::new(circuits::gates::gate::GatePreview::<circuits::gates::xnor::Xnor>::new()),
+            Box::new(circuits::gates::gate::GatePreview::<circuits::gates::and::And>::new()),
+            Box::new(circuits::gates::gate::GatePreview::<circuits::gates::nand::Nand>::new()),
             Box::new(circuits::gates::gate::Gate2497Preview),
             Box::new(circuits::gates::not::NotPreview {}),
             Box::new(circuits::pullup::PullupPreview {}),
@@ -498,7 +498,7 @@ impl App {
                     });
                     let designer_text = if self.designer.is_some() { "Designer mode (current mode)" } else { "Designer mode" };
                     CollapsingHeader::new(designer_text).id_source("tut_designer").show(ui, |ui| {
-                        ui.label("Components panel on the left side contains circuit pins and (later) circuit decorations");
+                        ui.label("Components panel on the left side contains circuit pins, exposable controls from placed components and (later) circuit decorations");
                         ui.label("Circuit decorations can be selected in the inventory (more will be added later)");
                         ui.add_space(5.0);
                         ui.label("Property editor panel on the right side contains editable properties for selected pins or decorations");
@@ -508,6 +508,9 @@ impl App {
                         ui.add_space(5.0);
                         ui.label("Rectangle decorations can be moved by dragging them and resized by dragging their edges");
                         ui.label("Pins can be moved by dragging them");
+                        ui.add_space(5.0);
+                        ui.label("Some components placed on circuit board can be exposed as interactive controls on circuit's design.");
+                        ui.label("Controls can be moved and resized, but will keep original aspect ratio.");
                         ui.add_space(5.0);
                     });
                     CollapsingHeader::new("Editor debug controls").show(ui, |ui| {

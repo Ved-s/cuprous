@@ -69,16 +69,28 @@ impl CircuitImpl for Pullup {
 pub struct PullupPreview {}
 
 impl CircuitPreviewImpl for PullupPreview {
+
+    fn type_name(&self) -> DynStaticStr {
+        "pullup".into()
+    }
+
+    fn display_name(&self) -> DynStaticStr {
+        "Pullup".into()
+    }
+
+    fn description(&self) -> DynStaticStr {
+        "Pulls its pin low (False) when it's in None state.\n\
+         \n\
+         Expect this component to change in the future or being removed/replaced.\
+        ".into()
+    }
+
     fn draw_preview(&self, _: &CircuitPropertyStore, ctx: &PaintContext, in_world: bool) {
         Pullup::draw(ctx, in_world);
     }
 
     fn create_impl(&self) -> Box<dyn CircuitImpl> {
         Box::new(Pullup::new())
-    }
-
-    fn type_name(&self) -> DynStaticStr {
-        "pullup".into()
     }
 
     fn load_copy_data(
@@ -93,10 +105,6 @@ impl CircuitPreviewImpl for PullupPreview {
 
     fn default_props(&self) -> CircuitPropertyStore {
         Default::default()
-    }
-
-    fn display_name(&self) -> DynStaticStr {
-        "Pullup".into()
     }
 
     fn describe(&self, props: &CircuitPropertyStore) -> DynCircuitDescription {

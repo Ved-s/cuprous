@@ -306,6 +306,23 @@ impl InternalCircuitState for ButtonState {
 pub struct ButtonPreview {}
 
 impl CircuitPreviewImpl for ButtonPreview {
+    fn type_name(&self) -> DynStaticStr {
+        "button".into()
+    }
+
+    fn display_name(&self) -> DynStaticStr {
+        "Button".into()
+    }
+
+    fn description(&self) -> DynStaticStr {
+        "A clickable button.\n\
+         Click to pulse output once, Shift-click to toggle it.\n\
+         Size and appearance can be changed.\n\
+         \n\
+         Can be exposed in a circuit design.\
+        ".into()
+    }
+
     fn draw_preview(&self, props: &CircuitPropertyStore, ctx: &PaintContext, in_world: bool) {
         Button::draw_base(ctx, in_world);
         let button_ctx = ctx.with_rect(ctx.rect.shrink(ctx.screen.scale * 0.75));
@@ -337,10 +354,6 @@ impl CircuitPreviewImpl for ButtonPreview {
         Box::new(Button::new())
     }
 
-    fn type_name(&self) -> DynStaticStr {
-        "button".into()
-    }
-
     fn load_copy_data(
         &self,
         _imp: &serde_intermediate::Intermediate,
@@ -367,10 +380,6 @@ impl CircuitPreviewImpl for ButtonPreview {
             ),
             CircuitProperty::new("rounding", "Rounding", Rounding::same(0.75)),
         ])
-    }
-
-    fn display_name(&self) -> DynStaticStr {
-        "Button".into()
     }
 
     fn describe(&self, props: &CircuitPropertyStore) -> DynCircuitDescription {

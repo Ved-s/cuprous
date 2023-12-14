@@ -697,6 +697,19 @@ impl CircuitPreviewImpl for BoardPreview {
         "board".into()
     }
 
+    fn display_name(&self) -> DynStaticStr {
+        self.board
+            .as_ref()
+            .map(|b| b.name.read().get_arc().into())
+            .unwrap_or("Circuit board".into())
+    }
+
+    // No description since it doesn't appear in inventory or component list
+    fn description(&self) -> DynStaticStr {
+        "".into()
+    }
+
+    // TODO: draw controls
     fn draw_preview(&self, _: &CircuitPropertyStore, ctx: &PaintContext, in_world: bool) {
         let design = self
             .design
@@ -760,13 +773,6 @@ impl CircuitPreviewImpl for BoardPreview {
 
     fn default_props(&self) -> CircuitPropertyStore {
         CircuitPropertyStore::default()
-    }
-
-    fn display_name(&self) -> DynStaticStr {
-        self.board
-            .as_ref()
-            .map(|b| b.name.read().get_arc().into())
-            .unwrap_or("Circuit board".into())
     }
 
     fn describe(&self, props: &CircuitPropertyStore) -> DynCircuitDescription {

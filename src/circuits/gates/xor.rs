@@ -15,13 +15,10 @@ use super::gate::{calc_size_from_inputs, GateImpl, GateWireStates};
 pub struct Xor;
 
 impl GateImpl for Xor {
-    fn id() -> &'static str {
-        "xor"
-    }
-
-    fn name() -> &'static str {
-        "XOR gate"
-    }
+    const TYPE: &'static str = "xor";
+    const OP_DESC: &'static str = "In One mode, Output is True, only when exactly one input is True, otherwise False.\n\
+                                   In Parity mode, Output is True, only when odd amount of inputs are True, otherwise False.\
+                                  ";
 
     fn extra_toggle_name() -> Option<&'static str> {
         Some("Parity mode")

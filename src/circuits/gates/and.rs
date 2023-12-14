@@ -13,13 +13,8 @@ use super::gate::{calc_size_from_inputs, GateImpl, GateWireStates};
 pub struct And;
 
 impl GateImpl for And {
-    fn id() -> &'static str {
-        "and"
-    }
-
-    fn name() -> &'static str {
-        "AND gate"
-    }
+    const TYPE: &'static str = "and";
+    const OP_DESC: &'static str = "Output is True only when all inputs are True, otherwise False.";
 
     fn process(inputs: &[bool], _: bool) -> bool {
         inputs.iter().all(|&v| v)

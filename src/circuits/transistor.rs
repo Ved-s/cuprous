@@ -144,6 +144,20 @@ impl CircuitPreviewImpl for TransistorPreview {
         "transistor".into()
     }
 
+    fn display_name(&self) -> DynStaticStr {
+        "Transistor".into()
+    }
+
+    fn description(&self) -> DynStaticStr {
+        "A component that imitates how real-world transistors work.\n\
+         Passes any signal from Collector to Emitter if Base receives correct signal level.\n\
+         PNP-type transistor opens when Base is low or False,\n\
+         NPN-type transistor opens when Base is high or True.\n\
+         Always closed when Base is not connected or in None state,\n\
+         produces Error on the Emitter when Base receives Error.\
+        ".into()
+    }
+
     fn draw_preview(&self, props: &CircuitPropertyStore, ctx: &PaintContext, _: bool) {
         let angle = props
             .read_clone("dir")
@@ -183,10 +197,6 @@ impl CircuitPreviewImpl for TransistorPreview {
             CircuitProperty::new("flip", "Flip", false),
             CircuitProperty::new("ty", "Type", TransistorType::NPN),
         ])
-    }
-
-    fn display_name(&self) -> DynStaticStr {
-        "Transistor".into()
     }
 
     fn describe(&self, props: &CircuitPropertyStore) -> DynCircuitDescription {

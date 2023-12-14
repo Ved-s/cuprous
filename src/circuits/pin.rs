@@ -459,6 +459,20 @@ impl CircuitPreviewImpl for Preview {
         TYPEID.into()
     }
 
+    fn display_name(&self) -> DynStaticStr {
+        "Circuit pin".into()
+    }
+
+    fn description(&self) -> DynStaticStr {
+        "A component to communicate with outside board.\n\
+         Represents a pin in a placeable circuit form of a circuit board.\n\
+         Passes signals to or from another circuit board when current board is placed in a circuit form.\n\
+         \n\
+         Can be clicked on to change state if not connected to an outside pin.\n\
+         Can carry signals outside, inside or controlled by a separate Control input.\
+        ".into()
+    }
+
     fn draw_preview(&self, props: &CircuitPropertyStore, ctx: &PaintContext, _: bool) {
         let dir = props.read_clone("dir").unwrap_or(Pin::DEFAULT_DIR);
         let ty = props.read_clone("ty").unwrap_or(PinType::Pico);
@@ -497,10 +511,6 @@ impl CircuitPreviewImpl for Preview {
             CircuitProperty::new("ty", "Pin type", PinType::Pico),
             CircuitProperty::new("cpos", "Control pos", ControlPinPosition::Left),
         ])
-    }
-
-    fn display_name(&self) -> DynStaticStr {
-        "Circuit pin".into()
     }
 
     fn describe(&self, props: &CircuitPropertyStore) -> DynCircuitDescription {

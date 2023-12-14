@@ -125,6 +125,23 @@ impl CircuitImpl for Not {
 pub struct NotPreview {}
 
 impl CircuitPreviewImpl for NotPreview {
+
+    fn type_name(&self) -> DynStaticStr {
+        "not".into()
+    }
+
+    fn display_name(&self) -> DynStaticStr {
+        "NOT gate".into()
+    }
+
+    fn description(&self) -> DynStaticStr {
+        "NOT gate, performing logical NOT operation.\n\
+         Inverts the binary value of the input signal.\n\
+         \n\
+         None and Error are passed through.\
+        ".into()
+    }
+
     fn draw_preview(&self, props: &CircuitPropertyStore, ctx: &PaintContext, in_world: bool) {
         let angle = props
             .read_clone("dir")
@@ -136,10 +153,6 @@ impl CircuitPreviewImpl for NotPreview {
 
     fn create_impl(&self) -> Box<dyn CircuitImpl> {
         Box::new(Not::new())
-    }
-
-    fn type_name(&self) -> DynStaticStr {
-        "not".into()
     }
 
     fn load_copy_data(
@@ -154,10 +167,6 @@ impl CircuitPreviewImpl for NotPreview {
 
     fn default_props(&self) -> CircuitPropertyStore {
         CircuitPropertyStore::new([CircuitProperty::new("dir", "Direction", Direction4::Right)])
-    }
-
-    fn display_name(&self) -> DynStaticStr {
-        "NOT gate".into()
     }
 
     fn describe(&self, props: &CircuitPropertyStore) -> crate::circuits::DynCircuitDescription {

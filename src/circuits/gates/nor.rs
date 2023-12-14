@@ -15,13 +15,8 @@ use super::gate::{calc_size_from_inputs, GateImpl, GateWireStates};
 pub struct Nor;
 
 impl GateImpl for Nor {
-    fn id() -> &'static str {
-        "nor"
-    }
-
-    fn name() -> &'static str {
-        "NOR gate"
-    }
+    const TYPE: &'static str = "nor";
+    const OP_DESC: &'static str = "Output is True when none of the inputs are True, otherwise False.";
 
     fn process(inputs: &[bool], _: bool) -> bool {
         !inputs.iter().any(|b| *b)
