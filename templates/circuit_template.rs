@@ -48,6 +48,14 @@ impl CircuitPreviewImpl for TemplatePreview {
         todo!()
     }
 
+    fn display_name(&self) -> DynStaticStr {
+        todo!()
+    }
+
+    fn description(&self) -> DynStaticStr {
+        todo!()
+    }
+
     fn draw_preview(&self, props: &CircuitPropertyStore, ctx: &PaintContext, in_world: bool) {
         Template::draw(None, ctx, in_world);
     }
@@ -67,10 +75,6 @@ impl CircuitPreviewImpl for TemplatePreview {
     }
 
     fn default_props(&self) -> CircuitPropertyStore {
-        todo!()
-    }
-
-    fn display_name(&self) -> DynStaticStr {
         todo!()
     }
 

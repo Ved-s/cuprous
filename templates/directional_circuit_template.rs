@@ -73,6 +73,14 @@ impl CircuitPreviewImpl for TemplatePreview {
         todo!()
     }
 
+    fn display_name(&self) -> DynStaticStr {
+        todo!()
+    }
+
+    fn description(&self) -> DynStaticStr {
+        todo!()
+    }
+
     fn draw_preview(&self, props: &CircuitPropertyStore, ctx: &PaintContext, in_world: bool) {
         let dir = props.read_clone("dir").unwrap_or(Template::DEFAULT_DIR);
         Template::draw(None, dir, ctx, in_world);
@@ -96,10 +104,6 @@ impl CircuitPreviewImpl for TemplatePreview {
         CircuitPropertyStore::new([
             CircuitProperty::new("dir", "Direction", Template::DEFAULT_DIR)
         ])
-    }
-
-    fn display_name(&self) -> DynStaticStr {
-        todo!()
     }
 
     fn describe(&self, props: &CircuitPropertyStore) -> DynCircuitDescription {
