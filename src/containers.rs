@@ -1,5 +1,5 @@
 use std::{
-    collections::{hash_map::RandomState, VecDeque, vec_deque},
+    collections::{hash_map::RandomState, vec_deque, VecDeque},
     hash::{BuildHasher, Hasher},
     mem::MaybeUninit,
     ops::{Bound, Index, Range, RangeBounds},
@@ -37,7 +37,10 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for FixedVec<T> {
             Some(_) => None,
             None => Some(i),
         });
-        Ok(Self { inner: vec, first_free })
+        Ok(Self {
+            inner: vec,
+            first_free,
+        })
     }
 }
 
@@ -53,7 +56,6 @@ pub struct VecSetResult<'a, T> {
 }
 
 impl<T> FixedVec<T> {
-
     pub fn new() -> Self {
         Self {
             inner: vec![],
@@ -74,7 +76,10 @@ impl<T> FixedVec<T> {
             .enumerate()
             .find(|(_, v)| v.is_none())
             .map(|(i, _)| i);
-        Self { inner: vec, first_free }
+        Self {
+            inner: vec,
+            first_free,
+        }
     }
 
     pub fn get_nth_existing_index(&self, pos: usize) -> Option<usize> {
@@ -284,7 +289,12 @@ impl<T> FixedVec<T> {
         }
     }
 
-    pub fn read_or_create_locked<R>(lock: &RwLock<Self>, pos: usize, creator: impl FnOnce() -> T, reader: impl FnOnce(&T) -> R) -> R {
+    pub fn read_or_create_locked<R>(
+        lock: &RwLock<Self>,
+        pos: usize,
+        creator: impl FnOnce() -> T,
+        reader: impl FnOnce(&T) -> R,
+    ) -> R {
         if let Some(value) = lock.read().get(pos) {
             return reader(value);
         }
@@ -292,8 +302,7 @@ impl<T> FixedVec<T> {
         let mut lock = lock.write();
         if let Some(value) = lock.get(pos) {
             reader(value)
-        }
-        else {
+        } else {
             let r = lock.set(creator(), pos).value_ref;
             reader(r)
         }
@@ -319,7 +328,7 @@ impl<T> Drop for FixedVecDrain<'_, T> {
             return;
         }
 
-        for i in self.start+self.pos..self.start+self.len {
+        for i in self.start + self.pos..self.start + self.len {
             self.vec.inner[i] = None;
         }
         self.vec.strip_inner();
@@ -329,11 +338,10 @@ impl<T> Drop for FixedVecDrain<'_, T> {
                 let ff = ff.min(self.start);
                 if ff >= self.vec.inner.len() {
                     None
-                }
-                else {
+                } else {
                     Some(ff)
                 }
-            },
+            }
         }
     }
 }
@@ -435,8 +443,8 @@ impl<const CHUNK_SIZE: usize, T: Default> Chunks2D<CHUNK_SIZE, T> {
     const QUARTERS_RIGHT: usize = 0x1;
 
     fn to_chunk_pos(pos: Vec2isize) -> (Vec2isize, Vec2usize) {
-        let chunk_x = pos.x.div_floor(CHUNK_SIZE as isize);
-        let chunk_y = pos.y.div_floor(CHUNK_SIZE as isize);
+        let chunk_x = div_floor_isize(pos.x, CHUNK_SIZE as isize);
+        let chunk_y = div_floor_isize(pos.y, CHUNK_SIZE as isize);
         let pos_x = (pos.x - (chunk_x * CHUNK_SIZE as isize)) as usize;
         let pos_y = (pos.y - (chunk_y * CHUNK_SIZE as isize)) as usize;
         ([chunk_x, chunk_y].into(), [pos_x, pos_y].into())
@@ -593,8 +601,8 @@ impl<const CHUNK_SIZE: usize, T: Default> Chunks2D<CHUNK_SIZE, T> {
         let tiles_tl = pos;
         let tiles_br = pos + size;
 
-        let chunks_tl = pos.convert(|v| v.div_floor(CHUNK_SIZE as isize));
-        let chunks_br = (pos + size).convert(|v| v.div_ceil(CHUNK_SIZE as isize));
+        let chunks_tl = pos.convert(|v| div_floor_isize(v, CHUNK_SIZE as isize));
+        let chunks_br = (pos + size).convert(|v| div_ceil_isize(v, CHUNK_SIZE as isize));
 
         let empty = size.x == 0 || size.y == 0;
 
@@ -622,8 +630,8 @@ impl<const CHUNK_SIZE: usize, T: Default> Chunks2D<CHUNK_SIZE, T> {
         pass: &P,
         f: impl Fn(Vec2isize, &T, &P),
     ) {
-        let chunks_tl = tl.convert(|v| v.div_floor(CHUNK_SIZE as isize));
-        let chunks_br = br.convert(|v| v.div_floor(CHUNK_SIZE as isize));
+        let chunks_tl = tl.convert(|v| div_floor_isize(v, CHUNK_SIZE as isize));
+        let chunks_br = br.convert(|v| div_floor_isize(v, CHUNK_SIZE as isize));
 
         for cy in chunks_tl.y..=chunks_br.y {
             let rowrange = self.get_chunk_row_range(cy);
@@ -663,6 +671,27 @@ impl<const CHUNK_SIZE: usize, T: Default> Chunks2D<CHUNK_SIZE, T> {
                 }
             }
         }
+    }
+}
+
+// literally just copied from generated std code
+const fn div_floor_isize(lhs: isize, rhs: isize) -> isize {
+    let d = lhs / rhs;
+    let r = lhs % rhs;
+    if (r > 0 && rhs < 0) || (r < 0 && rhs > 0) {
+        d - 1
+    } else {
+        d
+    }
+}
+
+const fn div_ceil_isize(lhs: isize, rhs: isize) -> isize {
+    let d = lhs / rhs;
+    let r = lhs % rhs;
+    if (r > 0 && rhs > 0) || (r < 0 && rhs < 0) {
+        d + 1
+    } else {
+        d
     }
 }
 
@@ -817,6 +846,7 @@ impl<T, S: Default + BuildHasher> Default for RandomQueue<T, S> {
     }
 }
 
+#[allow(unused)]
 impl<T> RandomQueue<T> {
     pub fn new() -> RandomQueue<T, RandomState> {
         Default::default()
@@ -995,7 +1025,11 @@ impl<T, const SIZE: usize> ConstRingBuffer<SIZE, T> {
     }
 
     pub fn iter(&self) -> ConstRingBufferRefIterator<'_, T> {
-        let start = if SIZE == 0 { self.pos } else { (self.pos + SIZE - self.len) % SIZE };
+        let start = if SIZE == 0 {
+            self.pos
+        } else {
+            (self.pos + SIZE - self.len) % SIZE
+        };
         ConstRingBufferRefIterator {
             buf: unsafe { std::mem::transmute(self.array.as_ref()) },
             start,
@@ -1051,7 +1085,7 @@ impl<'a, T> Iterator for ConstRingBufferRefIterator<'a, T> {
 
 pub enum Queue<T> {
     Random(RandomQueue<T>),
-    Ordered(VecDeque<T>)
+    Ordered(VecDeque<T>),
 }
 
 impl<T> Queue<T> {
@@ -1089,8 +1123,7 @@ impl<T> Queue<T> {
                 let vec: Vec<T> = r.drain().collect();
                 *self = Queue::Ordered(VecDeque::from(vec))
             }
-        }
-        else if let Queue::Ordered(o) = self {
+        } else if let Queue::Ordered(o) = self {
             let v = o.drain(..).map(Some).collect();
             *self = Queue::Random(RandomQueue::from_option_vec(v))
         }
@@ -1113,7 +1146,7 @@ impl<T> Queue<T> {
 
 pub enum QueueIter<'a, T> {
     FixedVec(FixedVecIterator<'a, T>),
-    VecDeque(vec_deque::Iter<'a, T>)
+    VecDeque(vec_deque::Iter<'a, T>),
 }
 
 impl<'a, T> Iterator for QueueIter<'a, T> {

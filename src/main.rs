@@ -1,5 +1,3 @@
-#![feature(int_roundings)]
-
 use std::{
     borrow::Borrow,
     collections::HashSet,
