@@ -18,6 +18,7 @@ use cache::GLOBAL_STR_CACHE;
 use eframe::{
     egui::{self, Sense, Ui},
     epaint::{Color32, Rounding},
+    Theme,
 };
 use emath::{vec2, Rect};
 
@@ -88,6 +89,7 @@ fn main() {
             app_id: Some("cuprous".into()),
             follow_system_theme: false,
             drag_and_drop_support: true,
+            default_theme: Theme::Dark,
             ..Default::default()
         };
 
@@ -103,12 +105,17 @@ fn main() {
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 #[cfg(feature = "wasm")]
 pub async fn web_main(canvas_id: &str) -> Result<(), JsValue> {
-    use eframe::WebOptions;
+    let options = eframe::WebOptions {
+        follow_system_theme: false,
+        default_theme: Theme::Dark,
+
+        ..Default::default()
+    };
 
     eframe::WebRunner::new()
         .start(
             canvas_id,
-            WebOptions::default(),
+            options,
             Box::new(|cc| Box::new(app::App::create(cc))),
         )
         .await
@@ -873,11 +880,7 @@ impl PastePreview {
         let size = {
             let mut size = Vec2u::default();
             for wire in wires.iter() {
-                size = [
-                    size.x.max(wire.pos.x + 1),
-                    size.y.max(wire.pos.y + 1),
-                ]
-                .into()
+                size = [size.x.max(wire.pos.x + 1), size.y.max(wire.pos.y + 1)].into()
             }
             for (circuit, preview) in circuits.iter() {
                 let br = circuit.pos + preview.describe().size;
@@ -984,7 +987,7 @@ impl PastePreview {
                                         &ctx,
                                         &circuit_data.internal,
                                         true,
-                                        &mut errors
+                                        &mut errors,
                                     );
                                 });
                             }
