@@ -95,6 +95,7 @@ static INVENTORY_CIRCUIT_ORDER: &[&str] = &["or", "nor", "and", "nand", "xor", "
 
 static COMPONENT_BUILTIN_ORDER: &[&str] = &[
     "button",
+    "led",
     "or",
     "nor",
     "and",

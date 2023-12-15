@@ -318,6 +318,7 @@ impl App {
     pub fn create(cc: &CreationContext) -> Self {
         let previews = [
             Box::new(circuits::button::ButtonPreview {}) as Box<dyn CircuitPreviewImpl>,
+            Box::new(circuits::led::LedPreview {}) as Box<dyn CircuitPreviewImpl>,
             Box::new(circuits::gates::gate::GatePreview::<circuits::gates::or::Or>::new()),
             Box::new(circuits::gates::gate::GatePreview::<circuits::gates::xor::Xor>::new()),
             Box::new(circuits::gates::gate::GatePreview::<circuits::gates::nor::Nor>::new()),

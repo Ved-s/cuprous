@@ -29,6 +29,7 @@ pub mod board;
 pub mod button;
 pub mod freq_meter;
 pub mod gates;
+pub mod led;
 pub mod pin;
 pub mod props;
 pub mod pullup;
@@ -297,7 +298,6 @@ pub struct Circuit {
 }
 
 impl Circuit {
-
     #[allow(clippy::too_many_arguments)] // TODO: cleanup
     pub fn create(
         id: usize,
@@ -671,9 +671,17 @@ impl CircuitPreview {
         Self::new(imp, props)
     }
 
-    pub fn load_copy(&self, data: &CircuitCopyData, ctx: &Arc<SimulationContext>, errors: &mut ErrorList) -> Option<Self> {
-        let mut errors = errors.enter_context(|| format!("loading preview for {}", data.ty.deref()));
-        let imp = self.imp.load_copy_data(&data.imp, &data.internal, ctx, &mut errors)?;
+    pub fn load_copy(
+        &self,
+        data: &CircuitCopyData,
+        ctx: &Arc<SimulationContext>,
+        errors: &mut ErrorList,
+    ) -> Option<Self> {
+        let mut errors =
+            errors.enter_context(|| format!("loading preview for {}", data.ty.deref()));
+        let imp = self
+            .imp
+            .load_copy_data(&data.imp, &data.internal, ctx, &mut errors)?;
         let props = imp.default_props();
         props.load(&data.props);
         let description = RwLock::new(imp.describe(&props));
