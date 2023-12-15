@@ -617,13 +617,13 @@ impl CircuitImpl for Board {
         }
     }
 
-    fn state_remove(&self, ctx: &CircuitStateContext) {
+    fn state_remove(&self, ctx: &CircuitStateContext, reset_state: &mut bool) {
         ctx.write_circuit_internal_state(|s: &mut BoardState| {
             if let Some(state) = s.state.take() {
                 state.set_parent(None);
                 state.set_frozen(true);
+                *reset_state = false;
             }
-            s.state_id = None;
         });
     }
 
@@ -646,7 +646,7 @@ impl CircuitImpl for Board {
         None
     }
 
-    fn save(&self, circ: &Arc<Circuit>, _: bool) -> serde_intermediate::Intermediate {
+    fn save(&self, circ: &Arc<Circuit>, _copy: bool) -> serde_intermediate::Intermediate {
         let board_id = self.board.as_ref().map(|b| b.uid).or(self.board_id);
 
         let design_id = self.design.as_ref().map(|d| d.id).or(self.design_id);

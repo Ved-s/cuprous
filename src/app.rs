@@ -320,11 +320,21 @@ impl App {
             Box::new(circuits::button::ButtonPreview {}) as Box<dyn CircuitPreviewImpl>,
             Box::new(circuits::led::LedPreview {}) as Box<dyn CircuitPreviewImpl>,
             Box::new(circuits::gates::gate::GatePreview::<circuits::gates::or::Or>::new()),
-            Box::new(circuits::gates::gate::GatePreview::<circuits::gates::xor::Xor>::new()),
-            Box::new(circuits::gates::gate::GatePreview::<circuits::gates::nor::Nor>::new()),
-            Box::new(circuits::gates::gate::GatePreview::<circuits::gates::xnor::Xnor>::new()),
-            Box::new(circuits::gates::gate::GatePreview::<circuits::gates::and::And>::new()),
-            Box::new(circuits::gates::gate::GatePreview::<circuits::gates::nand::Nand>::new()),
+            Box::new(circuits::gates::gate::GatePreview::<
+                circuits::gates::xor::Xor,
+            >::new()),
+            Box::new(circuits::gates::gate::GatePreview::<
+                circuits::gates::nor::Nor,
+            >::new()),
+            Box::new(circuits::gates::gate::GatePreview::<
+                circuits::gates::xnor::Xnor,
+            >::new()),
+            Box::new(circuits::gates::gate::GatePreview::<
+                circuits::gates::and::And,
+            >::new()),
+            Box::new(circuits::gates::gate::GatePreview::<
+                circuits::gates::nand::Nand,
+            >::new()),
             Box::new(circuits::gates::gate::Gate2497Preview),
             Box::new(circuits::gates::not::NotPreview {}),
             Box::new(circuits::pullup::PullupPreview {}),
@@ -457,6 +467,19 @@ impl App {
     fn debug_tab<'a>(&'a mut self, ui: &'a mut Ui) {
         if ui.button("Reset simulation").clicked() {
             self.sim.reset();
+        }
+        if ui.button("Purge unused states").clicked() {
+            let board = &self.editor.board.board;
+            let mut states = board.states.states.write();
+            let indexes: Vec<_> = states
+                .inner
+                .iter()
+                .enumerate()
+                .filter_map(|(i, s)| s.as_ref().is_some_and(|s| !s.is_being_used()).then_some(i))
+                .collect();
+            for index in indexes {
+                states.remove(index);
+            }
         }
     }
 

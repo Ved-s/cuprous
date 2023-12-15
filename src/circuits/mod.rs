@@ -570,7 +570,8 @@ pub trait CircuitImpl: Any + Send + Sync {
 
     /// Called once on circuit removal for each active state<br>
     /// Called before `remove_circuit`<br>
-    fn state_remove(&self, ctx: &CircuitStateContext) {}
+    /// if `reset_state` will be true, internal state will be removed 
+    fn state_remove(&self, ctx: &CircuitStateContext, reset_state: &mut bool) {}
 
     /// Called once on circuit removal<br>
     /// Called after all calls to `remove_state`<br>

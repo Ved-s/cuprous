@@ -563,9 +563,12 @@ impl State {
 
     pub fn remove_circuit_state(self: &Arc<Self>, circuit: &Arc<Circuit>) {
         let state_ctx = CircuitStateContext::new(self.clone(), circuit.clone());
-        circuit.imp.read().state_remove(&state_ctx);
+        let mut reset_state = true;
+        circuit.imp.read().state_remove(&state_ctx, &mut reset_state);
 
-        self.circuits.write().remove(circuit.id);
+        if reset_state {
+            self.circuits.write().remove(circuit.id);
+        }
         self.reset_circuit_update_interval(circuit.id);
     }
 
