@@ -2278,7 +2278,7 @@ impl ActiveCircuitBoard {
         circuit: usize,
         property: &str,
         old_value: &dyn CircuitPropertyImpl,
-    ) {
+    ) -> bool {
         if !self.try_updating_circuit_property(circuit, property) {
             let circuits = self.board.circuits.read();
             if let Some(circuit) = circuits.get(circuit) {
@@ -2286,7 +2286,9 @@ impl ActiveCircuitBoard {
                     .props
                     .write_dyn(property, |p| old_value.copy_into(p.imp_mut()));
             }
+            return false;
         }
+        true
     }
 
     // todo: result

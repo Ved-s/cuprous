@@ -302,6 +302,7 @@ impl CircuitBoardEditor {
                     self.change_selected_props(selected, "label_dir", |d: &mut Direction4| {
                         *d = d.rotate_clockwise()
                     });
+                    self.swap_selected_size(selected);
                 }
 
                 if ui.input(|input| input.key_pressed(Key::F)) {
@@ -610,6 +611,73 @@ impl CircuitBoardEditor {
             for (circuit, old) in vec {
                 self.board
                     .circuit_property_changed(circuit, id, old.as_ref());
+            }
+        }
+    }
+
+    fn swap_selected_size(&mut self, selected_item: &SelectedItem) {
+        fn swap_props(props: &CircuitPropertyStore) -> Option<[Box<dyn CircuitPropertyImpl>; 2]> {
+            let width = props.read_dyn("width", |p| p.imp().clone());
+            let width = unwrap_option_or_return!(width, None);
+            let height = props.read_dyn("height", |p| p.imp().clone());
+            let height = unwrap_option_or_return!(height, None);
+            if width.type_id() != height.type_id() {
+                return None;
+            }
+            props.write_dyn("width", |p| height.copy_into(p.imp_mut()));
+            props.write_dyn("height", |p| width.copy_into(p.imp_mut()));
+            Some([width, height])
+        }
+
+        if let SelectedItem::Circuit(pre) = selected_item {
+            if swap_props(&pre.props).is_some() {
+                pre.redescribe();
+            }
+        } else {
+            let selected_circuits: Vec<_> = self
+                .board
+                .selection
+                .borrow()
+                .selection
+                .iter()
+                .filter_map(|o| match o {
+                    SelectedBoardObject::Circuit { id } => Some(*id),
+                    _ => None,
+                })
+                .collect();
+
+            let mut vec = vec![];
+            let circuits = self.board.board.circuits.read();
+            for circuit_id in selected_circuits {
+                let circuit = circuits.get(circuit_id);
+                let circuit = unwrap_option_or_continue!(circuit);
+                let old = swap_props(&circuit.props);
+                let old = unwrap_option_or_continue!(old);
+                vec.push((circuit.clone(), old))
+            }
+            drop(circuits);
+            for (circuit, [oldw, oldh]) in vec {
+                let width = self
+                    .board
+                    .circuit_property_changed(circuit.id, "width", oldw.as_ref());
+                if !width {
+                    circuit
+                        .props
+                        .write_dyn("height", |p| oldh.copy_into(p.imp_mut()));
+                    continue;
+                }
+
+                let height =
+                    self.board
+                        .circuit_property_changed(circuit.id, "height", oldh.as_ref());
+                if !height {
+                    circuit
+                        .props
+                        .write_dyn("width", |p| oldw.copy_into(p.imp_mut()));
+                    self.board
+                        .circuit_property_changed(circuit.id, "width", oldh.as_ref()); // width was successfully set to height before
+                    continue;
+                }
             }
         }
     }
