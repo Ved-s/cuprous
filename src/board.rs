@@ -2437,9 +2437,15 @@ impl Decoration {
                     visuals.stroke.width * scale,
                     visuals.stroke.color.linear_multiply(opacity),
                 );
+                let scaled_rounding = Rounding {
+                    nw: visuals.rounding.nw * scale,
+                    ne: visuals.rounding.ne * scale,
+                    sw: visuals.rounding.sw * scale,
+                    se: visuals.rounding.se * scale,
+                };
                 painter.rect(
                     rect,
-                    visuals.rounding,
+                    scaled_rounding,
                     visuals.fill.linear_multiply(opacity),
                     scaled_stroke,
                 );

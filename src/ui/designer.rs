@@ -6,7 +6,7 @@ use std::{
 
 use eframe::{
     egui::{
-        CollapsingHeader, ComboBox, Frame, Grid, Key, Label, Margin, PointerButton,
+        CollapsingHeader, ComboBox, DragValue, Frame, Grid, Key, Label, Margin, PointerButton,
         ScrollArea, Sense, Slider, TextEdit, TextStyle, Ui, Widget,
     },
     epaint::{Color32, FontId, Rounding, Shape, Stroke},
@@ -34,8 +34,8 @@ use super::{
         SelectionInventoryItem,
     },
     side_panel::{PanelSide, SidePanel},
-    DragState, Inventory, InventoryItemGroup, PaintableInventoryItem,
-    RectProperty, RectPropertyChanges, RectVisuals, Sides,
+    DragState, Inventory, InventoryItemGroup, PaintableInventoryItem, RectProperty,
+    RectPropertyChanges, RectVisuals, Sides,
 };
 
 pub struct DesignerResponse {
@@ -402,10 +402,17 @@ impl Designer {
                     let mut scr_rect = screen.world_to_screen_rect(*rect);
                     let scaled_stroke =
                         Stroke::new(visuals.stroke.width * screen.scale, visuals.stroke.color);
+                    let scaled_rounding = Rounding {
+                        nw: visuals.rounding.nw * screen.scale,
+                        ne: visuals.rounding.ne * screen.scale,
+                        sw: visuals.rounding.sw * screen.scale,
+                        se: visuals.rounding.se * screen.scale,
+                    };
                     if self.selected_id.is_none() {
                         let id = ui.id().with("deco_rect").with(i);
                         let visuals = RectVisuals {
                             stroke: scaled_stroke,
+                            rounding: scaled_rounding,
                             ..*visuals
                         };
 
@@ -448,7 +455,7 @@ impl Designer {
                             *rect = screen.screen_to_world_rect(scr_rect);
                         }
                     } else {
-                        paint.rect(scr_rect, visuals.rounding, visuals.fill, scaled_stroke);
+                        paint.rect(scr_rect, scaled_rounding, visuals.fill, scaled_stroke);
                     }
                 }
             }
@@ -699,7 +706,6 @@ impl Designer {
     }
 
     pub fn ui_update(&mut self, ui: &mut Ui) -> DesignerResponse {
-
         let designs = self.storage.clone();
         let mut designs = designs.write();
         let design = designs.current_mut();
@@ -1115,6 +1121,7 @@ impl Designer {
         let mut stroke_width_changed = false;
         let mut stroke_color_changed = false;
         let mut rect_changes = RectPropertyChanges::default();
+        let mut rect_rounding_changes = [[false; 2]; 2];
 
         Grid::new("rect_props").show(ui, |ui| {
             ui.label("Fill color");
@@ -1131,6 +1138,34 @@ impl Designer {
             stroke_color_changed = ui
                 .color_edit_button_srgba(&mut visuals.stroke.color)
                 .changed();
+            ui.end_row();
+
+            ui.label("Rounding");
+            Grid::new(ui.next_auto_id().with("rounding_grid")).show(ui, |ui| {
+                rect_rounding_changes[0][0] = DragValue::new(&mut visuals.rounding.nw)
+                    .clamp_range(0.0..=f32::MAX)
+                    .speed(0.05)
+                    .ui(ui)
+                    .changed();
+                rect_rounding_changes[1][0] = DragValue::new(&mut visuals.rounding.ne)
+                    .clamp_range(0.0..=f32::MAX)
+                    .speed(0.05)
+                    .ui(ui)
+                    .changed();
+                ui.end_row();
+                rect_rounding_changes[0][1] = DragValue::new(&mut visuals.rounding.sw)
+                    .clamp_range(0.0..=f32::MAX)
+                    .speed(0.05)
+                    .ui(ui)
+                    .changed();
+                rect_rounding_changes[1][1] = DragValue::new(&mut visuals.rounding.se)
+                    .clamp_range(0.0..=f32::MAX)
+                    .speed(0.05)
+                    .ui(ui)
+                    .changed();
+                ui.end_row();
+            });
+
             ui.end_row();
         });
         if rect_ediror {
@@ -1171,6 +1206,19 @@ impl Designer {
                             RectProperty::Height => other_rect.set_height(rect.height()),
                         }
                     }
+                }
+
+                if rect_rounding_changes[0][0] {
+                    other_vis.rounding.nw = visuals.rounding.nw;
+                }
+                if rect_rounding_changes[1][0] {
+                    other_vis.rounding.ne = visuals.rounding.ne;
+                }
+                if rect_rounding_changes[0][1] {
+                    other_vis.rounding.sw = visuals.rounding.sw;
+                }
+                if rect_rounding_changes[1][1] {
+                    other_vis.rounding.se = visuals.rounding.se;
                 }
             }
         }
