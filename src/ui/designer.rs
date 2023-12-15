@@ -462,8 +462,8 @@ impl Designer {
         }
 
         for ((provider, control), info) in design.controls.iter_mut() {
-            info.rect.max.x = info.rect.max.x.max(rect.min.x + 0.05);
-            info.rect.max.y = info.rect.max.y.max(rect.min.y + 0.05);
+            info.rect.max.x = info.rect.max.x.max(info.rect.min.x + 0.05);
+            info.rect.max.y = info.rect.max.y.max(info.rect.min.y + 0.05);
 
             let mut scr_rect = screen.world_to_screen_rect(info.rect);
             if self.selected_id.is_none() {
