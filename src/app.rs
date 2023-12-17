@@ -175,6 +175,7 @@ impl eframe::App for App {
                     ui.add_space(10.0);
                     ScrollArea::new([false, true])
                         .min_scrolled_height(200.0)
+                        .max_height(ctx.screen_rect().height() * 0.75)
                         .show(ui, |ui| {
                             self.state_loading_errors.show_ui(ui);
                         });
@@ -201,6 +202,7 @@ impl eframe::App for App {
                     ui.add_space(10.0);
                     ScrollArea::new([false, true])
                         .min_scrolled_height(200.0)
+                        .max_height(ctx.screen_rect().height() * 0.75)
                         .show(ui, |ui| {
                             self.state_saving_errors.show_ui(ui);
                         });
@@ -220,67 +222,62 @@ impl eframe::App for App {
                 .collapsible(false)
                 .show(ctx, |ui| {
                     ui.vertical_centered(|ui| {
-                    ui.label("Save existing before loading?");
-                    ui.add_space(20.0);
+                        ui.label("Save existing before loading?");
+                        ui.add_space(20.0);
 
-                    #[derive(Debug, Clone, Copy)]
-                    enum Action {
-                        Yes,
-                        No,
-                        Cancel,
-                    }
-                    let mut action = None;
+                        #[derive(Debug, Clone, Copy)]
+                        enum Action {
+                            Yes,
+                            No,
+                            Cancel,
+                        }
+                        let mut action = None;
 
-                    evenly_spaced_out! {
-                        ui, horizontal,
-                        |ui| {
-                            if ui.button(" Yes ").clicked() { action = Some(Action::Yes); };
-                            if ui.button(" No ").clicked() { action = Some(Action::No); };
-                            if ui.button(" Cancel ").clicked() { action = Some(Action::Cancel); }
-                        },
-                    }
+                        evenly_spaced_out! {
+                            ui, horizontal,
+                            |ui| {
+                                if ui.button(" Yes ").clicked() { action = Some(Action::Yes); };
+                                if ui.button(" No ").clicked() { action = Some(Action::No); };
+                                if ui.button(" Cancel ").clicked() { action = Some(Action::Cancel); }
+                            },
+                        }
 
-                    if let Some(action) = action {
-                        match action {
-                            Action::Cancel => {
-                                discard_state = true;
-                            }
-                            _ => {
-                                let c = if matches!(action, Action::Yes) {
-                                    self.save_state()
-                                } else {
-                                    true
-                                };
-                                if c {
-                                    self.sim.reset();
-                                    Self::load_boards(
-                                        &state.1.boards,
-                                        &self.sim,
-                                        &mut self.state_loading_errors,
-                                    );
-                                    self.state_name = state.0.take();
-
-                                    let boards = self.sim.boards.read();
-                                    for board in boards.values() {
-                                        board.board.activate();
-                                    }
-
-                                    let board = boards.values().next().expect("Boards must exist!");
-                                    self.editor.board =
-                                        ActiveCircuitBoard::new_main(board.board.clone());
-
+                        if let Some(action) = action {
+                            match action {
+                                Action::Cancel => {
                                     discard_state = true;
+                                }
+                                _ => {
+                                    let c = if matches!(action, Action::Yes) {
+                                        self.save_state()
+                                    } else {
+                                        true
+                                    };
+                                    if c {
+                                        self.sim.reset();
+                                        Self::load_boards(
+                                            &state.1.boards,
+                                            &self.sim,
+                                            &mut self.state_loading_errors,
+                                        );
+                                        self.state_name = state.0.take();
+
+                                        let boards = self.sim.boards.read();
+                                        for board in boards.values() {
+                                            board.board.activate();
+                                        }
+
+                                        let board = boards.values().next().expect("Boards must exist!");
+                                        self.editor.board =
+                                            ActiveCircuitBoard::new_main(board.board.clone());
+
+                                        discard_state = true;
+                                    }
                                 }
                             }
                         }
-                    }
-                });
+                    });
                     ui.add_space(10.0);
-                    ScrollArea::new([false, true])
-                        .min_scrolled_height(200.0)
-                        .show(ui, |ui| {
-                            self.state_saving_errors.show_ui(ui);
-                        });
                 });
             if !open || discard_state {
                 self.state_to_load = None;
@@ -576,13 +573,13 @@ impl App {
                 crate::ui::align_ui(ui, "state_buttons", vec2(1.0, 0.0), false, true, |ui| {
                     ui.horizontal_wrapped(|ui| {
                         if ui
-                            .button(RichText::new(" Load state ").size(13.0))
+                            .button(RichText::new(" Save state ").size(13.0))
                             .clicked()
                         {
                             self.save_state();
                         }
                         if ui
-                            .button(RichText::new(" Save state ").size(13.0))
+                            .button(RichText::new(" Load state ").size(13.0))
                             .clicked()
                         {
                             self.load_state();

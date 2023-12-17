@@ -459,6 +459,7 @@ impl State {
 
     pub fn save(&self) -> crate::io::StateData {
         let now = Instant::now();
+        let circuits = self.board.circuits.read();
         crate::io::StateData {
             wires: self
                 .wires
@@ -472,7 +473,8 @@ impl State {
                 .read()
                 .inner
                 .iter()
-                .map(|cs| cs.as_ref().map(|cs| cs.read().save()))
+                .enumerate()
+                .map(|(i, cs)| cs.as_ref().filter(|_| circuits.exists(i)).map(|cs| cs.read().save()))
                 .collect(),
             queue: self.queue.lock().iter().copied().collect(),
             updates: self
