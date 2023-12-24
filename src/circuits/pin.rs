@@ -5,12 +5,13 @@ use std::hash::{Hash, Hasher};
 use eframe::egui::{ComboBox, CursorIcon, Sense, Ui};
 use emath::{vec2, Rect};
 
+use crate::board::CircuitDesignPin;
 use crate::circuits::props::CircuitProperty;
 use crate::error::ResultReport;
 use crate::state::{SafeWireState, VisitedItem};
 use crate::{
-    circuits::*, describe_directional_circuit, unwrap_option_or_break, unwrap_option_or_return,
-    ArcString,
+    circuits::*, describe_directional_circuit, random_u128, unwrap_option_or_break,
+    unwrap_option_or_return, ArcString,
 };
 
 use super::props::CircuitPropertyImpl;
@@ -60,13 +61,40 @@ impl InternalCircuitState for PinState {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+enum PinIdType {
+    Pasted,
+    Loaded,
+    Random,
+    BackCompat,
+}
+
+#[derive(Serialize, Deserialize)]
+struct PartialPinDesignInfo {
+    pos: Vec2u,
+    display_dir: Option<Direction4>,
+    display_name: DynStaticStr,
+}
+
+#[derive(Serialize, Deserialize)]
+struct PinModel {
+    #[serde(default)]
+    id: Option<Arc<str>>,
+
+    #[serde(default)]
+    design: Option<PartialPinDesignInfo>
+}
+
 pub struct Pin {
     pub dir: Direction4,
     pub ty: PinType,
     pub cpos: ControlPinPosition,
 
+    id: Arc<str>,
+    id_ty: PinIdType,
     pin: CircuitPinInfo,
     ctl: Option<CircuitPinInfo>,
+    design: Option<PartialPinDesignInfo>
 }
 
 impl Pin {
@@ -83,6 +111,9 @@ impl Pin {
 
             pin: description.pins[0].to_info(),
             ctl: description.pins[1].to_active_info(),
+            id: "".into(),
+            id_ty: PinIdType::Random,
+            design: None,
         }
     }
 
@@ -156,6 +187,17 @@ impl Pin {
                 .read("name", |s: &ArcString| DynStaticStr::Dynamic(s.get_arc()))
                 .unwrap_or(DynStaticStr::Static("")),
         }
+    }
+
+    fn gen_back_compat_id(pos: Vec2i) -> String {
+        let hex_x = format!("{}{:x}", if pos.x < 0 { "-" } else { "" }, pos.x.abs());
+        let hex_y = format!("{}{:x}", if pos.y < 0 { "-" } else { "" }, pos.y.abs());
+
+        format!("{:x}:{:x}:{}{}", hex_x.len(), hex_y.len(), hex_x, hex_y)
+    }
+
+    fn gen_random_id() -> String {
+        format!("{:x}", random_u128())
     }
 }
 
@@ -499,14 +541,45 @@ impl CircuitImpl for Pin {
     }
 
     fn circuit_init(&mut self, circ: &Arc<Circuit>, first_init: bool) {
-        let pos = circ.pos;
-        let hex_x = format!("{}{:x}", if pos.x < 0 { "-" } else { "" }, pos.x.abs());
-        let hex_y = format!("{}{:x}", if pos.y < 0 { "-" } else { "" }, pos.y.abs());
+        let mut board_pins = circ.board.pins.write();
+        match self.id_ty {
+            PinIdType::Pasted => {
+                if board_pins.contains_left(&self.id) {
+                    self.id = Self::gen_random_id().into();
+                }
+            }
+            PinIdType::Loaded => {}
+            PinIdType::Random => {
+                self.id = Self::gen_random_id().into();
+            }
+            PinIdType::BackCompat => {
+                self.id = Self::gen_back_compat_id(circ.pos).into();
+            }
+        }
+        board_pins.insert(self.id.clone(), circ.id);
+        drop(board_pins);
 
-        let uid = format!("{:x}:{:x}:{}{}", hex_x.len(), hex_y.len(), hex_x, hex_y);
-        let uid_arc: Arc<str> = uid.into();
-
-        circ.board.pins.write().insert(uid_arc.clone(), circ.id);
+        if let Some(design_data) = self.design.take() {
+            let mut designs = circ.board.designs.write();
+            let design = designs.current_mut();
+            if design.pins.iter().all(|p| p.id.deref() != self.id.deref()) {
+                let dir = match self.ty {
+                    PinType::Pico => InternalPinDirection::Inside,
+                    PinType::Cipo => InternalPinDirection::Outside,
+                    PinType::Controlled => InternalPinDirection::StateDependent {
+                        default: PinDirection::Inside,
+                    },
+                    PinType::Bidirectional => InternalPinDirection::Custom,
+                };
+                design.pins.push(CircuitDesignPin {
+                    id: self.id.clone().into(),
+                    pos: design_data.pos,
+                    dir,
+                    display_dir: design_data.display_dir,
+                    display_name: design_data.display_name,
+                })
+            }
+        }
 
         if first_init {
             let name_empty = circ.props.read("name", |s: &ArcString| s.is_empty());
@@ -517,7 +590,7 @@ impl CircuitImpl for Pin {
                     string.push_str("Pin ");
 
                     let mut hasher = DefaultHasher::default();
-                    uid_arc.hash(&mut hasher);
+                    self.id.hash(&mut hasher);
                     let hash = (hasher.finish() & 0xffffffff) as u32;
                     let _ = string.write_fmt(format_args!("{hash:x}"));
                 });
@@ -539,6 +612,48 @@ impl CircuitImpl for Pin {
 
         if let Some(index) = index {
             design.pins.remove(index);
+        }
+    }
+
+    fn save(&self, circ: &Arc<Circuit>, copy: bool) -> serde_intermediate::Intermediate {
+        let design_data = copy.then(|| {
+            let designs = circ.board.designs.read();
+            let design = designs.current();
+            let pin_data = design.pins.iter().find(|p| p.id.deref() == self.id.deref());
+            let pin_data = unwrap_option_or_return!(pin_data, None);
+            Some(PartialPinDesignInfo {
+                pos: pin_data.pos,
+                display_dir: pin_data.display_dir,
+                display_name: pin_data.display_name.clone(),
+            })
+        }).flatten();
+        let m = PinModel {
+            id: Some(self.id.clone()),
+            design: design_data,
+        };
+        serde_intermediate::to_intermediate(&m).unwrap_or_default()
+    }
+
+    fn load(
+        &mut self,
+        _circ: &Arc<Circuit>,
+        data: &serde_intermediate::Intermediate,
+        paste: bool,
+        _errors: &mut ErrorList,
+    ) {
+        // Old data, use back-compat id
+        if matches!(data, serde_intermediate::Intermediate::Unit) {
+            self.id_ty = PinIdType::BackCompat;
+        } else if let Ok(m) = serde_intermediate::from_intermediate::<PinModel>(data) {
+            if let Some(id) = m.id {
+                if paste {
+                    self.id_ty = PinIdType::Pasted;
+                } else {
+                    self.id_ty = PinIdType::Loaded;
+                }
+                self.id = id;
+            }
+            self.design = paste.then_some(m.design).flatten();
         }
     }
 }

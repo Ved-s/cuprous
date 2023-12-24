@@ -329,6 +329,7 @@ impl Circuit {
         preview: &CircuitPreview,
         board: Arc<CircuitBoard>,
         props_override: Option<CircuitPropertyStore>,
+        paste: bool,
         imp_data: Option<&Intermediate>,
         process_formatting: bool,
         errors: &mut ErrorList,
@@ -373,7 +374,7 @@ impl Circuit {
         let mut imp = circuit.imp.write();
         if let Some(data) = imp_data {
             let mut errors = errors.enter_context(|| "loading data");
-            imp.load(&circuit, data, false, &mut errors);
+            imp.load(&circuit, data, paste, &mut errors);
         }
 
         imp.apply_props(&circuit, None);
@@ -633,6 +634,7 @@ pub trait CircuitImpl: Any + Send + Sync {
         ().into()
     }
 
+    /// Note: will be called with `()` (`Intermediate::Unit`) if no data was saved before
     fn load(
         &mut self,
         circ: &Arc<Circuit>,

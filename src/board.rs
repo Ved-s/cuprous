@@ -3,7 +3,7 @@ use std::{
     collections::{HashMap, HashSet},
     f32::consts::TAU,
     num::NonZeroU32,
-    ops::{Deref, Not},
+    ops::Deref,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -98,11 +98,13 @@ impl CircuitBoard {
         }
     }
 
+    #[allow(clippy::too_many_arguments)] // TODO: cleanup
     pub fn create_circuit(
         self: &Arc<Self>,
         pos: Vec2i,
         preview: &CircuitPreview,
         props_override: Option<CircuitPropertyStore>,
+        paste: bool,
         imp_data: Option<&Intermediate>,
         process_formatting: bool,
         errors: &mut ErrorList,
@@ -115,6 +117,7 @@ impl CircuitBoard {
             preview,
             self.clone(),
             props_override,
+            paste,
             imp_data,
             process_formatting,
             errors,
@@ -304,17 +307,14 @@ impl CircuitBoard {
             let props = preview.imp.default_props();
             props.load(&c.props);
 
-            let data = matches!(c.imp, serde_intermediate::Intermediate::Unit)
-                .not()
-                .then_some(&c.imp);
-
             let circ = Circuit::create(
                 i,
                 c.pos,
                 preview,
                 board.clone(),
                 Some(props),
-                data,
+                false,
+                Some(&c.imp),
                 false,
                 &mut errors,
             );
@@ -1149,7 +1149,7 @@ impl ActiveCircuitBoard {
 
             if interaction.clicked_by(eframe::egui::PointerButton::Primary) {
                 fn empty_handler(_: &mut ActiveCircuitBoard, _: usize) {}
-                self.place_circuit(place_pos, true, p.as_ref(), None, None, &mut empty_handler);
+                self.place_circuit(place_pos, true, p.as_ref(), None, false, None, &mut empty_handler);
             }
         } else if let SelectedItem::Paste(p) = selected {
             let size = p.size;
@@ -1980,12 +1980,14 @@ impl ActiveCircuitBoard {
     }
 
     /// Handler is called after circuit is crated and placed but before it's connected to wires and updated
+    #[allow(clippy::too_many_arguments)] // TODO: cleanup
     pub fn place_circuit(
         &mut self,
         place_pos: Vec2i,
         lock_sim: bool,
         preview: &CircuitPreview,
         props_override: Option<CircuitPropertyStore>,
+        paste: bool, 
         imp_data: Option<&Intermediate>,
         handler: &mut dyn FnMut(&mut ActiveCircuitBoard, usize),
     ) -> Option<usize> {
@@ -2002,6 +2004,7 @@ impl ActiveCircuitBoard {
                 place_pos,
                 preview,
                 props_override,
+                paste,
                 imp_data,
                 true,
                 &mut ErrorList::new(), // Ignore placement errorsmaybe a later TODO

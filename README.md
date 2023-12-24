@@ -30,8 +30,6 @@ Logisim-inspired logic circuits simulator
 - Rotate selection
 - Remove wire with Wire tool
 - Warning to replace circuits that don't match latest pin layout
-- Make pins use random ID and store it in board data
-- When copying pins, preserve their ID and design data
 - Maybe show circuit pin labels in paste
 - Update SVGs
 

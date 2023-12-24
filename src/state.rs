@@ -42,7 +42,7 @@ pub enum WireState {
 impl WireState {
     pub fn combine(self, state: &WireState) -> WireState {
         match (self, state) {
-            (WireState::None, other) => other.clone(),
+            (WireState::None, other) => *other,
             (other, &WireState::None) => other,
 
             (WireState::Error, _) | (_, WireState::Error) => WireState::Error,

@@ -964,6 +964,7 @@ impl PastePreview {
                 false,
                 preview,
                 None,
+                true,
                 data,
                 &mut |board, id| {
                     if let Some(circuit) = board.board.circuits.read().get(id).cloned() {
