@@ -562,7 +562,8 @@ impl CircuitPreviewImpl for Preview {
          Passes signals to or from another circuit board when current board is placed in a circuit form.\n\
          \n\
          Can be clicked on to change state if not connected to an outside pin.\n\
-         Can carry signals outside, inside or controlled by a separate Control input.\
+         Can carry signals outside, inside, be controlled by a separate Control input or be fully bidirectional.\n\
+         Please note that Bidirectional mode may be less stable and performant.\
         ".into()
     }
 
