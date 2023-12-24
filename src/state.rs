@@ -40,9 +40,11 @@ pub enum WireState {
 }
 
 impl WireState {
-    pub fn combine(self, state: WireState) -> WireState {
+    pub fn combine(self, state: &WireState) -> WireState {
         match (self, state) {
-            (WireState::None, other) | (other, WireState::None) => other,
+            (WireState::None, other) => other.clone(),
+            (other, &WireState::None) => other,
+
             (WireState::Error, _) | (_, WireState::Error) => WireState::Error,
 
             (WireState::True, WireState::False) => WireState::Error,
@@ -763,7 +765,7 @@ impl State {
                     PinDirection::Inside => {}
                     PinDirection::Outside => {
                         let owned_state = std::mem::replace(state, WireState::None);
-                        *state = owned_state.combine(pin.get_state(self));
+                        *state = owned_state.combine(&pin.get_state(self));
                     }
                     PinDirection::Custom => {
                         // Ignore this pin if it triggered the update

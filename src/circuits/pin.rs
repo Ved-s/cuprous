@@ -181,23 +181,26 @@ impl CircuitImpl for Pin {
             })
             .map(|s| s.unwrap_or(WireState::None));
 
-        let state = self
-            .pin
-            .get_wire_state(state_ctx)
-            .unwrap_or_else(|| self.pin.get_state(state_ctx));
+        let wire_state = self.pin.get_wire_state(state_ctx);
 
-        let outside_state = outside_state.unwrap_or_else(|| {
-            if self.is_pico(state_ctx) != Some(false) {
-                state_ctx
-                    .clone_circuit_internal_state::<PinState>()
-                    .unwrap_or_default()
-                    .state
-                    .0
-            } else {
-                state
-            }
-        });
+        let outside_state = outside_state
+            .or_else(|| {
+                if self.is_pico(state_ctx) != Some(false) {
+                    Some(
+                        state_ctx
+                            .clone_circuit_internal_state::<PinState>()
+                            .unwrap_or_default()
+                            .state
+                            .0,
+                    )
+                } else {
+                    None
+                }
+            })
+            .or(wire_state)
+            .unwrap_or_default();
 
+        let state = wire_state.unwrap_or_else(|| self.pin.get_state(state_ctx));
         let cpos = self
             .ctl
             .as_ref()
@@ -369,7 +372,16 @@ impl CircuitImpl for Pin {
         }
 
         let parent = ctx.global_state.get_parent();
-        let parent = unwrap_option_or_return!(parent);
+        let parent = match parent {
+            Some(p) => p,
+            None => {
+                ctx.read_circuit_internal_state(|s: &PinState| {
+                    let owned_state = std::mem::replace(state, WireState::None);
+                    *state = owned_state.combine(&s.state.0);
+                });
+                return;
+            }
+        };
 
         let outer = parent
             .circuit
