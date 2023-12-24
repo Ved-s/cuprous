@@ -87,7 +87,7 @@ impl CircuitBoard {
             circuits: RwLock::new(vec![].into()),
             states: Arc::new(StateCollection::new()),
             sim_lock: Default::default(),
-            ordered_queue: AtomicBool::new(false),
+            ordered_queue: AtomicBool::new(true),
             designs: Arc::new(RwLock::new(CircuitDesignStorage::new(
                 CircuitDesign::default_board_design(),
             ))),

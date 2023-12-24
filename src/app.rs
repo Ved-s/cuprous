@@ -516,6 +516,18 @@ impl App {
                         ui.add_space(5.0);
                         ui.label("Property editor panel on the right side contains editable properties for selected components");
                         ui.add_space(5.0);
+                        let queue_text = if self.editor.board.board.is_ordered_queue() {
+                            "WARNING! If you want to make random-dependant circuits like RS latches, press Q to switch this board into Random Queue mode.\n\
+                             Note that this mode can make order-dependant boards unstable, so enable it only for boards that require it.\
+                            "
+                        } else {
+                            "WARNING! This board is in Random Queue mode mode.\n\
+                             This mode allows building circuits like RS latches but can make order-dependant boards unstable.\n\
+                             Press Q to switch to Ordered Mode.\
+                            "
+                        };
+                        ui.label(queue_text);
+                        ui.add_space(5.0);
                     });
                     let designer_text = if self.designer.is_some() { "Designer mode (current mode)" } else { "Designer mode" };
                     CollapsingHeader::new(designer_text).id_source("tut_designer").show(ui, |ui| {
