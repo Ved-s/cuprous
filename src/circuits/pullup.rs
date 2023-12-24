@@ -54,7 +54,13 @@ impl CircuitImpl for Pullup {
 
     fn update_signals(&self, _: &CircuitStateContext, _: Option<usize>) {}
 
-    fn custom_pin_mutate_state(&self, _: &CircuitStateContext, _: usize, state: &mut WireState) {
+    fn custom_pin_mutate_state(
+        &self,
+        _ctx: &CircuitStateContext,
+        _pin: usize,
+        state: &mut WireState,
+        _visited_wires: &mut VisitedList,
+    ) {
         if matches!(state, WireState::None) {
             *state = WireState::False;
         }
@@ -69,7 +75,6 @@ impl CircuitImpl for Pullup {
 pub struct PullupPreview {}
 
 impl CircuitPreviewImpl for PullupPreview {
-
     fn type_name(&self) -> DynStaticStr {
         "pullup".into()
     }
@@ -82,7 +87,8 @@ impl CircuitPreviewImpl for PullupPreview {
         "Pulls its pin low (False) when it's in None state.\n\
          \n\
          Expect this component to change in the future or being removed/replaced.\
-        ".into()
+        "
+        .into()
     }
 
     fn draw_preview(&self, _: &CircuitPropertyStore, ctx: &PaintContext, in_world: bool) {

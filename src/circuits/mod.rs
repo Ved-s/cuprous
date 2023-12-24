@@ -15,7 +15,7 @@ use crate::{
     board::CircuitBoard,
     error::ErrorList,
     io::CircuitCopyData,
-    state::{CircuitState, InternalCircuitState, State, StateCollection, WireState},
+    state::{CircuitState, InternalCircuitState, State, StateCollection, VisitedList, WireState},
     string::StringFormatterState,
     time::Instant,
     unwrap_option_or_continue,
@@ -68,7 +68,7 @@ pub enum PinDirection {
     Custom,
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CircuitPinId {
     pub id: usize,
     pub circuit_id: usize,
@@ -110,24 +110,36 @@ impl CircuitPin {
             .unwrap_or_default()
     }
 
-    pub fn set_input(&self, state: &Arc<State>, value: WireState, update_state: bool) {
-        state.write_circuit(self.id.circuit_id, |circuit| {
-            let current = circuit.pins.get_clone(self.id.id).unwrap_or_default();
-            if current == value {
-                return;
+    pub fn set_input(
+        &self,
+        state: &Arc<State>,
+        value: &WireState,
+        update_state: bool,
+        visited_items: Option<&mut VisitedList>,
+    ) {
+        let skip = state.write_circuit(self.id.circuit_id, |circuit| {
+            let current = circuit.pins.get(self.id.id);
+            if !matches!(self.dir, InternalPinDirection::Custom)
+                && current.is_some_and(|c| *c == *value)
+            {
+                return true;
             }
 
-            circuit.pins.set(value, self.id.id);
-            if update_state {
-                match self.dir {
-                    InternalPinDirection::Custom => {
-                        state.update_pin_input(self.id.circuit_id, self.id.id)
-                    }
-
-                    _ => state.update_circuit_signals(self.id.circuit_id, Some(self.id.id)),
-                }
-            }
+            circuit
+                .pins
+                .get_or_create_mut(self.id.id, || WireState::None)
+                .copy_from(value);
+            false
         });
+        if !skip && update_state {
+            match self.dir {
+                InternalPinDirection::Custom => {
+                    state.update_pin_input(self.id.circuit_id, self.id.id, true, visited_items)
+                }
+
+                _ => state.update_circuit_signals(self.id.circuit_id, Some(self.id.id)),
+            }
+        }
     }
 
     pub fn name(&self) -> DynStaticStr {
@@ -194,6 +206,16 @@ impl CircuitPinInfo {
             .unwrap_or_default()
     }
 
+    pub fn read_state<R>(
+        &self,
+        state_ctx: &CircuitStateContext,
+        f: impl FnOnce(&WireState) -> R,
+    ) -> Option<R> {
+        state_ctx
+            .read_circuit_state(|cs| cs.pins.get(self.pin.read().id.id).map(f))
+            .flatten()
+    }
+
     pub fn get_wire_state(&self, state_ctx: &CircuitStateContext) -> Option<WireState> {
         self.pin
             .read()
@@ -241,22 +263,24 @@ impl CircuitPinInfo {
         match dir {
             PinDirection::Inside => match wire {
                 Some(wire) => state_ctx.global_state.update_wire(wire, true),
-                None => {
-                    self.pin
-                        .read()
-                        .set_input(&state_ctx.global_state, Default::default(), true)
-                }
+                None => self.pin.read().set_input(
+                    &state_ctx.global_state,
+                    &Default::default(),
+                    true,
+                    None,
+                ),
             },
             PinDirection::Outside => state_ctx
                 .global_state
                 .update_circuit_signals(pin_id.circuit_id, Some(pin_id.id)),
             PinDirection::Custom => match wire {
                 Some(wire) => state_ctx.global_state.update_wire(wire, true),
-                None => {
-                    self.pin
-                        .read()
-                        .set_input(&state_ctx.global_state, Default::default(), true)
-                }
+                None => self.pin.read().set_input(
+                    &state_ctx.global_state,
+                    &Default::default(),
+                    true,
+                    None,
+                ),
             },
         }
     }
@@ -570,7 +594,7 @@ pub trait CircuitImpl: Any + Send + Sync {
 
     /// Called once on circuit removal for each active state<br>
     /// Called before `remove_circuit`<br>
-    /// if `reset_state` will be true, internal state will be removed 
+    /// if `reset_state` will be true, internal state will be removed
     fn state_remove(&self, ctx: &CircuitStateContext, reset_state: &mut bool) {}
 
     /// Called once on circuit removal<br>
@@ -629,12 +653,23 @@ pub trait CircuitImpl: Any + Send + Sync {
         None
     }
 
-    /// Custom handler for [`PinDirection::Custom`]
+    /// Custom read for [`PinDirection::Custom`]
     fn custom_pin_mutate_state(
         &self,
         ctx: &CircuitStateContext,
         pin: usize,
         state: &mut WireState,
+        visited_items: &mut VisitedList,
+    ) {
+    }
+
+    /// Custom write for [`PinDirection::Custom`]
+    fn custom_pin_apply_state(
+        &self,
+        ctx: &CircuitStateContext,
+        pin: usize,
+        state: &WireState,
+        visited_items: &mut VisitedList,
     ) {
     }
 

@@ -1,6 +1,7 @@
 use std::{
     any::{Any, TypeId},
     borrow::BorrowMut,
+    collections::BTreeMap,
     ops::Deref,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -12,13 +13,14 @@ use std::{
 #[cfg(not(feature = "single_thread"))]
 use std::thread::{self, JoinHandle};
 
-use crate::{containers::Queue, time::Instant, unwrap_option_or_continue, error::ErrorList};
+use crate::{containers::Queue, error::ErrorList, time::Instant, unwrap_option_or_continue};
 use eframe::epaint::Color32;
+use object_pool::Pool;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
     board::CircuitBoard, circuits::*, containers::FixedVec, unwrap_option_or_break,
-    unwrap_option_or_return, wires::*, Mutex, RwLock,
+    unwrap_option_or_return, Mutex, RwLock,
 };
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -72,6 +74,11 @@ impl WireState {
             (Self::True, Self::True) => combiner(true, true).into(),
             (Self::False, Self::False) => combiner(false, false).into(),
         }
+    }
+
+    // for future use
+    pub fn copy_from(&mut self, new: &WireState) {
+        *self = *new;
     }
 }
 
@@ -177,13 +184,21 @@ impl CircuitState {
         }
     }
 
-    fn load(data: &crate::io::CircuitStateData, circ: &CircuitStateContext, errors: &mut ErrorList) -> Self {
+    fn load(
+        data: &crate::io::CircuitStateData,
+        circ: &CircuitStateContext,
+        errors: &mut ErrorList,
+    ) -> Self {
         Self {
             pins: FixedVec::from_option_vec(data.pins.clone()),
             pin_dirs: FixedVec::from_option_vec(data.pin_dirs.clone()),
             internal: match &data.internal {
                 serde_intermediate::Intermediate::Unit => None,
-                data => circ.circuit.imp.read().load_internal(circ, data, false, errors),
+                data => circ
+                    .circuit
+                    .imp
+                    .read()
+                    .load_internal(circ, data, false, errors),
             },
         }
     }
@@ -223,7 +238,7 @@ impl StateCollection {
 
     pub fn update_pin_input(&self, circuit_id: usize, id: usize) {
         for state in self.states.read().iter() {
-            state.update_pin_input(circuit_id, id);
+            state.update_pin_input(circuit_id, id, false, None);
         }
     }
 
@@ -318,7 +333,7 @@ pub struct StateParent {
     pub circuit: Arc<Circuit>,
 }
 
-// TODO: remember freezing time to properly restore update timings 
+// TODO: remember freezing time to properly restore update timings
 pub struct State {
     pub id: usize,
 
@@ -337,6 +352,9 @@ pub struct State {
     parent: RwLock<Option<StateParent>>,
     children: AtomicUsize,
     frozen: AtomicBool,
+
+    pin_vec_pool: Pool<Vec<Arc<RwLock<CircuitPin>>>>,
+    vis_pool: Pool<VisitedList>,
 }
 
 impl State {
@@ -355,6 +373,8 @@ impl State {
             updates: Default::default(),
             frozen: AtomicBool::new(false),
             children: AtomicUsize::new(0),
+            pin_vec_pool: Pool::new(2, Vec::new),
+            vis_pool: Pool::new(2, VisitedList::new),
         });
         state.init_circuit_states(true);
         state
@@ -474,7 +494,11 @@ impl State {
                 .inner
                 .iter()
                 .enumerate()
-                .map(|(i, cs)| cs.as_ref().filter(|_| circuits.exists(i)).map(|cs| cs.read().save()))
+                .map(|(i, cs)| {
+                    cs.as_ref()
+                        .filter(|_| circuits.exists(i))
+                        .map(|cs| cs.read().save())
+                })
                 .collect(),
             queue: self.queue.lock().iter().copied().collect(),
             updates: self
@@ -487,7 +511,12 @@ impl State {
     }
 
     // State will be loaded frozen. activate it when ready
-    pub fn load(data: &crate::io::StateData, board: Arc<CircuitBoard>, id: usize, errors: &mut ErrorList) -> Arc<State> {
+    pub fn load(
+        data: &crate::io::StateData,
+        board: Arc<CircuitBoard>,
+        id: usize,
+        errors: &mut ErrorList,
+    ) -> Arc<State> {
         let mut errors = errors.enter_context(|| format!("loading state {}", id));
         let now = Instant::now();
 
@@ -518,6 +547,8 @@ impl State {
             updates: Mutex::new(updates),
             frozen: AtomicBool::new(true),
             children: AtomicUsize::new(0),
+            pin_vec_pool: Pool::new(2, Vec::new),
+            vis_pool: Pool::new(2, VisitedList::new),
         });
 
         let board_circuits = state.board.circuits.read();
@@ -548,8 +579,21 @@ impl State {
         self.schedule_update(UpdateTask::CircuitSignals { id: circuit, pin });
     }
 
-    pub fn update_pin_input(self: &Arc<Self>, circuit: usize, id: usize) {
-        self.schedule_update(UpdateTask::PinInput { circuit, id });
+    pub fn update_pin_input(
+        self: &Arc<Self>,
+        circuit: usize,
+        id: usize,
+        immediate: bool,
+        visited_items: Option<&mut VisitedList>,
+    ) {
+        match immediate {
+            true => {
+                let circuit = self.board.circuits.read().get_clone(circuit);
+                let circuit = unwrap_option_or_return!(circuit);
+                self.update_pin_input_now(&circuit, id, visited_items);
+            }
+            false => self.schedule_update(UpdateTask::PinInput { circuit, id }),
+        }
     }
 
     pub fn reset_wire(&self, wire: usize) {
@@ -566,7 +610,10 @@ impl State {
     pub fn remove_circuit_state(self: &Arc<Self>, circuit: &Arc<Circuit>) {
         let state_ctx = CircuitStateContext::new(self.clone(), circuit.clone());
         let mut reset_state = true;
-        circuit.imp.read().state_remove(&state_ctx, &mut reset_state);
+        circuit
+            .imp
+            .read()
+            .state_remove(&state_ctx, &mut reset_state);
 
         if reset_state {
             self.circuits.write().remove(circuit.id);
@@ -652,9 +699,7 @@ impl State {
                     id,
                     skip_state_ckeck,
                 } => {
-                    if let Some(wire) = self.board.wires.read().get(id) {
-                        self.update_wire_now(wire, skip_state_ckeck);
-                    }
+                    self.update_wire_now(id, skip_state_ckeck);
                 }
                 UpdateTask::CircuitSignals { id, pin } => {
                     if let Some(circuit) = self.board.circuits.read().get(id) {
@@ -663,7 +708,7 @@ impl State {
                 }
                 UpdateTask::PinInput { circuit, id } => {
                     if let Some(circuit) = self.board.circuits.read().get(circuit) {
-                        self.update_pin_input_now(circuit, id);
+                        self.update_pin_input_now(circuit, id, None);
                     }
                 }
             }
@@ -690,40 +735,84 @@ impl State {
         imp.state_init(&state_ctx, first_init);
     }
 
-    fn update_wire_now(self: &Arc<State>, wire: &Wire, skip_state_ckeck: bool) {
-        let mut state = WireState::None;
-        let mut delayed_pins = vec![];
+    pub fn compute_wire_state(
+        self: &Arc<Self>,
+        wire: usize,
+        state: &mut WireState,
+        visited_items: &mut VisitedList,
+    ) {
+        let vis = VisitedItem::Wire(wire);
+        if visited_items.contains(self.board.uid, vis) {
+            return;
+        }
+
+        let wires = self.board.wires.read();
+        let wire = wires.get(wire);
+        let wire = unwrap_option_or_return!(wire);
+
+        visited_items.push(self.board.uid, vis);
+
+        let mut custom_pins = self.pin_vec_pool.pull(Vec::new);
+        custom_pins.clear();
+
         for (_, point) in wire.points.iter() {
             if let Some(pin_arc) = &point.pin {
                 let pin = pin_arc.read();
 
                 match pin.direction(self) {
                     PinDirection::Inside => {}
-                    PinDirection::Outside => state = state.combine(pin.get_state(self)),
-                    PinDirection::Custom => delayed_pins.push(pin_arc),
+                    PinDirection::Outside => {
+                        let owned_state = std::mem::replace(state, WireState::None);
+                        *state = owned_state.combine(pin.get_state(self));
+                    }
+                    PinDirection::Custom => {
+                        // Ignore this pin if it triggered the update
+                        if !visited_items.contains(self.board.uid, VisitedItem::Pin(pin.id)) {
+                            custom_pins.push(pin_arc.clone());
+                        }
+                    }
                 }
             }
         }
 
-        for pin in delayed_pins {
+        for pin in custom_pins.drain(..) {
             let pin = pin.read();
             // 2 locks, eugh
             if let PinDirection::Custom = pin.direction(self) {
                 if let Some(circuit) = self.board.circuits.read().get(pin.id.circuit_id).cloned() {
                     let state_ctx = CircuitStateContext::new(self.clone(), circuit.clone());
-                    circuit
-                        .imp
-                        .read()
-                        .custom_pin_mutate_state(&state_ctx, pin.id.id, &mut state);
+                    visited_items.push(self.board.uid, VisitedItem::Pin(pin.id));
+                    circuit.imp.read().custom_pin_mutate_state(
+                        &state_ctx,
+                        pin.id.id,
+                        state,
+                        visited_items,
+                    );
+                    visited_items.pop(self.board.uid);
                 }
             }
         }
 
-        let skip = self.write_wire(wire.id, |current| {
-            if !skip_state_ckeck && *current == state {
+        visited_items.pop(self.board.uid);
+    }
+
+    pub fn apply_wire_state(
+        self: &Arc<Self>,
+        wire: usize,
+        state: &WireState,
+        skip_state_ckeck: bool,
+        visited_items: &mut VisitedList,
+    ) {
+        let vis = VisitedItem::Wire(wire);
+        if visited_items.contains(self.board.uid, vis) {
+            return;
+        }
+
+        let skip = self.write_wire(wire, |current| {
+            if !skip_state_ckeck && *current == *state {
                 true
             } else {
-                *current = state;
+                current.copy_from(state);
                 false
             }
         });
@@ -731,17 +820,39 @@ impl State {
             return;
         }
 
+        let wires = self.board.wires.read();
+        let wire = wires.get(wire);
+        let wire = unwrap_option_or_return!(wire);
+
+        visited_items.push(self.board.uid, vis);
+
         for (_, point) in wire.points.iter() {
             if let Some(pin) = &point.pin {
                 let pin = pin.read();
 
                 match pin.direction(self) {
-                    PinDirection::Inside => pin.set_input(self, state, true),
+                    PinDirection::Inside => pin.set_input(self, state, true, None),
                     PinDirection::Outside => {}
-                    PinDirection::Custom => pin.set_input(self, state, true),
+                    PinDirection::Custom => {
+                        // Don't trigger this pin if it triggered the update
+                        if !visited_items.contains(self.board.uid, VisitedItem::Pin(pin.id)) {
+                            pin.set_input(self, state, true, Some(visited_items));
+                        }
+                    }
                 }
             }
         }
+
+        visited_items.pop(self.board.uid);
+    }
+
+    fn update_wire_now(self: &Arc<State>, wire: usize, skip_state_ckeck: bool) {
+        let mut state = WireState::None;
+        let mut visited_items = self.vis_pool.pull(VisitedList::new);
+        visited_items.clear();
+        self.compute_wire_state(wire, &mut state, &mut visited_items);
+        visited_items.clear();
+        self.apply_wire_state(wire, &state, skip_state_ckeck, &mut visited_items);
     }
 
     fn update_circuit_signals_now(self: &Arc<Self>, circuit: &Arc<Circuit>, pin: Option<usize>) {
@@ -751,39 +862,69 @@ impl State {
         )
     }
 
-    fn update_pin_input_now(self: &Arc<Self>, circuit: &Arc<Circuit>, id: usize) {
+    fn update_pin_input_now(
+        self: &Arc<Self>,
+        circuit: &Arc<Circuit>,
+        id: usize,
+        visited_items: Option<&mut VisitedList>,
+    ) {
         let info = circuit.info.read();
         let pin_info = unwrap_option_or_return!(info.pins.get(id));
 
         let ctx = CircuitStateContext::new(self.clone(), circuit.clone());
-        let old_state = pin_info.get_state(&ctx);
 
         let pin = pin_info.pin.clone();
-        let pin = pin.write();
+        let pin = pin.read();
 
-        match pin.direction(self) {
-            PinDirection::Inside => {}
-            PinDirection::Custom => {}
+        let custom = match pin.direction(self) {
+            PinDirection::Inside => false,
+            PinDirection::Custom => true,
             PinDirection::Outside => return,
-        }
-
-        drop(info);
+        };
 
         let pin_wire = pin.connected_wire();
 
-        let new_state = match pin_wire {
-            None => WireState::default(),
-            Some(id) => self.get_wire(id),
-        };
+        let none = WireState::None;
+        let wires = pin_wire.map(|id| (self.wires.read(), id));
+        let wire_state = wires
+            .as_ref()
+            .and_then(|(w, id)| w.get(*id).map(|ws| ws.read()));
+        let wire_state = wire_state.as_deref();
+        let new_state = wire_state.unwrap_or(&none);
 
-        if old_state == new_state {
-            return;
+        if !custom {
+            let state_eq = pin_info
+                .read_state(&ctx, |s| *s == *new_state)
+                .unwrap_or(false);
+            if state_eq {
+                return;
+            }
         }
 
-        pin.set_input(self, new_state, false);
+        pin.set_input(self, new_state, false, None);
         drop(pin);
 
-        self.update_circuit_signals_now(circuit, Some(id));
+        let custom_visited_items = custom.then_some(visited_items).flatten();
+
+        match custom_visited_items {
+            None => self.update_circuit_signals_now(circuit, Some(id)),
+            Some(visited_items) => {
+                visited_items.push(
+                    self.board.uid,
+                    VisitedItem::Pin(CircuitPinId {
+                        id,
+                        circuit_id: circuit.id,
+                    }),
+                );
+                circuit.imp.read().custom_pin_apply_state(
+                    &CircuitStateContext::new(self.clone(), circuit.clone()),
+                    id,
+                    new_state,
+                    visited_items,
+                );
+                visited_items.pop(self.board.uid);
+            }
+        }
     }
 
     #[cfg(not(feature = "single_thread"))]
@@ -973,6 +1114,74 @@ impl StateThread {
                 }
             }
         }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum VisitedItem {
+    Wire(usize),
+    Pin(CircuitPinId),
+}
+
+pub struct VisitedList {
+    boards: BTreeMap<u128, Vec<VisitedItem>>,
+    pool: Pool<Vec<VisitedItem>>,
+}
+
+impl VisitedList {
+    pub fn new() -> Self {
+        Self {
+            boards: BTreeMap::new(),
+            pool: Pool::new(2, Vec::new),
+        }
+    }
+
+    pub fn clear(&mut self) {
+        while let Some((_, mut vec)) = self.boards.pop_last() {
+            vec.clear();
+            self.pool.attach(vec);
+        }
+    }
+
+    pub fn push(&mut self, board: u128, item: VisitedItem) {
+        let vec = self
+            .boards
+            .entry(board)
+            .or_insert_with(|| self.pool.pull(Vec::new).detach().1);
+        vec.push(item);
+    }
+
+    pub fn contains(&self, board: u128, item: VisitedItem) -> bool {
+        self.boards
+            .get(&board)
+            .map(|v| v.contains(&item))
+            .unwrap_or(false)
+    }
+
+    pub fn pop(&mut self, board: u128) {
+        let remove = match self.boards.get_mut(&board) {
+            None => false,
+            Some(vec) => {
+                vec.pop();
+                vec.is_empty()
+            }
+        };
+        if remove {
+            if let Some(mut vec) = self.boards.remove(&board) {
+                vec.clear();
+                self.pool.attach(vec);
+            }
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.boards.is_empty()
+    }
+}
+
+impl Default for VisitedList {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

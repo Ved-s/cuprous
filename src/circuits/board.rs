@@ -13,7 +13,7 @@ use emath::{pos2, Align2};
 use crate::{
     board::{CircuitBoard, CircuitDesign},
     circuits::*,
-    state::StateParent,
+    state::{StateParent, VisitedItem},
     unwrap_option_or_return, unwrap_option_or_continue, error::ResultReport,
 };
 
@@ -485,6 +485,13 @@ impl CircuitImpl for Board {
                     info.set_state(state_ctx, pin.get_state(&state))
                 }
                 (PinDirection::Outside, None) => info.set_state(state_ctx, WireState::None),
+                (PinDirection::Custom, Some((pin, _))) => {
+                    let wire = pin.pin.read().connected_wire();
+                    match wire {
+                        Some(wire) => inner_state.update_wire(wire, false),
+                        None => info.set_state(state_ctx, WireState::None),
+                    }
+                }
                 _ => {}
             }
         }
@@ -500,6 +507,75 @@ impl CircuitImpl for Board {
                     handle_pin(self, inner_board, &inner_state, id, info, state_ctx);
                 }
             }
+        }
+    }
+
+    fn custom_pin_mutate_state(
+            &self,
+            ctx: &CircuitStateContext,
+            pin: usize,
+            state: &mut WireState,
+            visited_items: &mut VisitedList
+        ) {
+            let inner_board = self.board.as_deref();
+        let inner_board = unwrap_option_or_return!(inner_board);
+
+        let inner_state = ctx
+            .read_circuit_internal_state(|s: &BoardState| s.state.clone())
+            .flatten();
+        let inner_state = unwrap_option_or_return!(inner_state);
+
+        let circuits = inner_board.circuits.read();
+        let inner_circuit = self
+            .resolve_outer_to_inner(pin)
+            .and_then(|inner| circuits.get(inner));
+
+        if inner_circuit.is_some_and(|inner| inner.ty.deref() != super::pin::TYPEID) {
+            return;
+        }
+        let inner_circuit = unwrap_option_or_return!(inner_circuit);
+        let inner = inner_circuit.info.read().pins.first().cloned();
+        let inner = unwrap_option_or_return!(inner);
+        let pin = inner.pin.read();
+        if let Some(wire) = pin.connected_wire() {
+            visited_items.push(inner_board.uid, VisitedItem::Pin(pin.id));
+            inner_state.compute_wire_state(wire, state, visited_items);
+            visited_items.pop(inner_board.uid);
+        }
+    }
+
+    fn custom_pin_apply_state(
+        &self,
+        ctx: &CircuitStateContext,
+        pin: usize,
+        state: &WireState,
+        visited_items: &mut VisitedList
+    ) {
+        let inner_board = self.board.as_deref();
+        let inner_board = unwrap_option_or_return!(inner_board);
+
+        let inner_state = ctx
+            .read_circuit_internal_state(|s: &BoardState| s.state.clone())
+            .flatten();
+        let inner_state = unwrap_option_or_return!(inner_state);
+
+        let circuits = inner_board.circuits.read();
+        let inner_circuit = self
+            .resolve_outer_to_inner(pin)
+            .and_then(|inner| circuits.get(inner));
+
+        if inner_circuit.is_some_and(|inner| inner.ty.deref() != super::pin::TYPEID) {
+            return;
+        }
+        let inner_circuit = unwrap_option_or_return!(inner_circuit);
+        let inner = inner_circuit.info.read().pins.first().cloned();
+        let inner = unwrap_option_or_return!(inner);
+        let pin = inner.pin.read();
+        pin.set_input(&inner_state, state, false, None);
+        if let Some(wire) = pin.connected_wire() {
+            visited_items.push(inner_board.uid, VisitedItem::Pin(pin.id));
+            inner_state.apply_wire_state(wire, state, false, visited_items);
+            visited_items.pop(inner_board.uid);
         }
     }
 

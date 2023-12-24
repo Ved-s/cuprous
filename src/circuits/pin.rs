@@ -2,12 +2,12 @@ use std::collections::hash_map::DefaultHasher;
 use std::fmt::Write;
 use std::hash::{Hash, Hasher};
 
-use eframe::egui::{ComboBox, Sense, Ui, CursorIcon};
+use eframe::egui::{ComboBox, CursorIcon, Sense, Ui};
 use emath::{vec2, Rect};
 
 use crate::circuits::props::CircuitProperty;
 use crate::error::ResultReport;
-use crate::state::SafeWireState;
+use crate::state::{SafeWireState, VisitedItem};
 use crate::{
     circuits::*, describe_directional_circuit, unwrap_option_or_break, unwrap_option_or_return,
     ArcString,
@@ -27,6 +27,7 @@ pub enum PinType {
     Pico, // Parent Input, Child Output
     Cipo, // Child Input, Parent Output
     Controlled,
+    Bidirectional,
 }
 
 impl PinType {
@@ -41,6 +42,10 @@ impl PinType {
 
     pub fn is_controlled(self) -> bool {
         matches!(self, Self::Controlled)
+    }
+
+    pub fn is_bidirectional(self) -> bool {
+        matches!(self, Self::Bidirectional)
     }
 }
 
@@ -111,6 +116,7 @@ impl Pin {
             PinType::Controlled => InternalPinDirection::StateDependent {
                 default: PinDirection::Inside,
             },
+            PinType::Bidirectional => InternalPinDirection::Custom,
         };
 
         describe_directional_circuit! {
@@ -122,9 +128,13 @@ impl Pin {
         }
     }
 
-    fn is_pico(&self, state_ctx: &CircuitStateContext) -> bool {
+    fn is_pico(&self, state_ctx: &CircuitStateContext) -> Option<bool> {
         // parent pin Inside -> child pin Outside
-        matches!(self.pin.get_direction(state_ctx), PinDirection::Outside)
+        match self.pin.get_direction(state_ctx) {
+            PinDirection::Inside => Some(false),
+            PinDirection::Outside => Some(true),
+            PinDirection::Custom => None,
+        }
     }
 
     pub fn get_designer_info(
@@ -137,6 +147,7 @@ impl Pin {
             PinType::Controlled => InternalPinDirection::StateDependent {
                 default: PinDirection::Inside,
             },
+            PinType::Bidirectional => InternalPinDirection::Custom,
         };
         crate::ui::designer::CircuitDesignPinInfo {
             dir,
@@ -170,17 +181,23 @@ impl CircuitImpl for Pin {
             })
             .map(|s| s.unwrap_or(WireState::None));
 
-        let outside_state = outside_state.unwrap_or_else(|| {
-            state_ctx
-                .clone_circuit_internal_state::<PinState>()
-                .unwrap_or_default()
-                .state
-                .0
-        });
         let state = self
             .pin
             .get_wire_state(state_ctx)
             .unwrap_or_else(|| self.pin.get_state(state_ctx));
+
+        let outside_state = outside_state.unwrap_or_else(|| {
+            if self.is_pico(state_ctx) != Some(false) {
+                state_ctx
+                    .clone_circuit_internal_state::<PinState>()
+                    .unwrap_or_default()
+                    .state
+                    .0
+            } else {
+                state
+            }
+        });
+
         let cpos = self
             .ctl
             .as_ref()
@@ -188,14 +205,8 @@ impl CircuitImpl for Pin {
         let is_pico = self.is_pico(state_ctx);
         let angle = self.dir.inverted_ud().angle_to_right();
 
-        let center = crate::graphics::inside_pin(
-            cpos,
-            outside_state,
-            state,
-            Some(is_pico),
-            angle,
-            paint_ctx,
-        );
+        let center =
+            crate::graphics::inside_pin(cpos, outside_state, state, is_pico, angle, paint_ctx);
 
         if state_ctx.global_state.get_parent().is_none() {
             let size = vec2(paint_ctx.screen.scale, paint_ctx.screen.scale);
@@ -237,7 +248,7 @@ impl CircuitImpl for Pin {
                     s.state.0
                 });
 
-                if self.is_pico(state_ctx) {
+                if self.is_pico(state_ctx) != Some(false) {
                     self.pin.set_state(state_ctx, new_state);
                 }
             }
@@ -267,7 +278,7 @@ impl CircuitImpl for Pin {
                 None => match self.ty {
                     PinType::Pico => PinDirection::Outside,
                     PinType::Cipo => PinDirection::Inside,
-                    PinType::Controlled => PinDirection::Inside, // WARN: this should be invalid state
+                    _ => return,
                 },
             };
 
@@ -331,7 +342,7 @@ impl CircuitImpl for Pin {
                     }
                 }
                 None => {
-                    if self.is_pico(state_ctx) {
+                    if self.is_pico(state_ctx) != Some(false) {
                         self.pin.set_state(
                             state_ctx,
                             state_ctx
@@ -343,6 +354,75 @@ impl CircuitImpl for Pin {
                     }
                 }
             }
+        }
+    }
+
+    fn custom_pin_mutate_state(
+        &self,
+        ctx: &CircuitStateContext,
+        pin: usize,
+        state: &mut WireState,
+        visited_items: &mut VisitedList,
+    ) {
+        if pin != 0 {
+            return;
+        }
+
+        let parent = ctx.global_state.get_parent();
+        let parent = unwrap_option_or_return!(parent);
+
+        let outer = parent
+            .circuit
+            .read_imp::<super::board::Board, _>(|board| {
+                board.resolve_inner_to_outer(ctx.circuit.id)
+            })
+            .flatten();
+        let outer = unwrap_option_or_return!(outer);
+        let info = parent.circuit.info.read();
+        let outer_pin_info = info.pins.get(outer);
+        let outer_pin_info = unwrap_option_or_return!(outer_pin_info);
+        let outer_pin = outer_pin_info.pin.read();
+
+        if let Some(wire) = outer_pin.connected_wire() {
+            visited_items.push(parent.state.board.uid, VisitedItem::Pin(outer_pin.id));
+            parent.state.compute_wire_state(wire, state, visited_items);
+            visited_items.pop(parent.state.board.uid);
+        }
+    }
+
+    fn custom_pin_apply_state(
+        &self,
+        ctx: &CircuitStateContext,
+        pin: usize,
+        state: &WireState,
+        visited_items: &mut VisitedList,
+    ) {
+        if pin != 0 {
+            return;
+        }
+
+        let parent = ctx.global_state.get_parent();
+        let parent = unwrap_option_or_return!(parent);
+
+        let outer = parent
+            .circuit
+            .read_imp::<super::board::Board, _>(|board| {
+                board.resolve_inner_to_outer(ctx.circuit.id)
+            })
+            .flatten();
+        let outer = unwrap_option_or_return!(outer);
+        let info = parent.circuit.info.read();
+        let outer_pin_info = info.pins.get(outer);
+        let outer_pin_info = unwrap_option_or_return!(outer_pin_info);
+        let outer_pin = outer_pin_info.pin.read();
+
+        outer_pin.set_input(&parent.state, state, false, None);
+        if let Some(wire) = outer_pin.connected_wire() {
+            visited_items.push(parent.state.board.uid, VisitedItem::Pin(outer_pin.id));
+            parent
+                .state
+                .apply_wire_state(wire, state, false, visited_items);
+            visited_items.pop(parent.state.board.uid);
         }
     }
 
@@ -371,6 +451,7 @@ impl CircuitImpl for Pin {
             PinType::Controlled => InternalPinDirection::StateDependent {
                 default: PinDirection::Inside,
             },
+            PinType::Bidirectional => InternalPinDirection::Custom,
         };
 
         // Update pin direction in the board design if possible
@@ -398,7 +479,7 @@ impl CircuitImpl for Pin {
         _ctx: &CircuitStateContext,
         data: &serde_intermediate::Intermediate,
         _paste: bool,
-        errors: &mut ErrorList
+        errors: &mut ErrorList,
     ) -> Option<Box<dyn InternalCircuitState>> {
         serde_intermediate::de::intermediate::deserialize::<PinState>(data)
             .report_error(errors)
@@ -485,7 +566,7 @@ impl CircuitPreviewImpl for Preview {
             cpos,
             WireState::False,
             WireState::False,
-            Some(!ty.is_cipo()),
+            ty.is_bidirectional().not().then_some(!ty.is_cipo()),
             angle,
             ctx,
         );
@@ -619,14 +700,21 @@ impl CircuitPropertyImpl for PinType {
                     PinType::Pico => "Inside",
                     PinType::Cipo => "Outside",
                     PinType::Controlled => "Controlled",
+                    PinType::Bidirectional => "Bidirectional",
                 }
             })
             .show_ui(ui, |ui| {
-                for p in [PinType::Pico, PinType::Cipo, PinType::Controlled] {
+                for p in [
+                    PinType::Pico,
+                    PinType::Cipo,
+                    PinType::Controlled,
+                    PinType::Bidirectional,
+                ] {
                     let name = match p {
                         PinType::Pico => "Inside",
                         PinType::Cipo => "Outside",
                         PinType::Controlled => "Controlled",
+                        PinType::Bidirectional => "Bidirectional",
                     };
                     let res = ui.selectable_value(self, p, name);
                     if res.changed() || res.clicked() {
@@ -666,6 +754,7 @@ impl<'de> Deserialize<'de> for PinType {
         Ok(match char::deserialize(deserializer)? {
             'o' => Self::Cipo,
             'c' => Self::Controlled,
+            'b' => Self::Bidirectional,
             _ => Self::Pico,
         })
     }
@@ -677,9 +766,10 @@ impl Serialize for PinType {
         S: serde::Serializer,
     {
         match *self {
-            PinType::Pico => 'i'.serialize(serializer),
-            PinType::Cipo => 'o'.serialize(serializer),
-            PinType::Controlled => 'c'.serialize(serializer),
+            Self::Pico => 'i'.serialize(serializer),
+            Self::Cipo => 'o'.serialize(serializer),
+            Self::Controlled => 'c'.serialize(serializer),
+            Self::Bidirectional => 'b'.serialize(serializer),
         }
     }
 }
