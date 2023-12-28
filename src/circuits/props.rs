@@ -1,7 +1,7 @@
 use std::{
     any::{Any, TypeId},
     collections::HashMap,
-    ops::{Deref, RangeInclusive, RangeFrom},
+    ops::{Deref, RangeFrom, RangeInclusive},
     sync::Arc,
 };
 
@@ -9,9 +9,11 @@ use eframe::{
     egui::{self, ComboBox, DragValue, Ui, Widget},
     epaint::{Color32, Rounding, Stroke},
 };
+use emath::Numeric;
+use serde::{de::DeserializeOwned, Serialize};
 
 use crate::{
-    unwrap_option_or_return, unwrap_option_or_continue, ArcString, Direction4, DynStaticStr, Mutex,
+    unwrap_option_or_continue, unwrap_option_or_return, ArcString, Direction4, DynStaticStr, Mutex,
     RwLock,
 };
 
@@ -241,6 +243,16 @@ impl Clone for CircuitProperty {
     }
 }
 
+trait AutoNumericProp: Numeric + Send + Sync {}
+macro_rules! impl_auto_num_prop {
+    ($($t:ty)*) => {
+        $(
+            impl AutoNumericProp for $t {}
+        )*
+    };
+}
+impl_auto_num_prop!(u8 i8 u16 i16 u32 i32 u64 i64 f32 f64);
+
 #[derive(Clone)]
 pub struct RangedValue<T>
 where
@@ -263,7 +275,7 @@ where
         }
     }
     pub fn new_from(range: RangeFrom<T>, change_speed: T, value: T) -> Self {
-        let range = range.start ..= T::MAX;
+        let range = range.start..=T::MAX;
         Self {
             range,
             change_speed,
@@ -548,6 +560,48 @@ where
     }
 }
 
+impl<T: AutoNumericProp> CircuitPropertyImpl for T
+where
+    T: emath::Numeric + Send + Sync,
+{
+    fn equals(&self, other: &dyn CircuitPropertyImpl) -> bool {
+        other.is_type_and(|s: &Self| s == self)
+    }
+
+    fn ui(&mut self, ui: &mut Ui, _not_equal: bool) -> Option<Box<dyn CircuitPropertyImpl>> {
+        let old = *self;
+
+        let resp = DragValue::new(self)
+            .ui(ui);
+
+        if resp.changed() {
+            Some(Box::new(old))
+        } else {
+            None
+        }
+    }
+
+    fn clone(&self) -> Box<dyn CircuitPropertyImpl> {
+        Box::new(Clone::clone(self))
+    }
+
+    fn load(&mut self, data: &serde_intermediate::Intermediate) {
+        if let Ok(value) = serde_intermediate::from_intermediate(data) {
+            *self = T::from_f64(value);
+        }
+    }
+
+    fn save(&self) -> serde_intermediate::Intermediate {
+        serde_intermediate::to_intermediate(&self.to_f64()).unwrap_or_default()
+    }
+
+    fn copy_into(&self, other: &mut dyn CircuitPropertyImpl) {
+        if let Some(r) = other.downcast_mut::<Self>() {
+            *r = *self;
+        }
+    }
+}
+
 impl CircuitPropertyImpl for Rounding {
     fn equals(&self, other: &dyn CircuitPropertyImpl) -> bool {
         other.is_type_and(|o: &Self| o == self)
@@ -650,4 +704,148 @@ impl CircuitPropertyImpl for Stroke {
             *r = *self;
         }
     }
+}
+
+#[derive(Clone)]
+pub struct Slider<Num>
+where
+    Num: Numeric + Send + Sync + Serialize + DeserializeOwned,
+{
+    pub value: Num,
+    pub range: RangeInclusive<Num>,
+}
+
+impl<Num> CircuitPropertyImpl for Slider<Num>
+where
+    Num: Numeric + Send + Sync + Serialize + DeserializeOwned,
+{
+    fn equals(&self, other: &dyn CircuitPropertyImpl) -> bool {
+        other.is_type_and(|o: &Self| (o.value.to_f64() - self.value.to_f64()).abs() <= f64::EPSILON)
+    }
+
+    fn ui(&mut self, ui: &mut Ui, _not_equal: bool) -> Option<Box<dyn CircuitPropertyImpl>> {
+        let old = Clone::clone(self);
+        if egui::Slider::new(&mut self.value, self.range.clone()).ui(ui).changed() {
+            Some(Box::new(old))
+        }
+        else {
+            None
+        }
+    }
+
+    fn clone(&self) -> Box<dyn CircuitPropertyImpl> {
+        Box::new(Clone::clone(self))
+    }
+
+    fn save(&self) -> serde_intermediate::Intermediate {
+        serde_intermediate::to_intermediate(&self.value).unwrap_or_default()
+    }
+
+    fn load(&mut self, data: &serde_intermediate::Intermediate) {
+        if let Ok(v) = serde_intermediate::de::intermediate::deserialize(data) {
+            self.value = v;
+        }
+    }
+
+    fn copy_into(&self, other: &mut dyn CircuitPropertyImpl) {
+        if let Some(r) = other.downcast_mut::<Self>() {
+            r.value = self.value;
+        }
+    }
+}
+
+#[macro_export]
+macro_rules! create_safe_prop_enums {
+    ( $( #[default($default:ident)] $(#[$meta:meta])* enum $name:ident { $($variant:ident($varrep:literal $(, $varname:literal)?),)* } )*) => {
+        $(
+            $(#[$meta])*
+            enum $name {
+                $($variant),*
+            }
+
+            impl $crate::circuits::props::CircuitPropertyImpl for $name {
+                fn equals(&self, other: &dyn $crate::circuits::props::CircuitPropertyImpl) -> bool {
+                    other.is_type_and(|o: &Self| o == self)
+                }
+    
+                fn ui(&mut self, ui: &mut eframe::egui::Ui, not_equal: bool) -> Option<Box<dyn $crate::circuits::props::CircuitPropertyImpl>> {
+                    let old = *self;
+                    let mut changed = false;
+                    ui.skip_ahead_auto_ids(1);
+                    eframe::egui::ComboBox::from_id_source(ui.next_auto_id())
+                        .selected_text(if not_equal {
+                            ""
+                        } else {
+                            #[allow(unreachable_patterns)]
+                            match self {
+                                $(
+                                    Self::$variant => create_safe_prop_enums!(@varname $variant $($varname)?),
+                                )*
+                                _ => "",
+                            }
+                        })
+                        .show_ui(ui, |ui| {
+                            $(
+                                let res = ui.selectable_value(self, Self::$variant, create_safe_prop_enums!(@varname $variant $($varname)?));
+                                if res.changed() || res.clicked() {
+                                    changed = true;
+                                }
+                            )*
+                        });
+                    changed.then(|| Box::new(old) as Box<dyn $crate::circuits::props::CircuitPropertyImpl>)
+                }
+    
+                fn clone(&self) -> Box<dyn $crate::circuits::props::CircuitPropertyImpl> {
+                    Box::new(Clone::clone(self))
+                }
+    
+                fn save(&self) -> serde_intermediate::Intermediate {
+                    serde_intermediate::to_intermediate(&self).unwrap_or_default()
+                }
+    
+                fn load(&mut self, data: &serde_intermediate::Intermediate) {
+                    if let Ok(d) = serde_intermediate::de::intermediate::deserialize(data) {
+                        *self = d;
+                    }
+                }
+    
+                fn copy_into(&self, other: &mut dyn $crate::circuits::props::CircuitPropertyImpl) {
+                    if let Some(r) = other.downcast_mut() {
+                        *r = *self;
+                    }
+                }
+            }
+
+            impl<'de> serde::Deserialize<'de> for $name {
+                fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+                where
+                    D: serde::Deserializer<'de>,
+                {
+                    let val = <_>::deserialize(deserializer)?;
+                    Ok(match val {
+                        $(
+                            $varrep => Self::$variant,
+                        )*
+                        _ => Self::$default,
+                    })
+                }
+            }
+            
+            impl serde::Serialize for $name {
+                fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+                where
+                    S: serde::Serializer,
+                {
+                    match self {
+                        $(
+                            Self::$variant => $varrep.serialize(serializer),
+                        )*
+                    }
+                }
+            }
+        )*
+    };
+
+    (@varname $name:ident $dispname:literal) => { $dispname };
+    (@varname $name:ident) => { stringify!($name) };
 }

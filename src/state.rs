@@ -60,6 +60,9 @@ impl From<bool> for SingleWireState {
 }
 
 impl WireState {
+
+    pub const BUNDLE_COLOR: Color32 = Color32::BLACK;
+
     pub fn set(&mut self, index: usize, value: WireState) {
         match self {
             WireState::Bundle(bundle) => {
@@ -210,7 +213,7 @@ impl WireState {
             Self::True => [0, 255, 0],
             Self::False => [0, 127, 0],
             Self::Error => [200, 0, 0],
-            Self::Bundle(_) => [0, 0, 0],
+            Self::Bundle(_) => return Self::BUNDLE_COLOR,
         };
         Color32::from_rgb(rgb[0], rgb[1], rgb[2])
     }

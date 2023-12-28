@@ -338,6 +338,7 @@ impl App {
             Box::new(circuits::transistor::TransistorPreview {}),
             Box::new(circuits::freq_meter::FreqMeterPreview {}),
             Box::new(circuits::pin::Preview {}),
+            Box::new(circuits::bundler::Preview {}),
             Box::<circuits::board::BoardPreview>::default(),
         ];
         let mut errors = ErrorList::new();

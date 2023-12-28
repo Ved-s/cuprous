@@ -319,7 +319,7 @@ where
                     for index in 0..depth {
                         states.clear();
                         states.extend(inputs.iter().map(|i| i.get(index)));
-                        out.push(recursive_process::<I>(inputs, extra));
+                        out.push(recursive_process::<I>(&states, extra));
                     }
                     WireState::Bundle(Arc::new(out))
                 }

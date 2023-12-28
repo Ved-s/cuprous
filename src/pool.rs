@@ -1,5 +1,6 @@
 use std::{sync::Arc, ops::{Deref, DerefMut}};
 
+use eframe::epaint::Color32;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize, Serializer, Deserializer};
 
@@ -40,7 +41,7 @@ impl<T: ArcPoolable> Default for ArcPooled<T> {
 impl<T: ArcPoolable> Clone for ArcPooled<T> {
     fn clone(&self) -> Self {
         let mut new = Self::new();
-        self.clone_into(&mut new);
+        T::clone_into(self, &mut new);
         new 
     }
 }
@@ -94,33 +95,38 @@ pub trait ArcPoolable: Sized {
 thread_local! {
     static WIRE_STATE_VEC_POOL: ArcPool<Vec<WireState>> = ArcPool::new();
     static BOOL_VEC_POOL: ArcPool<Vec<bool>> = ArcPool::new();
+    static COLOR32_VEC_POOL: ArcPool<Vec<Color32>> = ArcPool::new();
 }
 
 pub type PooledStateVec = ArcPooled<Vec<WireState>>;
 pub type PooledBoolVec = ArcPooled<Vec<bool>>;
+pub type PooledColor32Vec = ArcPooled<Vec<Color32>>;
 
-impl ArcPoolable for Vec<WireState> {
-    fn pool() -> ArcPool<Self> {
+trait VecArcPoolable: Sized + Clone {
+    fn pool() -> ArcPool<Vec<Self>>;
+}
+
+impl VecArcPoolable for WireState {
+    fn pool() -> ArcPool<Vec<Self>> {
         WIRE_STATE_VEC_POOL.with(|p| p.clone())
-    }
-
-    fn clone_into(&self, other: &mut Self) {
-        other.clear();
-        other.extend_from_slice(self);
-    }
-
-    fn clear(&mut self) {
-        Vec::clear(self)
-    }
-
-    fn new() -> Self {
-        Vec::new()
     }
 }
 
-impl ArcPoolable for Vec<bool> {
-    fn pool() -> ArcPool<Self> {
+impl VecArcPoolable for bool {
+    fn pool() -> ArcPool<Vec<Self>> {
         BOOL_VEC_POOL.with(|p| p.clone())
+    }
+}
+
+impl VecArcPoolable for Color32 {
+    fn pool() -> ArcPool<Vec<Self>> {
+        COLOR32_VEC_POOL.with(|p| p.clone())
+    }
+}
+
+impl<T: VecArcPoolable> ArcPoolable for Vec<T> {
+    fn pool() -> ArcPool<Self> {
+        T::pool()
     }
 
     fn clone_into(&self, other: &mut Self) {

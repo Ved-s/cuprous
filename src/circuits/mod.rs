@@ -26,11 +26,13 @@ use crate::{
 use self::props::CircuitPropertyStore;
 
 pub mod board;
+pub mod bundler;
 pub mod button;
 pub mod freq_meter;
 pub mod gates;
 pub mod led;
 pub mod pin;
+#[macro_use]
 pub mod props;
 pub mod pullup;
 pub mod transistor;

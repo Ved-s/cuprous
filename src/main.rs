@@ -38,6 +38,7 @@ use wires::WirePart;
 mod containers;
 use crate::containers::*;
 
+#[macro_use]
 mod circuits;
 use circuits::{CircuitPreview, CircuitStateContext};
 

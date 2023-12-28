@@ -105,6 +105,7 @@ static COMPONENT_BUILTIN_ORDER: &[&str] = &[
     "not",
     "transistor",
     "pin",
+    "bundler",
     "pullup",
     "freq_meter",
 ];
