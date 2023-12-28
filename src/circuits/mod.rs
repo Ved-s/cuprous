@@ -105,7 +105,7 @@ impl CircuitPin {
     pub fn get_state(&self, state: &State) -> WireState {
         state
             .read_circuit(self.id.circuit_id, |cs| {
-                cs.pins.get(self.id.id).copied().unwrap_or_default()
+                cs.pins.get(self.id.id).cloned().unwrap_or_default()
             })
             .unwrap_or_default()
     }
@@ -125,10 +125,10 @@ impl CircuitPin {
                 return true;
             }
 
-            circuit
+            let state = circuit
                 .pins
-                .get_or_create_mut(self.id.id, || WireState::None)
-                .copy_from(value);
+                .get_or_create_mut(self.id.id, || WireState::None);
+            *state = value.clone();
             false
         });
         if !skip && update_state {
@@ -204,16 +204,6 @@ impl CircuitPinInfo {
         state_ctx
             .read_circuit_state(|cs| cs.pins.get_clone(self.pin.read().id.id).unwrap_or_default())
             .unwrap_or_default()
-    }
-
-    pub fn read_state<R>(
-        &self,
-        state_ctx: &CircuitStateContext,
-        f: impl FnOnce(&WireState) -> R,
-    ) -> Option<R> {
-        state_ctx
-            .read_circuit_state(|cs| cs.pins.get(self.pin.read().id.id).map(f))
-            .flatten()
     }
 
     pub fn get_wire_state(&self, state_ctx: &CircuitStateContext) -> Option<WireState> {

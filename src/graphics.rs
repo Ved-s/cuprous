@@ -1,6 +1,6 @@
 use std::f32::consts::TAU;
 
-use eframe::epaint::{PathShape, Stroke};
+use eframe::epaint::{PathShape, Stroke, Color32};
 use emath::{pos2, vec2, Pos2};
 
 use crate::{
@@ -11,25 +11,27 @@ use crate::{
     PaintContext,
 };
 
+#[allow(clippy::too_many_arguments)] // TODO: cleanup
 pub fn transistor(
     ty: TransistorType,
     angle: f32,
     flip: bool,
-    collector: WireState,
-    base: WireState,
-    emitter: WireState,
+    collector: Color32,
+    base: Color32,
+    emitter: Color32,
+    open: bool,
     ctx: &PaintContext,
 ) {
-    let middle_color = match crate::circuits::transistor::Transistor::is_open_state(ty, base) {
-        true => collector.color(),
-        false => emitter.color(),
+    let middle_color = match open {
+        true => collector,
+        false => emitter,
     };
 
     let thickness = ActiveCircuitBoard::WIRE_THICKNESS * ctx.screen.scale;
 
-    let collector_stroke = Stroke::new(thickness, collector.color());
-    let base_stroke = Stroke::new(thickness, base.color());
-    let emitter_stroke = Stroke::new(thickness, emitter.color());
+    let collector_stroke = Stroke::new(thickness, collector);
+    let base_stroke = Stroke::new(thickness, base);
+    let emitter_stroke = Stroke::new(thickness, emitter);
     let middle_stroke = Stroke::new(thickness, middle_color);
 
     let size = vec2(2.0, 3.0);
@@ -58,8 +60,8 @@ pub fn transistor(
     };
 
     let arrow_color = match ty {
-        TransistorType::NPN => emitter.color(),
-        TransistorType::PNP => collector.color(),
+        TransistorType::NPN => emitter,
+        TransistorType::PNP => collector,
     };
 
     painter.add(PathShape {
@@ -72,9 +74,9 @@ pub fn transistor(
 
 /// Returns center position
 pub fn inside_pin(
-    ctl: Option<(ControlPinPosition, WireState)>,
-    outside_state: WireState,
-    state: WireState,
+    ctl: Option<(ControlPinPosition, Color32)>,
+    outside_color: Color32,
+    color: Color32,
     is_pico: Option<bool>,
     angle: f32,
     ctx: &PaintContext,
@@ -103,7 +105,7 @@ pub fn inside_pin(
             transformer(pos2(0.95, 0.5) + center_off),
             transformer(pos2(1.5, 0.5) + center_off),
         ],
-        Stroke::new(ActiveCircuitBoard::WIRE_THICKNESS * scale, state.color()),
+        Stroke::new(ActiveCircuitBoard::WIRE_THICKNESS * scale, color),
     );
 
     if let Some(is_pico) = is_pico {
@@ -119,16 +121,16 @@ pub fn inside_pin(
         ctx.paint.add(PathShape {
             points,
             closed: true,
-            fill: state.color(),
+            fill: color,
             stroke: Stroke::NONE,
         });
     }
     ctx.paint
-        .circle_filled(center, 0.3 * scale, outside_state.color());
+        .circle_filled(center, 0.3 * scale, outside_color);
     ctx.paint.circle_stroke(
         center,
         0.45 * scale,
-        Stroke::new(0.1 * scale, state.color()),
+        Stroke::new(0.1 * scale, color),
     );
 
     if let Some((ctl_dir, ctl_state)) = ctl {
@@ -149,7 +151,7 @@ pub fn inside_pin(
             ],
             Stroke::new(
                 ActiveCircuitBoard::WIRE_THICKNESS * scale,
-                ctl_state.color(),
+                ctl_state,
             ),
         );
 
@@ -160,7 +162,7 @@ pub fn inside_pin(
                 ctl_transformer(pos2(0.75, 1.25)),
             ],
             closed: true,
-            fill: ctl_state.color(),
+            fill: ctl_state,
             stroke: Stroke::NONE,
         });
     }

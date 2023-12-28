@@ -2,18 +2,18 @@ use std::{
     any::{Any, TypeId},
     borrow::BorrowMut,
     collections::BTreeMap,
-    ops::Deref,
+    ops::{Deref, IndexMut},
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
     },
-    time::Duration,
+    time::Duration, str::Chars, iter::Peekable,
 };
 
 #[cfg(not(feature = "single_thread"))]
 use std::thread::{self, JoinHandle};
 
-use crate::{containers::Queue, error::ErrorList, time::Instant, unwrap_option_or_continue};
+use crate::{containers::Queue, error::ErrorList, time::Instant, unwrap_option_or_continue, pool::PooledStateVec};
 use eframe::epaint::Color32;
 use object_pool::Pool;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -30,8 +30,19 @@ pub enum UpdateTask {
     PinInput { circuit: usize, id: usize },
 }
 
-#[derive(Default, Clone, Copy, Eq, PartialEq, Serialize, Deserialize, Debug)]
+#[derive(Default, Clone, Eq, PartialEq, Serialize, Deserialize, Debug)]
 pub enum WireState {
+    #[default]
+    None,
+    True,
+    False,
+    Error,
+
+    Bundle(Arc<PooledStateVec>)
+}
+
+#[derive(Default, Clone, Copy, Eq, PartialEq, Debug)]
+pub enum SingleWireState {
     #[default]
     None,
     True,
@@ -39,48 +50,184 @@ pub enum WireState {
     Error,
 }
 
+impl From<bool> for SingleWireState {
+    fn from(value: bool) -> Self {
+        match value {
+            true => Self::True,
+            false => Self::False,
+        }
+    }
+}
+
 impl WireState {
-    pub fn combine(self, state: &WireState) -> WireState {
-        match (self, state) {
-            (WireState::None, other) => *other,
-            (other, &WireState::None) => other,
-
-            (WireState::Error, _) | (_, WireState::Error) => WireState::Error,
-
-            (WireState::True, WireState::False) => WireState::Error,
-            (WireState::False, WireState::True) => WireState::Error,
-
-            (WireState::True, WireState::True) => WireState::True,
-            (WireState::False, WireState::False) => WireState::False,
+    pub fn set(&mut self, index: usize, value: WireState) {
+        match self {
+            WireState::Bundle(bundle) => {
+                let bundle = Arc::make_mut(bundle);
+                if bundle.len() <= index {
+                    bundle.push(WireState::None);
+                }
+                *bundle.index_mut(index) = value;
+            }
+            this => *this = value
         }
     }
 
-    pub const fn color(self) -> Color32 {
+    pub fn get(&self, index: usize) -> WireState {
+        match self {
+            WireState::Bundle(bundle) => bundle.get(index).cloned().unwrap_or_default(),
+            _ => self.clone()
+        }
+    }
+
+    pub fn bundle_len(&self) -> Option<usize> {
+        match self {
+            WireState::Bundle(bundle) => Some(bundle.len()),
+            _ => None
+        }
+    }
+
+    pub fn as_single(&self) -> Result<SingleWireState, &Arc<PooledStateVec>> {
+        match self {
+            Self::None => Ok(SingleWireState::None),
+            Self::True => Ok(SingleWireState::True),
+            Self::False => Ok(SingleWireState::False),
+            Self::Error => Ok(SingleWireState::Error),
+            Self::Bundle(bundle) => Err(bundle),
+        }
+    }
+
+    pub fn as_single_mut(&mut self) -> Result<SingleWireState, &mut Arc<PooledStateVec>> {
+        match self {
+            Self::None => Ok(SingleWireState::None),
+            Self::True => Ok(SingleWireState::True),
+            Self::False => Ok(SingleWireState::False),
+            Self::Error => Ok(SingleWireState::Error),
+            Self::Bundle(bundle) => Err(bundle),
+        }
+    }
+
+    pub fn str_serialize(&self, str: &mut String) {
+        match self {
+            WireState::None => str.push('n'),
+            WireState::True => str.push('t'),
+            WireState::False => str.push('f'),
+            WireState::Error => str.push('e'),
+            WireState::Bundle(bundle) => {
+                str.push('[');
+                for state in bundle.iter() {
+                    state.str_serialize(str);
+                }
+                str.push(']');
+            },
+        }
+    }
+
+    pub fn str_deserialize(chars: &mut Peekable<Chars>) -> Option<WireState> {
+        let char = chars.next();
+        let char = unwrap_option_or_return!(char, None);
+        Some(match char {
+            't' => WireState::True,
+            'f' => WireState::False,
+            'e' => WireState::Error,
+            '[' => {
+                let mut bundle = PooledStateVec::new();
+                loop {
+                    let next = chars.peek();
+                    let next = unwrap_option_or_break!(next);
+                    if *next == ']' {
+                        break;
+                    }
+                    let wire = Self::str_deserialize(chars).unwrap_or_default();
+                    bundle.push(wire);
+                }
+                WireState::Bundle(Arc::new(bundle))
+            }
+            ']' => return None,
+            _ => WireState::None,
+        })
+    }
+
+    pub fn merge(&mut self, state: &WireState) {
+        self.combine(state, &|a, b| {
+            match (a, b) {
+                (SingleWireState::None, other) => other,
+                (other, SingleWireState::None) => other,
+        
+                (SingleWireState::Error, _) | (_, SingleWireState::Error) => SingleWireState::Error,
+        
+                (SingleWireState::True, SingleWireState::False) => SingleWireState::Error,
+                (SingleWireState::False, SingleWireState::True) => SingleWireState::Error,
+        
+                (SingleWireState::True, SingleWireState::True) => SingleWireState::True,
+                (SingleWireState::False, SingleWireState::False) => SingleWireState::False,
+            }
+        })
+    }
+
+    pub fn combine(&mut self, state: &WireState, combiner: &impl Fn(SingleWireState, SingleWireState) -> SingleWireState) {
+        let self_single = self.as_single_mut();
+        let other_single = state.as_single();
+
+        let out = match (self_single, other_single) {
+            (Ok(a), Ok(b)) => Some(combiner(a, b).into()),
+            (Ok(a), Err(b)) => {
+                let mut bundle = PooledStateVec::new();
+                bundle.extend(b.iter().map(|b| {
+                    let mut ws: WireState = a.into();
+                    ws.combine(b, combiner);
+                    ws
+                }));
+                Some(WireState::Bundle(Arc::new(bundle)))
+            },
+            (Err(a), Ok(b)) => {
+                let a = Arc::make_mut(a);
+                for a in a.iter_mut() {
+                    a.combine(&b.into(), combiner);
+                }
+                None
+            },
+            (Err(a), Err(b)) => {
+                let a = Arc::make_mut(a);
+                while a.len() < b.len() {
+                    a.push(WireState::None);
+                }
+                for (a, b) in a.iter_mut().zip(b.iter()) {
+                    a.combine(b, combiner);
+                }
+                None
+            },
+        };
+
+        if let Some(out) = out {
+            *self = out;
+        }
+    }
+
+    pub const fn color(&self) -> Color32 {
         let rgb = match self {
             Self::None => [0, 0, 200],
             Self::True => [0, 255, 0],
             Self::False => [0, 127, 0],
             Self::Error => [200, 0, 0],
+            Self::Bundle(_) => [0, 0, 0],
         };
         Color32::from_rgb(rgb[0], rgb[1], rgb[2])
     }
 
-    pub fn combine_boolean(self, state: Self, combiner: impl FnOnce(bool, bool) -> bool) -> Self {
-        match (self, state) {
-            (Self::None, other) | (other, Self::None) => other,
-            (Self::Error, _) | (_, Self::Error) => Self::Error,
-
-            (Self::True, Self::False) => combiner(true, false).into(),
-            (Self::False, Self::True) => combiner(false, true).into(),
-
-            (Self::True, Self::True) => combiner(true, true).into(),
-            (Self::False, Self::False) => combiner(false, false).into(),
-        }
-    }
-
-    // for future use
-    pub fn copy_from(&mut self, new: &WireState) {
-        *self = *new;
+    pub fn combine_boolean(&mut self, state: &WireState, combiner: &impl Fn(bool, bool) -> bool) {
+        self.combine(state, &|a, b| {
+            match (a, b) {
+                (SingleWireState::None, other) | (other, SingleWireState::None) => other,
+                (SingleWireState::Error, _) | (_, SingleWireState::Error) => SingleWireState::Error,
+                
+                (SingleWireState::True, SingleWireState::False) => combiner(true, false).into(),
+                (SingleWireState::False, SingleWireState::True) => combiner(false, true).into(),
+                
+                (SingleWireState::True, SingleWireState::True) => combiner(true, true).into(),
+                (SingleWireState::False, SingleWireState::False) => combiner(false, false).into(),
+            }
+        })
     }
 }
 
@@ -93,7 +240,81 @@ impl From<bool> for WireState {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+impl From<SingleWireState> for WireState {
+    fn from(value: SingleWireState) -> Self {
+        match value {
+            SingleWireState::None => Self::None,
+            SingleWireState::True => Self::True,
+            SingleWireState::False => Self::False,
+            SingleWireState::Error => Self::Error,
+        }
+    }
+}
+
+// #[derive(Debug, PartialEq, Eq)]
+// struct WireBundle(pub Vec<WireState>);
+
+// impl WireBundle {
+//     pub fn new() -> Self {
+//         let mut vec = WIRE_BUNDLE_POOL.with(|pool| {
+//             pool.lock().pop()
+//         }).unwrap_or_default();
+//         vec.clear();
+
+//         Self(vec)
+//     }
+// }
+
+// impl Clone for WireBundle {
+//     fn clone(&self) -> Self {
+//         let mut new = Self::new();
+//         new.extend_from_slice(self);
+//         new 
+//     }
+// }
+
+// impl Serialize for WireBundle {
+//     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+//     where
+//         S: Serializer {
+//         self.0.serialize(serializer)
+//     }
+// }
+
+// impl<'de> Deserialize<'de> for WireBundle {
+//     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+//     where
+//         D: Deserializer<'de> {
+//         Ok(Self(<_>::deserialize(deserializer)?))
+//     }
+// }
+
+// impl Deref for WireBundle {
+//     type Target = Vec<WireState>;
+
+//     fn deref(&self) -> &Self::Target {
+//         &self.0
+//     }
+// }
+
+// impl DerefMut for WireBundle {
+//     fn deref_mut(&mut self) -> &mut Self::Target {
+//         &mut self.0
+//     }
+// }
+
+// impl Drop for WireBundle {
+//     fn drop(&mut self) {
+//         let mut states = std::mem::take(&mut self.0);
+//         states.clear();
+//         WIRE_BUNDLE_POOL.with(|pool| {
+//             let mut pool = pool.lock();
+//             pool.push(states);
+//         });
+//     }
+// }
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 
 /// Safe versoion of `WireState` that can be passed through `serde_intermediate`
 pub struct SafeWireState(pub WireState);
@@ -103,14 +324,8 @@ impl<'de> Deserialize<'de> for SafeWireState {
     where
         D: Deserializer<'de>,
     {
-        Ok(Self(
-            match char::deserialize(deserializer)?.to_ascii_lowercase() {
-                'f' => WireState::False,
-                't' => WireState::True,
-                'e' => WireState::Error,
-                _ => WireState::None,
-            },
-        ))
+        let str = <&str>::deserialize(deserializer)?;
+        Ok(Self(WireState::str_deserialize(&mut str.chars().peekable()).unwrap_or_default()))
     }
 }
 
@@ -119,13 +334,9 @@ impl Serialize for SafeWireState {
     where
         S: Serializer,
     {
-        match self.0 {
-            WireState::None => 'n',
-            WireState::True => 't',
-            WireState::False => 'f',
-            WireState::Error => 'e',
-        }
-        .serialize(serializer)
+        let mut str = String::new();
+        self.0.str_serialize(&mut str);
+        str.serialize(serializer)
     }
 }
 
@@ -386,7 +597,7 @@ impl State {
         self.wires
             .read()
             .get(id)
-            .map(|s| *s.read())
+            .map(|s| s.read().clone())
             .unwrap_or_default()
     }
 
@@ -488,7 +699,7 @@ impl State {
                 .read()
                 .inner
                 .iter()
-                .map(|ws| ws.as_ref().map(|ws| *ws.read()))
+                .map(|ws| ws.as_ref().map(|ws| ws.read().clone()))
                 .collect(),
             circuits: self
                 .circuits
@@ -522,7 +733,7 @@ impl State {
         let mut errors = errors.enter_context(|| format!("loading state {}", id));
         let now = Instant::now();
 
-        let wires = data.wires.iter().map(|w| w.map(RwLock::new)).collect();
+        let wires = data.wires.iter().map(|w| w.clone().map(RwLock::new)).collect();
 
         let updates = data
             .updates
@@ -764,8 +975,7 @@ impl State {
                 match pin.direction(self) {
                     PinDirection::Inside => {}
                     PinDirection::Outside => {
-                        let owned_state = std::mem::replace(state, WireState::None);
-                        *state = owned_state.combine(&pin.get_state(self));
+                        state.merge(&pin.get_state(self));
                     }
                     PinDirection::Custom => {
                         // Ignore this pin if it triggered the update
@@ -814,7 +1024,7 @@ impl State {
             if !skip_state_ckeck && *current == *state {
                 true
             } else {
-                current.copy_from(state);
+                *current = state.clone();
                 false
             }
         });
@@ -886,24 +1096,18 @@ impl State {
 
         let pin_wire = pin.connected_wire();
 
-        let none = WireState::None;
-        let wires = pin_wire.map(|id| (self.wires.read(), id));
-        let wire_state = wires
-            .as_ref()
-            .and_then(|(w, id)| w.get(*id).map(|ws| ws.read()));
-        let wire_state = wire_state.as_deref();
-        let new_state = wire_state.unwrap_or(&none);
+        let new_state = pin_wire.and_then(|w| {
+            self.wires.read().get(w).map(|w| w.read().clone())
+        }).unwrap_or_default();
 
         if !custom {
-            let state_eq = pin_info
-                .read_state(&ctx, |s| *s == *new_state)
-                .unwrap_or(false);
-            if state_eq {
+            let state = pin_info.get_state(&ctx);
+            if state == new_state {
                 return;
             }
         }
 
-        pin.set_input(self, new_state, false, None);
+        pin.set_input(self, &new_state, false, None);
         drop(pin);
 
         let custom_visited_items = custom.then_some(visited_items).flatten();
@@ -921,7 +1125,7 @@ impl State {
                 circuit.imp.read().custom_pin_apply_state(
                     &CircuitStateContext::new(self.clone(), circuit.clone()),
                     id,
-                    new_state,
+                    &new_state,
                     visited_items,
                 );
                 visited_items.pop(self.board.uid);

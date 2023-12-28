@@ -12,6 +12,9 @@ use crate::{
     containers::FixedVec,
     describe_directional_circuit,
     path::{PathItem, PathItemIterator},
+    pool::{PooledBoolVec, PooledStateVec},
+    state::SingleWireState,
+    unwrap_option_or_return,
     vector::Vec2f,
     Direction4, Mutex,
 };
@@ -31,7 +34,7 @@ impl<'a> GateWireStates<'a> {
 
     pub fn get(&self, index: usize, default: WireState) -> WireState {
         match self {
-            GateWireStates::States(s) => s.get(index).copied().unwrap_or(default),
+            GateWireStates::States(s) => s.get(index).cloned().unwrap_or(default),
             GateWireStates::Default(_) => default,
         }
     }
@@ -56,8 +59,6 @@ pub trait GateImpl {
 }
 
 thread_local! {
-    static INPUT_STATES: Mutex<Vec<WireState>> = Default::default();
-    static INPUT_BOOLS: Mutex<Vec<bool>> = Default::default();
     static INPUT_DISPLAY_NAMES: Mutex<FixedVec<Weak<str>>> = Mutex::new(vec![].into());
     static INPUT_NAMES: Mutex<FixedVec<Weak<str>>> = Mutex::new(vec![].into());
 }
@@ -212,19 +213,16 @@ where
     fn draw(&self, state: &CircuitStateContext, paint_ctx: &PaintContext) {
         let angle = self.dir.inverted_ud().angle_to_right();
         let states = self.inputs.iter().map(|i| i.get_state(state));
-        INPUT_STATES.with(|s| {
-            let mut s = s.lock();
+        let mut states_pooled = PooledStateVec::new();
+        states_pooled.extend(states);
 
-            s.clear();
-            s.extend(states);
-            I::draw(
-                GateWireStates::States(&s),
-                angle,
-                false,
-                self.extra,
-                paint_ctx,
-            );
-        });
+        I::draw(
+            GateWireStates::States(&states_pooled),
+            angle,
+            false,
+            self.extra,
+            paint_ctx,
+        );
     }
 
     fn create_pins(&mut self, circ: &Arc<Circuit>) -> Box<[CircuitPinInfo]> {
@@ -248,29 +246,115 @@ where
     }
 
     fn update_signals(&self, ctx: &CircuitStateContext, _: Option<usize>) {
-        let states = self.inputs.iter().map(|i| i.get_state(ctx));
-        INPUT_BOOLS.with(|b| {
-            let mut b = b.lock();
+        fn process_case_single<I: GateImpl>(
+            input: SingleWireState,
+            extra: bool,
+        ) -> SingleWireState {
+            match input {
+                SingleWireState::None => SingleWireState::None,
+                SingleWireState::True => I::process(&[true], extra).into(),
+                SingleWireState::False => I::process(&[false], extra).into(),
+                SingleWireState::Error => SingleWireState::Error,
+            }
+        }
 
-            b.clear();
-            for state in states {
-                match state {
-                    WireState::None => continue,
-                    WireState::True => b.push(true),
-                    WireState::False => b.push(false),
-                    WireState::Error => {
-                        self.output.set_state(ctx, WireState::Error);
-                        return;
-                    }
+        fn process_case_one<I: GateImpl>(input: &WireState, extra: bool) -> WireState {
+            match input.as_single() {
+                Ok(single) => process_case_single::<I>(single, extra).into(),
+                Err(bundle) => {
+                    let mut out = PooledStateVec::new();
+                    out.extend(bundle.iter().map(|ws| process_case_one::<I>(ws, extra)));
+                    WireState::Bundle(Arc::new(out))
                 }
             }
-            if b.is_empty() {
-                self.output.set_state(ctx, WireState::None);
-            } else {
-                self.output
-                    .set_state(ctx, I::process(&b, self.extra).into());
+        }
+
+        fn process_case_two<I: GateImpl>(inputs: [&WireState; 2], extra: bool) -> WireState {
+            let mut out = inputs[0].clone();
+            out.combine(inputs[1], &|a, b| match (a, b) {
+                (SingleWireState::None, other) | (other, SingleWireState::None) => {
+                    process_case_single::<I>(other, extra)
+                }
+                (SingleWireState::Error, _) | (_, SingleWireState::Error) => SingleWireState::Error,
+
+                (SingleWireState::True, SingleWireState::False) => {
+                    I::process(&[true, false], extra).into()
+                }
+                (SingleWireState::False, SingleWireState::True) => {
+                    I::process(&[false, true], extra).into()
+                }
+
+                (SingleWireState::True, SingleWireState::True) => {
+                    I::process(&[true, true], extra).into()
+                }
+                (SingleWireState::False, SingleWireState::False) => {
+                    I::process(&[false, false], extra).into()
+                }
+            });
+
+            out
+        }
+
+        fn recursive_process<I: GateImpl>(inputs: &[WireState], extra: bool) -> WireState {
+            if inputs.iter().any(|s| matches!(s, WireState::Error)) {
+                return WireState::Error;
             }
-        });
+
+            if let [a] = inputs {
+                return process_case_one::<I>(a, extra);
+            }
+
+            if let [a, b] = inputs {
+                return process_case_two::<I>([a, b], extra);
+            }
+
+            let depth = inputs.iter().map(|s| s.bundle_len()).max();
+            let depth = unwrap_option_or_return!(depth, WireState::None);
+
+            match depth {
+                Some(depth) => {
+                    let mut out = PooledStateVec::new();
+
+                    let mut states = PooledStateVec::new();
+                    for index in 0..depth {
+                        states.clear();
+                        states.extend(inputs.iter().map(|i| i.get(index)));
+                        out.push(recursive_process::<I>(inputs, extra));
+                    }
+                    WireState::Bundle(Arc::new(out))
+                }
+                None => {
+                    let mut bools = PooledBoolVec::new();
+                    for state in inputs {
+                        match state {
+                            WireState::True => bools.push(true),
+                            WireState::False => bools.push(false),
+                            WireState::Error => return WireState::Error,
+                            _ => {}
+                        }
+                    }
+                    if bools.is_empty() {
+                        return WireState::None;
+                    }
+                    let out = I::process(&bools, extra);
+                    out.into()
+                }
+            }
+        }
+
+        if let [a, b] = self.inputs.deref() {
+            let a = a.get_state(ctx);
+            let b = b.get_state(ctx);
+            let out = process_case_two::<I>([&a, &b], self.extra);
+            self.output.set_state(ctx, out);
+            return;
+        }
+
+        let mut states = PooledStateVec::new();
+        states.extend(self.inputs.iter().map(|i| i.get_state(ctx)));
+
+        let out = recursive_process::<I>(&states, self.extra);
+        self.output.set_state(ctx, out);
     }
 
     fn size(&self, circ: &Arc<Circuit>) -> Vec2u {
@@ -311,13 +395,16 @@ where
         let op_desc = I::OP_DESC;
         let id = ty.to_lowercase().into();
         let name = format!("{ty_upper} gate").into();
-        let description = format!("{ty_upper} gate, performing logical {ty_upper} operation.\n\
+        let description = format!(
+            "{ty_upper} gate, performing logical {ty_upper} operation.\n\
                                    {op_desc}\n\
                                    \n\
                                    Can be configured to have multiple inputs.\n\
                                    Inputs with None state are ignored.\n\
                                    Output is Error when any input is Error.\
-                                  ").into();
+                                  "
+        )
+        .into();
         Self {
             _phantom: PhantomData,
             id,
@@ -578,12 +665,15 @@ impl Gate2497 {
         }
     }
 
-    fn state_to_f32(state: WireState) -> f32 {
+    fn state_to_f32(state: &WireState) -> f32 {
         match state {
             WireState::None => -1.0,
             WireState::False => 0.0,
             WireState::True => 1.0,
             WireState::Error => 2.0,
+            WireState::Bundle(bundle) => {
+                bundle.iter().map(Self::state_to_f32).sum()
+            }
         }
     }
 
@@ -620,8 +710,8 @@ impl CircuitImpl for Gate2497 {
     }
 
     fn update_signals(&self, ctx: &CircuitStateContext, _: Option<usize>) {
-        let a = Self::state_to_f32(self.in_a.get_state(ctx));
-        let b = Self::state_to_f32(self.in_b.get_state(ctx));
+        let a = Self::state_to_f32(&self.in_a.get_state(ctx));
+        let b = Self::state_to_f32(&self.in_b.get_state(ctx));
         let out = if self.switch { a + b } else { a - b };
         self.out.set_state(ctx, Self::f32_to_state(out));
     }
@@ -653,7 +743,7 @@ impl CircuitPreviewImpl for Gate2497Preview {
     fn draw_preview(&self, props: &CircuitPropertyStore, ctx: &PaintContext, in_world: bool) {
         let dir = props.read_clone("dir").unwrap_or(Direction4::Right);
         let angle = dir.inverted_ud().angle_to_right();
-        Gate2497::draw(angle, [WireState::False; 2], in_world, ctx);
+        Gate2497::draw(angle, [WireState::False, WireState::False], in_world, ctx);
     }
 
     fn create_impl(&self) -> Box<dyn CircuitImpl> {

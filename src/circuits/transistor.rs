@@ -55,7 +55,7 @@ impl Transistor {
         }
     }
 
-    pub fn is_open_state(ty: TransistorType, base: WireState) -> bool {
+    pub fn is_open_state(ty: TransistorType, base: &WireState) -> bool {
         matches!(
             (ty, base),
             (TransistorType::NPN, WireState::True) | (TransistorType::PNP, WireState::False)
@@ -73,9 +73,17 @@ impl CircuitImpl for Transistor {
             .unwrap_or_else(|| self.emitter.get_state(state_ctx));
 
         let angle = self.dir.inverted_ud().angle_to_left();
+        let open = Self::is_open_state(self.ty, &base);
 
         crate::graphics::transistor(
-            self.ty, angle, self.flip, collector, base, emitter, paint_ctx,
+            self.ty,
+            angle,
+            self.flip,
+            collector.color(),
+            base.color(),
+            emitter.color(),
+            open,
+            paint_ctx,
         );
     }
 
@@ -101,7 +109,7 @@ impl CircuitImpl for Transistor {
             return;
         }
 
-        let open = Self::is_open_state(self.ty, base);
+        let open = Self::is_open_state(self.ty, &base);
 
         let output = match open {
             true => self.collector.get_state(state_ctx),
@@ -155,7 +163,8 @@ impl CircuitPreviewImpl for TransistorPreview {
          NPN-type transistor opens when Base is high or True.\n\
          Always closed when Base is not connected or in None state,\n\
          produces Error on the Emitter when Base receives Error.\
-        ".into()
+        "
+        .into()
     }
 
     fn draw_preview(&self, props: &CircuitPropertyStore, ctx: &PaintContext, _: bool) {
@@ -170,9 +179,10 @@ impl CircuitPreviewImpl for TransistorPreview {
             ty,
             angle,
             flip,
-            WireState::False,
-            WireState::False,
-            WireState::False,
+            WireState::False.color(),
+            WireState::False.color(),
+            WireState::False.color(),
+            Transistor::is_open_state(ty, &WireState::False),
             ctx,
         );
     }

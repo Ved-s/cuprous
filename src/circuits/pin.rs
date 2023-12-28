@@ -50,7 +50,7 @@ impl PinType {
     }
 }
 
-#[derive(Default, Debug, Serialize, Deserialize, Clone, Copy)]
+#[derive(Default, Debug, Serialize, Deserialize, Clone)]
 struct PinState {
     state: SafeWireState,
 }
@@ -82,7 +82,7 @@ struct PinModel {
     id: Option<Arc<str>>,
 
     #[serde(default)]
-    design: Option<PartialPinDesignInfo>
+    design: Option<PartialPinDesignInfo>,
 }
 
 pub struct Pin {
@@ -94,7 +94,7 @@ pub struct Pin {
     id_ty: PinIdType,
     pin: CircuitPinInfo,
     ctl: Option<CircuitPinInfo>,
-    design: Option<PartialPinDesignInfo>
+    design: Option<PartialPinDesignInfo>,
 }
 
 impl Pin {
@@ -203,7 +203,7 @@ impl Pin {
 
 impl CircuitImpl for Pin {
     fn draw(&self, state_ctx: &CircuitStateContext, paint_ctx: &PaintContext) {
-        let outside_state = state_ctx
+        let outside_color = state_ctx
             .global_state
             .get_parent()
             .as_ref()
@@ -219,39 +219,40 @@ impl CircuitImpl for Pin {
                     .pins
                     .get(outer)?
                     .get_state(&outer_state);
-                Some(state)
+                Some(state.color())
             })
-            .map(|s| s.unwrap_or(WireState::None));
+            .map(|s| s.unwrap_or(WireState::None.color()));
 
-        let wire_state = self.pin.get_wire_state(state_ctx);
+        let wire_color = self
+            .pin
+            .get_wire_state(state_ctx)
+            .map(|s| WireState::color(&s));
 
-        let outside_state = outside_state
+        let outside_color = outside_color
             .or_else(|| {
                 if self.is_pico(state_ctx) != Some(false) {
                     Some(
                         state_ctx
-                            .clone_circuit_internal_state::<PinState>()
-                            .unwrap_or_default()
-                            .state
-                            .0,
+                            .read_circuit_internal_state(|s: &PinState| s.state.0.color())
+                            .unwrap_or(WireState::None.color()),
                     )
                 } else {
                     None
                 }
             })
-            .or(wire_state)
+            .or(wire_color)
             .unwrap_or_default();
 
-        let state = wire_state.unwrap_or_else(|| self.pin.get_state(state_ctx));
+        let color = wire_color.unwrap_or_else(|| self.pin.get_state(state_ctx).color());
         let cpos = self
             .ctl
             .as_ref()
-            .map(|c| (self.cpos, c.get_state(state_ctx)));
+            .map(|c| (self.cpos, c.get_state(state_ctx).color()));
         let is_pico = self.is_pico(state_ctx);
         let angle = self.dir.inverted_ud().angle_to_right();
 
         let center =
-            crate::graphics::inside_pin(cpos, outside_state, state, is_pico, angle, paint_ctx);
+            crate::graphics::inside_pin(cpos, outside_color, color, is_pico, angle, paint_ctx);
 
         if state_ctx.global_state.get_parent().is_none() {
             let size = vec2(paint_ctx.screen.scale, paint_ctx.screen.scale);
@@ -275,10 +276,9 @@ impl CircuitImpl for Pin {
                     // shift: None -> False -> True -> None
                     // control: None | Error -> False -> True -> Error
 
-                    s.state.0 = match (s.state.0, shift, control) {
+                    s.state.0 = match (&s.state.0, shift, control) {
                         (WireState::True, false, false) => WireState::False,
                         (WireState::False, false, false) => WireState::True,
-                        (_, false, false) => WireState::False,
 
                         (WireState::None, _, _) => WireState::False,
                         (WireState::False, _, _) => WireState::True,
@@ -289,8 +289,12 @@ impl CircuitImpl for Pin {
 
                         (WireState::True, true, false) => WireState::None,
                         (WireState::Error, true, false) => WireState::None,
+
+                        (_, false, false) => WireState::False,
+                        (_, false, true) => WireState::Error,
+                        (_, true, _) => WireState::None,
                     };
-                    s.state.0
+                    s.state.0.clone()
                 });
 
                 if self.is_pico(state_ctx) != Some(false) {
@@ -418,8 +422,7 @@ impl CircuitImpl for Pin {
             Some(p) => p,
             None => {
                 ctx.read_circuit_internal_state(|s: &PinState| {
-                    let owned_state = std::mem::replace(state, WireState::None);
-                    *state = owned_state.combine(&s.state.0);
+                    state.merge(&s.state.0);
                 });
                 return;
             }
@@ -616,17 +619,19 @@ impl CircuitImpl for Pin {
     }
 
     fn save(&self, circ: &Arc<Circuit>, copy: bool) -> serde_intermediate::Intermediate {
-        let design_data = copy.then(|| {
-            let designs = circ.board.designs.read();
-            let design = designs.current();
-            let pin_data = design.pins.iter().find(|p| p.id.deref() == self.id.deref());
-            let pin_data = unwrap_option_or_return!(pin_data, None);
-            Some(PartialPinDesignInfo {
-                pos: pin_data.pos,
-                display_dir: pin_data.display_dir,
-                display_name: pin_data.display_name.clone(),
+        let design_data = copy
+            .then(|| {
+                let designs = circ.board.designs.read();
+                let design = designs.current();
+                let pin_data = design.pins.iter().find(|p| p.id.deref() == self.id.deref());
+                let pin_data = unwrap_option_or_return!(pin_data, None);
+                Some(PartialPinDesignInfo {
+                    pos: pin_data.pos,
+                    display_dir: pin_data.display_dir,
+                    display_name: pin_data.display_name.clone(),
+                })
             })
-        }).flatten();
+            .flatten();
         let m = PinModel {
             id: Some(self.id.clone()),
             design: design_data,
@@ -687,13 +692,13 @@ impl CircuitPreviewImpl for Preview {
         let ty = props.read_clone("ty").unwrap_or(PinType::Pico);
         let cpos = props.read_clone("cpos").unwrap_or(ControlPinPosition::Left);
 
-        let cpos = ty.is_controlled().then_some((cpos, WireState::False));
+        let cpos = ty.is_controlled().then_some((cpos, WireState::False.color()));
         let angle = dir.inverted_ud().angle_to_right();
 
         crate::graphics::inside_pin(
             cpos,
-            WireState::False,
-            WireState::False,
+            WireState::False.color(),
+            WireState::False.color(),
             ty.is_bidirectional().not().then_some(!ty.is_cipo()),
             angle,
             ctx,

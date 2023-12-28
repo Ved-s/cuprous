@@ -29,6 +29,7 @@ use serde_intermediate::Intermediate;
 use wasm_bindgen::{prelude::*, JsValue};
 
 mod vector;
+mod pool;
 
 use ui::editor::TileDrawBounds;
 use vector::{Vec2f, Vec2i, Vec2u};

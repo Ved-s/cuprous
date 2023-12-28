@@ -10,9 +10,9 @@ use crate::{
         CircuitPreviewImpl, CircuitPropertyStore, CircuitStateContext, InternalPinDirection,
     },
     describe_directional_circuit,
-    state::WireState,
+    state::{WireState, SingleWireState},
     vector::{Vec2f, Vec2u},
-    Direction4, DynStaticStr, PaintContext, error::ErrorList,
+    Direction4, DynStaticStr, PaintContext, error::ErrorList, pool::PooledStateVec,
 };
 
 struct Not {
@@ -96,14 +96,30 @@ impl CircuitImpl for Not {
     }
 
     fn update_signals(&self, state_ctx: &CircuitStateContext, _: Option<usize>) {
+
+        fn process_single(input: SingleWireState) -> SingleWireState {
+            match input {
+                SingleWireState::None => SingleWireState::None,
+                SingleWireState::True => SingleWireState::False,
+                SingleWireState::False => SingleWireState::True,
+                SingleWireState::Error => SingleWireState::Error,
+            }
+        }
+
+        fn process_one(input: &WireState) -> WireState {
+            match input.as_single() {
+                Ok(single) => process_single(single).into(),
+                Err(bundle) => {
+                    let mut out = PooledStateVec::new();
+                    out.extend(bundle.iter().map(process_one));
+                    WireState::Bundle(Arc::new(out))
+                }
+            }
+        }
+
         let state = self.input.get_state(state_ctx);
-        let state = match state {
-            WireState::None => WireState::None,
-            WireState::True => WireState::False,
-            WireState::False => WireState::True,
-            WireState::Error => WireState::Error,
-        };
-        self.output.set_state(state_ctx, state);
+        let out = process_one(&state);
+        self.output.set_state(state_ctx, out);
     }
 
     fn size(&self, circ: &Arc<Circuit>) -> Vec2u {
