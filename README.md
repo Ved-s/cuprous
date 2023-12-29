@@ -35,6 +35,12 @@ Logisim-inspired logic circuits simulator
 
 ![](progress_preview.png)
 
+## Auto builds
+
+Automatic builds are available [here for Linux](https://nightly.link/Ved-s/cuprous/workflows/rust-build-deploy/master/build-x86_64-unknown-linux-gnu.zip) and [here for Windows](https://nightly.link/Ved-s/cuprous/workflows/rust-build-deploy/master/build-x86_64-pc-windows-gnu.zip) for x86_64.
+
+These links depend on [nightly.link](https://nightly.link) and will not work if the site is down or 90 days have passed from last build.
+
 ### Web version
 
 Web version is available [here](https://ved-s.github.io/cuprous).
