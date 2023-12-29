@@ -1,4 +1,4 @@
-name: Rust WASM Page
+name: Rust Build & Deploy
 
 on:
   push:
@@ -11,12 +11,36 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
 
+  build-native:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        target: [ x86_64-unknown-linux-gnu, x86_64-pc-windows-gnu ]
+
+    steps: 
+      - uses: actions/checkout@v3
+
+      - name: Install Rust
+        run: rustup default stable && rustup target add ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --target ${{ matrix.target }} --release
+
+      - uses: actions/upload-artifact@v4.0.0
+        with:
+          name: build-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/cuprous
+
+  build-web:
     runs-on: ubuntu-latest
 
     steps:
     - uses: actions/checkout@v3
+
+    - name: Install Rust
+      run: rustup default stable && rustup target add wasm32-unknown-unknown
 
     - name: Build
       run: cargo build --target wasm32-unknown-unknown -F wasm --release
@@ -35,7 +59,7 @@ jobs:
   deploy:
 
     needs:
-      build
+      build-web
 
     permissions:
       pages: write

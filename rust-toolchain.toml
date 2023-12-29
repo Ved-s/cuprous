@@ -1,4 +1,0 @@
-[toolchain]
-channel = "stable"
-components = [ "cargo", "rustc", "rust-std" ]
-targets = [ "wasm32-unknown-unknown" ]
