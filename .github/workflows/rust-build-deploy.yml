@@ -28,6 +28,9 @@ jobs:
       - if: ${{ contains(matrix.target, 'linux') }}
         run: sudo apt install libatk1.0-dev libgtk-3-dev -y
 
+      - if: ${{ contains(matrix.target, 'windows') }}
+        run: sudo apt install gcc-mingw-w64-x86-64 -y
+
       - name: Build
         run: cargo build --target ${{ matrix.target }} --release
 
