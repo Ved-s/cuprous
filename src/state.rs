@@ -2,18 +2,23 @@ use std::{
     any::{Any, TypeId},
     borrow::BorrowMut,
     collections::BTreeMap,
+    iter::Peekable,
     ops::{Deref, IndexMut},
+    str::Chars,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
     },
-    time::Duration, str::Chars, iter::Peekable,
+    time::Duration,
 };
 
 #[cfg(not(feature = "single_thread"))]
 use std::thread::{self, JoinHandle};
 
-use crate::{containers::Queue, error::ErrorList, time::Instant, unwrap_option_or_continue, pool::PooledStateVec};
+use crate::{
+    containers::Queue, error::ErrorList, pool::PooledStateVec, time::Instant,
+    unwrap_option_or_continue,
+};
 use eframe::epaint::Color32;
 use object_pool::Pool;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -38,7 +43,7 @@ pub enum WireState {
     False,
     Error,
 
-    Bundle(Arc<PooledStateVec>)
+    Bundle(Arc<PooledStateVec>),
 }
 
 #[derive(Default, Clone, Copy, Eq, PartialEq, Debug)]
@@ -60,7 +65,6 @@ impl From<bool> for SingleWireState {
 }
 
 impl WireState {
-
     pub const BUNDLE_COLOR: Color32 = Color32::BLACK;
 
     pub fn set(&mut self, index: usize, value: WireState) {
@@ -72,21 +76,21 @@ impl WireState {
                 }
                 *bundle.index_mut(index) = value;
             }
-            this => *this = value
+            this => *this = value,
         }
     }
 
     pub fn get(&self, index: usize) -> WireState {
         match self {
             WireState::Bundle(bundle) => bundle.get(index).cloned().unwrap_or_default(),
-            _ => self.clone()
+            _ => self.clone(),
         }
     }
 
     pub fn bundle_len(&self) -> Option<usize> {
         match self {
             WireState::Bundle(bundle) => Some(bundle.len()),
-            _ => None
+            _ => None,
         }
     }
 
@@ -122,7 +126,7 @@ impl WireState {
                     state.str_serialize(str);
                 }
                 str.push(']');
-            },
+            }
         }
     }
 
@@ -152,23 +156,25 @@ impl WireState {
     }
 
     pub fn merge(&mut self, state: &WireState) {
-        self.combine(state, &|a, b| {
-            match (a, b) {
-                (SingleWireState::None, other) => other,
-                (other, SingleWireState::None) => other,
-        
-                (SingleWireState::Error, _) | (_, SingleWireState::Error) => SingleWireState::Error,
-        
-                (SingleWireState::True, SingleWireState::False) => SingleWireState::Error,
-                (SingleWireState::False, SingleWireState::True) => SingleWireState::Error,
-        
-                (SingleWireState::True, SingleWireState::True) => SingleWireState::True,
-                (SingleWireState::False, SingleWireState::False) => SingleWireState::False,
-            }
+        self.combine(state, &|a, b| match (a, b) {
+            (SingleWireState::None, other) => other,
+            (other, SingleWireState::None) => other,
+
+            (SingleWireState::Error, _) | (_, SingleWireState::Error) => SingleWireState::Error,
+
+            (SingleWireState::True, SingleWireState::False) => SingleWireState::Error,
+            (SingleWireState::False, SingleWireState::True) => SingleWireState::Error,
+
+            (SingleWireState::True, SingleWireState::True) => SingleWireState::True,
+            (SingleWireState::False, SingleWireState::False) => SingleWireState::False,
         })
     }
 
-    pub fn combine(&mut self, state: &WireState, combiner: &impl Fn(SingleWireState, SingleWireState) -> SingleWireState) {
+    pub fn combine(
+        &mut self,
+        state: &WireState,
+        combiner: &impl Fn(SingleWireState, SingleWireState) -> SingleWireState,
+    ) {
         let self_single = self.as_single_mut();
         let other_single = state.as_single();
 
@@ -182,14 +188,14 @@ impl WireState {
                     ws
                 }));
                 Some(WireState::Bundle(Arc::new(bundle)))
-            },
+            }
             (Err(a), Ok(b)) => {
                 let a = Arc::make_mut(a);
                 for a in a.iter_mut() {
                     a.combine(&b.into(), combiner);
                 }
                 None
-            },
+            }
             (Err(a), Err(b)) => {
                 let a = Arc::make_mut(a);
                 while a.len() < b.len() {
@@ -199,7 +205,7 @@ impl WireState {
                     a.combine(b, combiner);
                 }
                 None
-            },
+            }
         };
 
         if let Some(out) = out {
@@ -219,17 +225,15 @@ impl WireState {
     }
 
     pub fn combine_boolean(&mut self, state: &WireState, combiner: &impl Fn(bool, bool) -> bool) {
-        self.combine(state, &|a, b| {
-            match (a, b) {
-                (SingleWireState::None, other) | (other, SingleWireState::None) => other,
-                (SingleWireState::Error, _) | (_, SingleWireState::Error) => SingleWireState::Error,
-                
-                (SingleWireState::True, SingleWireState::False) => combiner(true, false).into(),
-                (SingleWireState::False, SingleWireState::True) => combiner(false, true).into(),
-                
-                (SingleWireState::True, SingleWireState::True) => combiner(true, true).into(),
-                (SingleWireState::False, SingleWireState::False) => combiner(false, false).into(),
-            }
+        self.combine(state, &|a, b| match (a, b) {
+            (SingleWireState::None, other) | (other, SingleWireState::None) => other,
+            (SingleWireState::Error, _) | (_, SingleWireState::Error) => SingleWireState::Error,
+
+            (SingleWireState::True, SingleWireState::False) => combiner(true, false).into(),
+            (SingleWireState::False, SingleWireState::True) => combiner(false, true).into(),
+
+            (SingleWireState::True, SingleWireState::True) => combiner(true, true).into(),
+            (SingleWireState::False, SingleWireState::False) => combiner(false, false).into(),
         })
     }
 }
@@ -254,69 +258,6 @@ impl From<SingleWireState> for WireState {
     }
 }
 
-// #[derive(Debug, PartialEq, Eq)]
-// struct WireBundle(pub Vec<WireState>);
-
-// impl WireBundle {
-//     pub fn new() -> Self {
-//         let mut vec = WIRE_BUNDLE_POOL.with(|pool| {
-//             pool.lock().pop()
-//         }).unwrap_or_default();
-//         vec.clear();
-
-//         Self(vec)
-//     }
-// }
-
-// impl Clone for WireBundle {
-//     fn clone(&self) -> Self {
-//         let mut new = Self::new();
-//         new.extend_from_slice(self);
-//         new 
-//     }
-// }
-
-// impl Serialize for WireBundle {
-//     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-//     where
-//         S: Serializer {
-//         self.0.serialize(serializer)
-//     }
-// }
-
-// impl<'de> Deserialize<'de> for WireBundle {
-//     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-//     where
-//         D: Deserializer<'de> {
-//         Ok(Self(<_>::deserialize(deserializer)?))
-//     }
-// }
-
-// impl Deref for WireBundle {
-//     type Target = Vec<WireState>;
-
-//     fn deref(&self) -> &Self::Target {
-//         &self.0
-//     }
-// }
-
-// impl DerefMut for WireBundle {
-//     fn deref_mut(&mut self) -> &mut Self::Target {
-//         &mut self.0
-//     }
-// }
-
-// impl Drop for WireBundle {
-//     fn drop(&mut self) {
-//         let mut states = std::mem::take(&mut self.0);
-//         states.clear();
-//         WIRE_BUNDLE_POOL.with(|pool| {
-//             let mut pool = pool.lock();
-//             pool.push(states);
-//         });
-//     }
-// }
-
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 
 /// Safe versoion of `WireState` that can be passed through `serde_intermediate`
@@ -328,7 +269,9 @@ impl<'de> Deserialize<'de> for SafeWireState {
         D: Deserializer<'de>,
     {
         let str = <&str>::deserialize(deserializer)?;
-        Ok(Self(WireState::str_deserialize(&mut str.chars().peekable()).unwrap_or_default()))
+        Ok(Self(
+            WireState::str_deserialize(&mut str.chars().peekable()).unwrap_or_default(),
+        ))
     }
 }
 
@@ -448,7 +391,7 @@ impl StateCollection {
         let mut states = self.states.write();
         let id = states.first_free_pos_filtered(|i| i > 0); // id 0 reserved
         let state = State::new(board, id);
-        states.set(state.clone(), id);
+        states.set(id, state.clone());
         state
     }
 
@@ -736,7 +679,11 @@ impl State {
         let mut errors = errors.enter_context(|| format!("loading state {}", id));
         let now = Instant::now();
 
-        let wires = data.wires.iter().map(|w| w.clone().map(RwLock::new)).collect();
+        let wires = data
+            .wires
+            .iter()
+            .map(|w| w.clone().map(RwLock::new))
+            .collect();
 
         let updates = data
             .updates
@@ -777,7 +724,7 @@ impl State {
             let mut errors = errors.enter_context(|| format!("loading state for circuit {i}"));
             let ctx = CircuitStateContext::new(state.clone(), circuit.clone());
             let loaded = RwLock::new(CircuitState::load(c, &ctx, &mut errors));
-            state_circuits.set(loaded, i);
+            state_circuits.set(i, loaded);
         }
         drop((board_circuits, state_circuits));
 
@@ -1099,9 +1046,9 @@ impl State {
 
         let pin_wire = pin.connected_wire();
 
-        let new_state = pin_wire.and_then(|w| {
-            self.wires.read().get(w).map(|w| w.read().clone())
-        }).unwrap_or_default();
+        let new_state = pin_wire
+            .and_then(|w| self.wires.read().get(w).map(|w| w.read().clone()))
+            .unwrap_or_default();
 
         if !custom {
             let state = pin_info.get_state(&ctx);
@@ -1165,9 +1112,10 @@ impl State {
         let clone = self.clone();
         let sync = Arc::new((parking_lot::Condvar::new(), parking_lot::Mutex::new(false)));
         let sync_clone = sync.clone();
-        let handle = thread::spawn(move || {
+        let name = format!("State runner {} ({})", self.id, self.board.name.read().get_arc());
+        let handle = thread::Builder::new().name(name).spawn(move || {
             StateThread::new(clone, sync_clone).run();
-        });
+        }).expect("state thread spawn failed");
         let handle = StateThreadHandle { handle, sync };
         *self.thread.write() = Some(handle);
     }

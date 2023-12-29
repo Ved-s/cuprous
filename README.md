@@ -31,7 +31,6 @@ Logisim-inspired logic circuits simulator
 - Remove wire with Wire tool
 - Warning to replace circuits that don't match latest pin layout
 - Maybe show circuit pin labels in paste
-- Store control design data when copying circuits
 - Update SVGs
 
 ![](progress_preview.png)

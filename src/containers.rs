@@ -137,7 +137,7 @@ impl<T> FixedVec<T> {
 
     pub fn get_or_create_mut(&mut self, pos: usize, creator: impl FnOnce() -> T) -> &mut T {
         if pos >= self.inner.len() {
-            return self.set(creator(), pos).value_ref;
+            return self.set(pos, creator()).value_ref;
         }
         self.update_first_free_set(pos);
 
@@ -186,30 +186,30 @@ impl<T> FixedVec<T> {
         self.inner.get(pos).is_some_and(|v| v.is_some())
     }
 
-    pub fn set(&mut self, value: T, into: usize) -> VecSetResult<'_, T> {
-        if into >= self.inner.len() {
-            if self.inner.len() != into && self.first_free.is_none() {
+    pub fn set(&mut self, pos: usize, value: T) -> VecSetResult<'_, T> {
+        if pos >= self.inner.len() {
+            if self.inner.len() != pos && self.first_free.is_none() {
                 self.first_free = Some(self.inner.len())
             }
-            self.inner.reserve(into + 1 - self.inner.len());
-            while self.inner.len() < into {
+            self.inner.reserve(pos + 1 - self.inner.len());
+            while self.inner.len() < pos {
                 self.inner.push(None)
             }
             self.inner.push(Some(value));
             return VecSetResult {
-                value_ref: self.inner[into].as_mut().unwrap(),
+                value_ref: self.inner[pos].as_mut().unwrap(),
                 prev: None,
             };
         };
 
-        self.update_first_free_set(into);
+        self.update_first_free_set(pos);
 
-        let prev = self.inner.get_mut(into).unwrap().replace(value);
+        let prev = self.inner.get_mut(pos).unwrap().replace(value);
 
         self.test_free_correct();
 
         return VecSetResult {
-            value_ref: self.inner[into].as_mut().unwrap(),
+            value_ref: self.inner[pos].as_mut().unwrap(),
             prev,
         };
     }
@@ -303,7 +303,7 @@ impl<T> FixedVec<T> {
         if let Some(value) = lock.get(pos) {
             reader(value)
         } else {
-            let r = lock.set(creator(), pos).value_ref;
+            let r = lock.set(pos, creator()).value_ref;
             reader(r)
         }
     }
@@ -881,7 +881,7 @@ impl<T, S: BuildHasher> RandomQueue<T, S> {
 
     pub fn enqueue(&mut self, value: T) {
         let pos = self.vec.first_free_pos();
-        self.vec.set(value, pos);
+        self.vec.set(pos, value);
         self.hasher.write_usize(pos);
     }
 

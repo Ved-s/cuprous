@@ -14,13 +14,13 @@ use crate::{
     app::SimulationContext,
     board::CircuitBoard,
     error::ErrorList,
-    io::CircuitCopyData,
+    io::{CircuitCopyData, CircuitDesignControlCopy},
     state::{CircuitState, InternalCircuitState, State, StateCollection, VisitedList, WireState},
     string::StringFormatterState,
     time::Instant,
     unwrap_option_or_continue,
     vector::{Vec2i, Vec2u},
-    ArcString, Direction4, DynStaticStr, OptionalInt, PaintContext, RwLock,
+    ArcString, Direction4, DynStaticStr, OptionalInt, PaintContext, RwLock, containers::FixedVec,
 };
 
 use self::props::CircuitPropertyStore;
@@ -226,7 +226,7 @@ impl CircuitPinInfo {
         }
 
         state_ctx.write_circuit_state(|cs| {
-            cs.pins.set(value, pin.id.id);
+            cs.pins.set(pin.id.id, value);
         });
         if let Some(wire) = pin.wire {
             state_ctx.global_state.update_wire(wire, false)
@@ -248,7 +248,7 @@ impl CircuitPinInfo {
                     return;
                 }
 
-                cs.pin_dirs.set(dir, pin_id.id);
+                cs.pin_dirs.set(pin_id.id, dir);
             });
         }
 
@@ -411,6 +411,19 @@ impl Circuit {
             })
             .unwrap_or_default();
 
+        let design = self.board.designs.read().current().clone();
+        let mut controls = FixedVec::new();
+        for (&(circuit, control), design) in design.controls.iter() {
+            if circuit != self.id {
+                continue;
+            }
+
+            controls.set(control, CircuitDesignControlCopy {
+                rect: design.rect,
+                display_name: design.display_name.get_str().to_owned(),
+            });
+        }
+
         crate::io::CircuitCopyData {
             ty: self.ty.clone(),
             pos,
@@ -426,6 +439,7 @@ impl Circuit {
                 })
                 .flatten(),
             props: self.props.save(),
+            design_controls: controls.inner
         }
     }
 

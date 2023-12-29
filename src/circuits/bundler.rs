@@ -318,7 +318,7 @@ impl Bundler {
                 CacheNameType::Internal => format!("io_{index}"),
             };
             let arc = value.into();
-            pool.set(Arc::downgrade(&arc), index);
+            pool.set(index, Arc::downgrade(&arc));
             arc
         })
     }

@@ -1,5 +1,6 @@
 use std::{time::Duration, collections::HashMap};
 
+use emath::Rect;
 use serde::{Deserialize, Serialize};
 use serde_intermediate::Intermediate;
 
@@ -125,6 +126,12 @@ pub struct SaveStateData {
     pub boards: Vec<CircuitBoardData>
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CircuitDesignControlCopy {
+    pub rect: Rect,
+    pub display_name: String,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct CircuitCopyData {
     pub ty: DynStaticStr,
@@ -138,7 +145,10 @@ pub struct CircuitCopyData {
     #[serde(skip_serializing_if = "is_unit")]
     #[serde(default)]
     pub internal: Intermediate,
-    pub update: Option<Duration>
+    pub update: Option<Duration>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
+    pub design_controls: Vec<Option<CircuitDesignControlCopy>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

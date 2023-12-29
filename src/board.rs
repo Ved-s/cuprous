@@ -124,7 +124,7 @@ impl CircuitBoard {
         );
 
         drop(circuits);
-        self.circuits.write().set(circ, id);
+        self.circuits.write().set(id, circ);
         id
     }
 
@@ -135,7 +135,7 @@ impl CircuitBoard {
             id,
             points: HashMap::default(),
         };
-        wires.set(wire, id);
+        wires.set(id, wire);
         id
     }
 
@@ -218,7 +218,7 @@ impl CircuitBoard {
             id: new_wire_id,
             points: new_points,
         };
-        wires.set(new_wire, new_wire_id);
+        wires.set(new_wire_id, new_wire);
 
         if update_states {
             self.states.update_wire(id, true);
@@ -326,7 +326,7 @@ impl CircuitBoard {
                     }
                 }
             }
-            circuits.set(circ, i);
+            circuits.set(i, circ);
         }
 
         let mut wires = board.wires.write();
@@ -334,7 +334,7 @@ impl CircuitBoard {
         for (i, w) in data.wires.iter().enumerate() {
             let w = unwrap_option_or_continue!(w);
             let wire = Wire::load(w, i, &circuits, &mut errors);
-            wires.set(wire, i);
+            wires.set(i, wire);
         }
 
         drop((wires, circuits));
@@ -342,7 +342,7 @@ impl CircuitBoard {
         let mut states = board.states.states.write();
         for (i, s) in data.states.iter().enumerate() {
             let s = unwrap_option_or_continue!(s);
-            states.set(State::load(s, board.clone(), i, &mut errors), i);
+            states.set(i, State::load(s, board.clone(), i, &mut errors));
         }
         drop(states);
 
@@ -2322,7 +2322,7 @@ impl CircuitDesignStorage {
         let id = current.id;
         let design = Arc::new(current);
         let mut designs = FixedVec::new();
-        designs.set(design, id);
+        designs.set(id, design);
 
         Self {
             current: id,
@@ -2362,7 +2362,7 @@ impl CircuitDesignStorage {
                 .deref()
                 .clone();
             let id = self.designs.first_free_pos();
-            self.designs.set(Arc::new(clone.with_id(id)), id);
+            self.designs.set(id, Arc::new(clone.with_id(id)));
             self.current = id;
         }
 

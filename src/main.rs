@@ -13,7 +13,7 @@ use std::{
 };
 
 use app::SimulationContext;
-use board::ActiveCircuitBoard;
+use board::{ActiveCircuitBoard, CircuitDesignControl};
 use cache::GLOBAL_STR_CACHE;
 use eframe::{
     egui::{self, Sense, Ui},
@@ -28,8 +28,8 @@ use serde_intermediate::Intermediate;
 #[cfg(feature = "wasm")]
 use wasm_bindgen::{prelude::*, JsValue};
 
-mod vector;
 mod pool;
+mod vector;
 
 use ui::editor::TileDrawBounds;
 use vector::{Vec2f, Vec2i, Vec2u};
@@ -998,9 +998,24 @@ impl PastePreview {
                     }
                 },
             );
-            if let (Some(id), Some(dur)) = (id, circuit_data.update) {
-                for state in board.board.states.states.read().iter() {
-                    state.set_circuit_update_interval(id, dur)
+            if let Some(id) = id {
+                if !circuit_data.design_controls.is_empty() {
+                    let mut designs = board.board.designs.write();
+                    let design = designs.current_mut();
+
+                    for (i, control) in circuit_data.design_controls.iter().enumerate() {
+                        let control = unwrap_option_or_continue!(control);
+                        design.controls.insert((id, i), CircuitDesignControl {
+                            rect: control.rect,
+                            display_name: control.display_name.as_str().into(),
+                        });
+                    }
+                }
+
+                if let Some(dur) = circuit_data.update {
+                    for state in board.board.states.states.read().iter() {
+                        state.set_circuit_update_interval(id, dur)
+                    }
                 }
             }
         }

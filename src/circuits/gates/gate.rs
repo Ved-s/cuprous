@@ -154,7 +154,7 @@ where
                 }
 
                 let name: Arc<str> = format!("in_{i}").into();
-                names.set(Arc::downgrade(&name), i);
+                names.set(i, Arc::downgrade(&name));
                 name
             });
 
@@ -167,7 +167,7 @@ where
                 }
 
                 let name: Arc<str> = format!("In {i}").into();
-                names.set(Arc::downgrade(&name), i);
+                names.set(i, Arc::downgrade(&name));
                 name
             });
 
