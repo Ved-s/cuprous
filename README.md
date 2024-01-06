@@ -32,6 +32,8 @@ Logisim-inspired logic circuits simulator
 - Warning to replace circuits that don't match latest pin layout
 - Maybe show circuit pin labels in paste
 - Update SVGs
+- Properly reset wires and circuit before placing or after removing
+- Option to floor led position before rendering it
 
 ![](progress_preview.png)
 

@@ -16,7 +16,7 @@ use app::SimulationContext;
 use board::{ActiveCircuitBoard, CircuitDesignControl};
 use cache::GLOBAL_STR_CACHE;
 use eframe::{
-    egui::{self, Sense, Ui},
+    egui::{self, Sense, Ui, ViewportBuilder},
     epaint::{Color32, Rounding},
     Theme,
 };
@@ -88,10 +88,12 @@ fn main() {
     #[cfg(not(feature = "wasm"))]
     {
         let options = eframe::NativeOptions {
-            app_id: Some("cuprous".into()),
             follow_system_theme: false,
-            drag_and_drop_support: true,
             default_theme: Theme::Dark,
+            viewport: ViewportBuilder::default()
+                .with_app_id("cuprous")
+                .with_drag_and_drop(true),
+                
             ..Default::default()
         };
 

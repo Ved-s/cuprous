@@ -88,7 +88,7 @@ impl eframe::App for App {
         }
 
         let dropped_file = ctx.input(|input| {
-            input.raw.dropped_files.get(0).and_then(|f| {
+            input.raw.dropped_files.first().and_then(|f| {
                 let text = f
                     .path
                     .as_ref()

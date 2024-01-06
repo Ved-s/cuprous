@@ -268,7 +268,7 @@ impl<'de> Deserialize<'de> for SafeWireState {
     where
         D: Deserializer<'de>,
     {
-        let str = <&str>::deserialize(deserializer)?;
+        let str = String::deserialize(deserializer)?;
         Ok(Self(
             WireState::str_deserialize(&mut str.chars().peekable()).unwrap_or_default(),
         ))

@@ -1,3 +1,4 @@
+
 import init, { web_main, set_state_input } from "./wasm/cuprous.js"
 
 window.cuprous = {
