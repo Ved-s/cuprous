@@ -10,7 +10,7 @@ use eframe::{
 use emath::{pos2, vec2, Align2, Pos2, Rangef, Rect};
 
 use crate::{
-    app::SimulationContext,
+    app::{SimulationContext, Style},
     board::{
         ActiveCircuitBoard, BoardDesignProvider, CircuitBoard, SelectedBoardObject, SelectedItem,
         StoredCircuitBoard,
@@ -20,7 +20,6 @@ use crate::{
         CircuitPreview,
     },
     error::{ErrorList, ResultReport},
-    state::WireState,
     string::StringFormatterState,
     vector::{Vec2f, Vec2i},
     ArcString, Direction4, DynStaticStr, PaintContext, PanAndZoom, PastePreview, Screen,
@@ -118,7 +117,7 @@ impl InventoryItem<SelectedItemId> for WireInventoryItem {
     }
 
     fn draw(&self, ctx: &PaintContext) {
-        let color = WireState::False.color();
+        let color = ctx.style.wire_colors.false_color();
 
         let rect1 = Rect::from_center_size(
             ctx.rect.lerp_inside([0.2, 0.2].into()),
@@ -231,7 +230,7 @@ impl CircuitBoardEditor {
         }
     }
 
-    pub fn background_update(&mut self, ui: &mut Ui) {
+    pub fn background_update(&mut self, style: &Style, ui: &mut Ui) {
         let rect = ui.max_rect();
         self.pan_zoom.update(ui, rect, self.selected_id.is_none());
 
@@ -359,11 +358,12 @@ impl CircuitBoardEditor {
 
         let screen = self.pan_zoom.to_screen(rect);
         let paint = ui.painter_at(rect);
-        drawing::draw_dynamic_grid(&screen, 16.0, 16.into(), &paint);
-        drawing::draw_cross(&screen, rect, &paint);
+        drawing::draw_dynamic_grid(&screen, style, 16.0, 16.into(), &paint);
+        drawing::draw_cross(&screen, style, rect, &paint);
 
         let ctx = PaintContext {
             screen,
+            style,
             paint: &paint,
             rect,
             ui,
@@ -392,8 +392,8 @@ impl CircuitBoardEditor {
         }
     }
 
-    pub fn ui_update(&mut self, ui: &mut Ui) -> EditorResponse {
-        let components_response = self.components_ui(ui);
+    pub fn ui_update(&mut self, style: &Style, ui: &mut Ui) -> EditorResponse {
+        let components_response = self.components_ui(style, ui);
 
         if let Some(SelectedItem::Circuit(p)) = self.selected_item() {
             let props = [((), &p.props).into()];
@@ -484,7 +484,7 @@ impl CircuitBoardEditor {
                 self.board.selection.borrow_mut().clear();
             }
 
-            Inventory::new(&mut self.selected_id, &self.inventory).ui(&mut ui, |id| match id {
+            Inventory::new(&mut self.selected_id, &self.inventory).ui(&mut ui, style, |id| match id {
                 SelectedItemId::Wires => Some("Wires".into()),
                 SelectedItemId::Selection => Some("Selection".into()),
                 SelectedItemId::Paste => Some("Paste".into()),
@@ -737,8 +737,8 @@ impl CircuitBoardEditor {
             .flatten()
     }
 
-    fn components_ui(&mut self, ui: &mut Ui) -> ComponentsUiResponse {
-        fn builtin_ui(this: &mut CircuitBoardEditor, ui: &mut Ui) {
+    fn components_ui(&mut self, style: &Style, ui: &mut Ui) -> ComponentsUiResponse {
+        fn builtin_ui(this: &mut CircuitBoardEditor, style: &Style, ui: &mut Ui) {
             let font = TextStyle::Monospace.resolve(ui.style());
             for name in COMPONENT_BUILTIN_ORDER {
                 if let Some(preview) = this.sim.previews.get(&DynStaticStr::Static(name)) {
@@ -750,7 +750,7 @@ impl CircuitBoardEditor {
                             preview.describe().size.convert(|v| v as f32).into(),
                         );
 
-                        let paint_ctx = PaintContext::new_on_ui(ui, rect, scale);
+                        let paint_ctx = PaintContext::new_on_ui(ui, style, rect, scale);
                         preview.draw(&paint_ctx, false);
 
                         let selected = match &this.selected_id {
@@ -921,12 +921,12 @@ impl CircuitBoardEditor {
             designer_request
         }
 
-        fn inner_ui(this: &mut CircuitBoardEditor, ui: &mut Ui) -> ComponentsUiResponse {
+        fn inner_ui(this: &mut CircuitBoardEditor, style: &Style, ui: &mut Ui) -> ComponentsUiResponse {
             ScrollArea::vertical()
                 .show(ui, |ui| {
                     CollapsingHeader::new("Built-in")
                         .default_open(true)
-                        .show(ui, |ui| builtin_ui(this, ui));
+                        .show(ui, |ui| builtin_ui(this, style, ui));
 
                     let boards_resp = CollapsingHeader::new("Circuit boards")
                         .default_open(true)
@@ -939,10 +939,10 @@ impl CircuitBoardEditor {
                 .inner
         }
 
-        let style = ui.style().clone();
+        let egui_style = ui.style().clone();
         SidePanel::new(PanelSide::Left, "components-ui")
             .frame(
-                Frame::side_top_panel(&style)
+                Frame::side_top_panel(&egui_style)
                     .rounding(Rounding {
                         ne: 5.0,
                         nw: 0.0,
@@ -951,11 +951,11 @@ impl CircuitBoardEditor {
                     })
                     .outer_margin(Margin::symmetric(0.0, 8.0))
                     .inner_margin(Margin::symmetric(5.0, 5.0))
-                    .stroke(style.visuals.window_stroke),
+                    .stroke(egui_style.visuals.window_stroke),
             )
             .show_separator_line(false)
             .default_tab(Some(0))
-            .show(ui, 1, |_| "Components".into(), |_, ui| inner_ui(self, ui))
+            .show(ui, 1, |_| "Components".into(), |_, ui| inner_ui(self, style, ui))
             .inner
             .unwrap_or_default()
     }

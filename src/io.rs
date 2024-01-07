@@ -7,7 +7,7 @@ use serde_intermediate::Intermediate;
 use crate::{
     circuits::PinDirection,
     state::{UpdateTask, WireState},
-    vector::{Vec2i, Vec2u}, DynStaticStr, Direction2, board::{Decoration, CircuitDesignPin, CircuitDesignStorage, CircuitDesign, CircuitDesignControl}, random_u128,
+    vector::{Vec2i, Vec2u}, DynStaticStr, Direction2, board::{Decoration, CircuitDesignPin, CircuitDesignStorage, CircuitDesign, CircuitDesignControl}, random_u128, wires::WireColors,
 };
 
 #[cfg(all(not(web_sys_unstable_apis), feature = "wasm"))]
@@ -36,6 +36,8 @@ pub struct WirePointData {
 pub struct WireData {
     #[serde(default = "Vec::new")]
     pub points: Vec<(Vec2i, WirePointData)>,
+    #[serde(skip_serializing_if = "WireColors::is_empty", default)]
+    pub colors: WireColors,
 }
 
 #[derive(Serialize, Deserialize, Debug)]

@@ -16,8 +16,8 @@ use std::{
 use std::thread::{self, JoinHandle};
 
 use crate::{
-    containers::Queue, error::ErrorList, pool::PooledStateVec, time::Instant,
-    unwrap_option_or_continue,
+    app::Style, containers::Queue, error::ErrorList, pool::PooledStateVec, time::Instant,
+    unwrap_option_or_continue, wires::WireColors,
 };
 use eframe::epaint::Color32;
 use object_pool::Pool;
@@ -65,8 +65,6 @@ impl From<bool> for SingleWireState {
 }
 
 impl WireState {
-    pub const BUNDLE_COLOR: Color32 = Color32::BLACK;
-
     pub fn set(&mut self, index: usize, value: WireState) {
         match self {
             WireState::Bundle(bundle) => {
@@ -213,15 +211,24 @@ impl WireState {
         }
     }
 
-    pub const fn color(&self) -> Color32 {
-        let rgb = match self {
-            Self::None => [0, 0, 200],
-            Self::True => [0, 255, 0],
-            Self::False => [0, 127, 0],
-            Self::Error => [200, 0, 0],
-            Self::Bundle(_) => return Self::BUNDLE_COLOR,
-        };
-        Color32::from_rgb(rgb[0], rgb[1], rgb[2])
+    pub fn color(&self, style: &Style, colors_override: Option<&WireColors>) -> Color32 {
+        match self {
+            Self::None => colors_override
+                .and_then(|c| c.none)
+                .unwrap_or_else(|| style.wire_colors.none_color()),
+            Self::True => colors_override
+                .and_then(|c| c.r#true)
+                .unwrap_or_else(|| style.wire_colors.true_color()),
+            Self::False => colors_override
+                .and_then(|c| c.r#false)
+                .unwrap_or_else(|| style.wire_colors.false_color()),
+            Self::Error => colors_override
+                .and_then(|c| c.error)
+                .unwrap_or_else(|| style.wire_colors.error_color()),
+            Self::Bundle(_) => colors_override
+                .and_then(|c| c.bundle)
+                .unwrap_or_else(|| style.wire_colors.bundle_color()),
+        }
     }
 
     pub fn combine_boolean(&mut self, state: &WireState, combiner: &impl Fn(bool, bool) -> bool) {
@@ -563,6 +570,11 @@ impl State {
             || RwLock::new(WireState::None),
             |lock| writer(lock.write().borrow_mut()),
         )
+    }
+
+    pub fn get_wire_color(&self, id: usize, style: &Style) -> Color32 {
+        let colors = self.board.wires.read().get(id).map(|w| w.colors);
+        self.get_wire(id).color(style, colors.as_ref())
     }
 
     pub fn read_circuit<R>(&self, id: usize, reader: impl FnOnce(&CircuitState) -> R) -> Option<R> {
@@ -1112,10 +1124,17 @@ impl State {
         let clone = self.clone();
         let sync = Arc::new((parking_lot::Condvar::new(), parking_lot::Mutex::new(false)));
         let sync_clone = sync.clone();
-        let name = format!("State runner {} ({})", self.id, self.board.name.read().get_arc());
-        let handle = thread::Builder::new().name(name).spawn(move || {
-            StateThread::new(clone, sync_clone).run();
-        }).expect("state thread spawn failed");
+        let name = format!(
+            "State runner {} ({})",
+            self.id,
+            self.board.name.read().get_arc()
+        );
+        let handle = thread::Builder::new()
+            .name(name)
+            .spawn(move || {
+                StateThread::new(clone, sync_clone).run();
+            })
+            .expect("state thread spawn failed");
         let handle = StateThreadHandle { handle, sync };
         *self.thread.write() = Some(handle);
     }

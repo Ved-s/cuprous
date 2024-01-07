@@ -6,7 +6,6 @@ use emath::{pos2, vec2, Pos2};
 use crate::{
     board::ActiveCircuitBoard,
     circuits::{pin::ControlPinPosition, transistor::TransistorType},
-    state::WireState,
     vector::Vec2f,
     PaintContext,
 };
@@ -171,7 +170,7 @@ pub fn inside_pin(
 }
 
 /// size: 1.15x1
-pub fn outside_pin(state: WireState, directional: bool, pico: Option<bool>, angle: f32, ctx: &PaintContext) {
+pub fn outside_pin(color: Color32, directional: bool, pico: Option<bool>, angle: f32, ctx: &PaintContext) {
     let size = vec2(if directional { 1.15 } else { 1.0 }, 1.0);
     let transformer = |p: Pos2| {
         ctx.rect.lerp_inside(
@@ -180,7 +179,6 @@ pub fn outside_pin(state: WireState, directional: bool, pico: Option<bool>, angl
                 .into(),
         )
     };
-    let color = state.color();
     let scaled_thickness = ActiveCircuitBoard::WIRE_THICKNESS * ctx.screen.scale;
 
     ctx.paint

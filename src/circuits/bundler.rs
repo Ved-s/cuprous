@@ -9,6 +9,7 @@ use crate::circuits::props::CircuitProperty;
 use crate::containers::FixedVec;
 use crate::pool::{PooledColor32Vec, PooledStateVec};
 use crate::vector::Vec2f;
+use crate::wires::WireColors;
 use crate::{circuits::*, create_safe_prop_enums};
 
 create_safe_prop_enums! {
@@ -547,26 +548,14 @@ impl CircuitImpl for Bundler {
     fn draw(&self, state_ctx: &CircuitStateContext, paint_ctx: &PaintContext) {
         let mut io = PooledColor32Vec::new();
         for pin in self.io.iter() {
-            io.push(
-                pin.get_wire_state(state_ctx)
-                    .unwrap_or_else(|| pin.get_state(state_ctx))
-                    .color(),
-            );
+            io.push(pin.wire_or_self_color(state_ctx, paint_ctx.style));
         }
-        let bundle = self
-            .bundle
-            .get_wire_state(state_ctx)
-            .unwrap_or_else(|| self.bundle.get_state(state_ctx))
-            .color();
+        let bundle = self.bundle.wire_or_self_color(state_ctx, paint_ctx.style);
         let remaining_pin = self.remaining.as_ref().map(|p| {
-            p.get_wire_state(state_ctx)
-                .unwrap_or_else(|| p.get_state(state_ctx))
-                .color()
+            p.wire_or_self_color(state_ctx, paint_ctx.style)
         });
         let preceding_pin = self.preceding.as_ref().map(|p| {
-            p.get_wire_state(state_ctx)
-                .unwrap_or_else(|| p.get_state(state_ctx))
-                .color()
+            p.wire_or_self_color(state_ctx, paint_ctx.style)
         });
 
         let vis = BundlerVisuals {
@@ -622,9 +611,9 @@ impl CircuitImpl for Bundler {
                 let mut out = PooledStateVec::new();
                 if let Some(preceding) = &self.preceding {
                     let pre = preceding.get_state(state_ctx);
-                    for i in 0 .. self.io_offset as usize {
+                    for i in 0..self.io_offset as usize {
                         out.push(pre.get(i));
-                    } 
+                    }
                 }
                 for io in self.io.iter() {
                     out.push(io.get_state(state_ctx));
@@ -633,11 +622,12 @@ impl CircuitImpl for Bundler {
                     let rem = remaining.get_state(state_ctx);
                     match rem {
                         WireState::Bundle(bundle) => out.extend_from_slice(&bundle),
-                        rem => out.push(rem)
+                        rem => out.push(rem),
                     }
                 }
 
-                self.bundle.set_state(state_ctx, WireState::Bundle(Arc::new(out)));
+                self.bundle
+                    .set_state(state_ctx, WireState::Bundle(Arc::new(out)));
             }
             BundlerDirecion::Output => {
                 let bundle = self.bundle.get_state(state_ctx);
@@ -645,14 +635,14 @@ impl CircuitImpl for Bundler {
                     let out = match &bundle {
                         WireState::Bundle(bundle) => {
                             let mut out = PooledStateVec::new();
-                            for i in 0 .. self.io_offset as usize {
+                            for i in 0..self.io_offset as usize {
                                 out.push(bundle.get(i).cloned().unwrap_or_default());
                             }
                             WireState::Bundle(Arc::new(out))
-                        },
+                        }
                         bundle => bundle.clone(),
                     };
-                    
+
                     pre.set_state(state_ctx, out);
                 }
                 if let Some(rem) = &self.remaining {
@@ -664,17 +654,17 @@ impl CircuitImpl for Bundler {
                                 out.extend_from_slice(&bundle[start..]);
                             }
                             WireState::Bundle(Arc::new(out))
-                        },
+                        }
                         bundle => bundle.clone(),
                     };
-                    
+
                     rem.set_state(state_ctx, out);
                 }
 
                 for (i, io) in self.io.iter().enumerate() {
                     io.set_state(state_ctx, bundle.get(i + self.io_offset as usize));
                 }
-            },
+            }
         }
     }
 
@@ -752,16 +742,17 @@ impl CircuitPreviewImpl for Preview {
     fn draw_preview(&self, props: &CircuitPropertyStore, ctx: &PaintContext, _in_world: bool) {
         let props = Bundler::read_props(props);
         let mut io = PooledColor32Vec::new();
-        io.extend((0..props.io_count).map(|_| WireState::False.color()));
+        let false_color = ctx.style.wire_colors.false_color();
+        io.extend((0..props.io_count).map(|_| false_color));
         let vis = BundlerVisuals {
             dir: props.dir,
             first_side: props.first_side,
             bundle_side: props.bundle_side,
             bundle_pos: props.bundle_pos,
             io: &io,
-            bundle: WireState::BUNDLE_COLOR,
-            remaining_pin: props.remaining_pin.then_some(WireState::BUNDLE_COLOR),
-            preceding_pin: props.preceding_pin.then_some(WireState::BUNDLE_COLOR),
+            bundle: WireColors::BUNDLE,
+            remaining_pin: props.remaining_pin.then_some(WireColors::BUNDLE),
+            preceding_pin: props.preceding_pin.then_some(WireColors::BUNDLE),
         };
         Bundler::draw(vis, ctx);
     }

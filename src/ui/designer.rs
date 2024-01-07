@@ -14,13 +14,13 @@ use eframe::{
 use emath::{pos2, vec2, Align2, Pos2, Rangef, Rect};
 
 use crate::{
+    app::Style,
     board::{
         CircuitDesign, CircuitDesignControl, CircuitDesignPin, CircuitDesignStorage, Decoration,
         DecorationType,
     },
     circuits::InternalPinDirection,
     ext::{IteratorEqExt, IteratorExt},
-    state::WireState,
     vector::{Vec2f, Vec2u},
     Direction4, DynStaticStr, PaintContext, PanAndZoom, RwLock,
 };
@@ -30,7 +30,7 @@ use super::{
     drawing::{self, align_rect_scaled},
     rect_editor, rect_properties_editor,
     selection::{
-        selection_border_color, selection_fill_color, Selection, SelectionImpl,
+        Selection, SelectionImpl,
         SelectionInventoryItem,
     },
     side_panel::{PanelSide, SidePanel},
@@ -155,12 +155,12 @@ impl SelectionImpl for DesignerSelectionImpl {
                     shapes.push(Shape::rect_filled(
                         rect,
                         Rounding::ZERO,
-                        selection_fill_color(),
+                        ctx.style.selection_fill_color(),
                     ));
                     ctx.paint.rect_stroke(
                         rect,
                         Rounding::ZERO,
-                        Stroke::new(2.0, selection_border_color()),
+                        Stroke::new(2.0, ctx.style.selection_border_color()),
                     );
                 }
             }
@@ -173,12 +173,12 @@ impl SelectionImpl for DesignerSelectionImpl {
                     shapes.push(Shape::rect_filled(
                         scr_rect,
                         Rounding::ZERO,
-                        selection_fill_color(),
+                        ctx.style.selection_fill_color(),
                     ));
                     ctx.paint.rect_stroke(
                         scr_rect,
                         Rounding::ZERO,
-                        Stroke::new(2.0, selection_border_color()),
+                        Stroke::new(2.0, ctx.style.selection_border_color()),
                     );
                 }
             }
@@ -188,12 +188,12 @@ impl SelectionImpl for DesignerSelectionImpl {
                     shapes.push(Shape::rect_filled(
                         scr_rect,
                         Rounding::ZERO,
-                        selection_fill_color(),
+                        ctx.style.selection_fill_color(),
                     ));
                     ctx.paint.rect_stroke(
                         scr_rect,
                         Rounding::ZERO,
-                        Stroke::new(2.0, selection_border_color()),
+                        Stroke::new(2.0, ctx.style.selection_border_color()),
                     );
                 }
             }
@@ -263,7 +263,7 @@ impl Designer {
         }
     }
 
-    pub fn background_update(&mut self, ui: &mut Ui) {
+    pub fn background_update(&mut self, style: &Style, ui: &mut Ui) {
         let rect = ui.max_rect();
 
         self.pan_zoom.update(ui, rect, self.selected_id.is_none());
@@ -319,6 +319,7 @@ impl Designer {
         let screen = self.pan_zoom.to_screen(rect);
         let paint = ui.painter_at(rect);
         drawing::draw_grid(
+            style,
             screen.wld_pos,
             screen.scale.into(),
             0.into(),
@@ -328,6 +329,7 @@ impl Designer {
 
         let ctx = PaintContext {
             screen,
+            style,
             paint: &paint,
             rect,
             ui,
@@ -385,7 +387,7 @@ impl Designer {
             color,
         );
 
-        drawing::draw_cross(&screen, rect, &paint);
+        drawing::draw_cross(&screen, style, rect, &paint);
 
         self.selection.pre_update_selection(
             design,
@@ -705,12 +707,12 @@ impl Designer {
         }
     }
 
-    pub fn ui_update(&mut self, ui: &mut Ui) -> DesignerResponse {
+    pub fn ui_update(&mut self, style: &Style, ui: &mut Ui) -> DesignerResponse {
         let designs = self.storage.clone();
         let mut designs = designs.write();
         let design = designs.current_mut();
 
-        self.components_ui(ui, design);
+        self.components_ui(style, ui, design);
         self.properties_ui(ui, design);
 
         drop(designs);
@@ -729,8 +731,10 @@ impl Designer {
         }
         let close = ui.button("Exit designer").clicked();
 
-        let inv_resp =
-            Inventory::new(&mut self.selected_id, &self.inventory).ui(&mut ui, |id| match id {
+        let inv_resp = Inventory::new(&mut self.selected_id, &self.inventory).ui(
+            &mut ui,
+            style,
+            |id| match id {
                 SelectedItemId::Selection => Some("Selection".into()),
                 SelectedItemId::Pin(id) => {
                     self.provider.get_pin(id).map(|i| i.display_name.clone())
@@ -740,7 +744,8 @@ impl Designer {
                     .provider
                     .get_control_info(*provider_id, *control_id)
                     .map(|i| i.display_name),
-            });
+            },
+        );
 
         if inv_resp.changed() {
             self.selected_pin_dir = None;
@@ -783,7 +788,7 @@ impl Designer {
             };
 
             crate::graphics::outside_pin(
-                WireState::False,
+                ctx.style.wire_colors.false_color(),
                 display_dir.is_some(),
                 pico,
                 angle,
@@ -792,11 +797,11 @@ impl Designer {
         }
     }
 
-    fn components_ui(&mut self, ui: &mut Ui, design: &mut CircuitDesign) {
-        let style = ui.style().clone();
+    fn components_ui(&mut self, style: &Style, ui: &mut Ui, design: &mut CircuitDesign) {
+        let egui_style = ui.style().clone();
         SidePanel::new(PanelSide::Left, "components-ui")
             .frame(
-                Frame::side_top_panel(&style)
+                Frame::side_top_panel(&egui_style)
                     .rounding(Rounding {
                         ne: 5.0,
                         nw: 0.0,
@@ -805,7 +810,7 @@ impl Designer {
                     })
                     .outer_margin(Margin::symmetric(0.0, 8.0))
                     .inner_margin(Margin::symmetric(5.0, 5.0))
-                    .stroke(style.visuals.window_stroke),
+                    .stroke(egui_style.visuals.window_stroke),
             )
             .show_separator_line(false)
             .default_tab(Some(0))
@@ -833,8 +838,9 @@ impl Designer {
                                                 Sense::hover(),
                                             );
 
-                                            let paint_ctx =
-                                                PaintContext::new_on_ui(ui, resp.rect, font.size);
+                                            let paint_ctx = PaintContext::new_on_ui(
+                                                ui, style, resp.rect, font.size,
+                                            );
 
                                             let pico = match info.dir {
                                                 InternalPinDirection::StateDependent {
@@ -847,7 +853,7 @@ impl Designer {
                                             let angle =
                                                 if pico == Some(true) { TAU * 0.5 } else { 0.0 };
                                             crate::graphics::outside_pin(
-                                                WireState::False,
+                                                paint_ctx.style.wire_colors.false_color(),
                                                 true,
                                                 pico,
                                                 angle,
@@ -925,7 +931,8 @@ impl Designer {
                                                     control_data.rect.size(),
                                                 );
 
-                                                let ctx = PaintContext::new_on_ui(ui, rect, scale);
+                                                let ctx =
+                                                    PaintContext::new_on_ui(ui, style, rect, scale);
 
                                                 self.provider.paint_control(
                                                     provider_data.id,

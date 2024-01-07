@@ -219,22 +219,21 @@ impl CircuitImpl for Pin {
                     .pins
                     .get(outer)?
                     .get_state(&outer_state);
-                Some(state.color())
+                Some(state.color(paint_ctx.style, None))
             })
-            .map(|s| s.unwrap_or(WireState::None.color()));
+            .map(|s| s.unwrap_or(paint_ctx.style.wire_colors.none_color()));
 
         let wire_color = self
             .pin
-            .get_wire_state(state_ctx)
-            .map(|s| WireState::color(&s));
+            .connected_wire_color(state_ctx, paint_ctx.style);
 
         let outside_color = outside_color
             .or_else(|| {
                 if self.is_pico(state_ctx) != Some(false) {
                     Some(
                         state_ctx
-                            .read_circuit_internal_state(|s: &PinState| s.state.0.color())
-                            .unwrap_or(WireState::None.color()),
+                            .read_circuit_internal_state(|s: &PinState| s.state.0.color(paint_ctx.style, None))
+                            .unwrap_or(paint_ctx.style.wire_colors.none_color()),
                     )
                 } else {
                     None
@@ -243,11 +242,11 @@ impl CircuitImpl for Pin {
             .or(wire_color)
             .unwrap_or_default();
 
-        let color = wire_color.unwrap_or_else(|| self.pin.get_state(state_ctx).color());
+        let color = self.pin.wire_or_self_color(state_ctx, paint_ctx.style);
         let cpos = self
             .ctl
             .as_ref()
-            .map(|c| (self.cpos, c.get_state(state_ctx).color()));
+            .map(|c| (self.cpos, c.wire_or_self_color(state_ctx, paint_ctx.style)));
         let is_pico = self.is_pico(state_ctx);
         let angle = self.dir.inverted_ud().angle_to_right();
 
@@ -692,13 +691,14 @@ impl CircuitPreviewImpl for Preview {
         let ty = props.read_clone("ty").unwrap_or(PinType::Pico);
         let cpos = props.read_clone("cpos").unwrap_or(ControlPinPosition::Left);
 
-        let cpos = ty.is_controlled().then_some((cpos, WireState::False.color()));
+        let false_color = ctx.style.wire_colors.false_color();
+        let cpos = ty.is_controlled().then_some((cpos, false_color));
         let angle = dir.inverted_ud().angle_to_right();
 
         crate::graphics::inside_pin(
             cpos,
-            WireState::False.color(),
-            WireState::False.color(),
+            false_color,
+            false_color,
             ty.is_bidirectional().not().then_some(!ty.is_cipo()),
             angle,
             ctx,

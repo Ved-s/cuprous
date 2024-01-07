@@ -6,11 +6,10 @@ use emath::{pos2, remap, Pos2};
 use crate::{
     board::ActiveCircuitBoard,
     path::{PathItem, PathItemIterator},
-    state::WireState,
     vector::{Vec2f, Vec2u},
 };
 
-use super::gate::{calc_size_from_inputs, GateImpl, GateWireStates};
+use super::gate::{calc_size_from_inputs, GateImpl, GateWireColors};
 
 pub struct Or;
 
@@ -22,7 +21,7 @@ impl GateImpl for Or {
         inputs.iter().any(|b| *b)
     }
 
-    fn draw(wires: GateWireStates, angle: f32, in_world_preview: bool, _: bool, ctx: &crate::PaintContext) {
+    fn draw(wires: GateWireColors, angle: f32, in_world_preview: bool, _: bool, ctx: &crate::PaintContext) {
         let size: Vec2u = calc_size_from_inputs(wires.count() as u32).into();
         let size_f = size.convert(|v| v as f32);
 
@@ -73,7 +72,7 @@ impl GateImpl for Or {
                     [transformer(start), transformer(end)],
                     Stroke::new(
                         ActiveCircuitBoard::WIRE_THICKNESS * ctx.screen.scale,
-                        wires.get(wire_index, WireState::False).color(),
+                        wires.get(wire_index, ctx.style.wire_colors.false_color()),
                     ),
                 )
             }

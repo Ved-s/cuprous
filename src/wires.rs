@@ -1,8 +1,13 @@
 use std::{collections::HashMap, num::NonZeroU32, ops::Deref, sync::Arc};
 
-use eframe::epaint::Color32;
+use eframe::{
+    egui::{Grid, Ui},
+    epaint::Color32,
+};
+use serde::{Deserialize, Serialize};
 
 use crate::{
+    app::Style,
     circuits::{Circuit, CircuitPin},
     containers::FixedVec,
     error::{ErrorList, OptionReport},
@@ -16,16 +21,98 @@ pub struct FoundWirePoint {
     pub dist: NonZeroU32,
     pub pos: Vec2i,
 }
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
+pub struct WireColors {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub none: Option<Color32>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub r#false: Option<Color32>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub r#true: Option<Color32>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub error: Option<Color32>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub bundle: Option<Color32>,
+}
+
+impl WireColors {
+    pub const NONE: Color32 = Color32::from_rgb(0, 0, 200);
+    pub const FALSE: Color32 = Color32::from_rgb(0, 255, 0);
+    pub const TRUE: Color32 = Color32::from_rgb(0, 127, 0);
+    pub const ERROR: Color32 = Color32::from_rgb(200, 0, 0);
+    pub const BUNDLE: Color32 = Color32::BLACK;
+
+    pub fn is_empty(&self) -> bool {
+        self.none.is_none()
+            && self.r#true.is_none()
+            && self.r#false.is_none()
+            && self.error.is_none()
+            && self.bundle.is_none()
+    }
+
+    pub fn or(&self, other: WireColors) -> WireColors {
+        WireColors {
+            none: self.none.or(other.none),
+            r#false: self.r#false.or(other.r#false),
+            r#true: self.r#true.or(other.r#true),
+            error: self.error.or(other.error),
+            bundle: self.bundle.or(other.bundle),
+        }
+    }
+
+    pub fn none_color(&self) -> Color32 {
+        self.none.unwrap_or(Self::NONE)
+    }
+    pub fn true_color(&self) -> Color32 {
+        self.r#true.unwrap_or(Self::FALSE)
+    }
+    pub fn false_color(&self) -> Color32 {
+        self.r#false.unwrap_or(Self::TRUE)
+    }
+    pub fn error_color(&self) -> Color32 {
+        self.error.unwrap_or(Self::ERROR)
+    }
+    pub fn bundle_color(&self) -> Color32 {
+        self.bundle.unwrap_or(Self::BUNDLE)
+    }
+
+    pub fn ui(&mut self, ui: &mut Ui) {
+        Grid::new("wire_colors_ui").num_columns(2).show(ui, |ui| {
+            macro_rules! color_row {
+                ($name:literal, $field:ident) => {
+                    ui.label($name);
+                    let mut color = paste::paste!(self. [<$field _color>]());
+                    if ui.color_edit_button_srgba(&mut color).changed() {
+                        self.$field = Some(color);
+                    }
+                    if self.$field.is_some() {
+                        if ui.button("x").clicked() {
+                            self.$field = None;
+                        }
+                    }
+                    ui.end_row();
+                };
+            }
+
+            color_row!("None", none);
+            color_row!("False", r#false);
+            color_row!("True", r#true);
+            color_row!("Error", error);
+            color_row!("Bundle", bundle);
+        });
+    }
+}
 
 #[derive(Debug, Default)]
 pub struct Wire {
     pub id: usize,
+    pub colors: WireColors,
     pub points: HashMap<Vec2i, WirePoint>,
 }
 
 impl Wire {
-    pub fn color(&self, state: &State) -> Color32 {
-        state.get_wire(self.id).color()
+    pub fn color(&self, state: &State, style: &Style) -> Color32 {
+        state.get_wire(self.id).color(style, Some(&self.colors))
     }
 
     pub fn set_point(
@@ -53,11 +140,7 @@ impl Wire {
         }
     }
 
-    pub fn search_wire_point(
-        &self,
-        pos: Vec2i,
-        dir: Direction4,
-    ) -> Option<FoundWirePoint> {
+    pub fn search_wire_point(&self, pos: Vec2i, dir: Direction4) -> Option<FoundWirePoint> {
         let (dir, forward) = dir.into_dir2();
         let current_diff_pos = dir.choose_axis_component(pos.x, pos.y);
         let current_eq_pos = dir.choose_axis_component(pos.y, pos.x);
@@ -86,6 +169,7 @@ impl Wire {
     pub fn save(&self) -> crate::io::WireData {
         crate::io::WireData {
             points: self.points.iter().map(|(k, v)| (*k, v.save())).collect(),
+            colors: self.colors,
         }
     }
 
@@ -98,11 +182,13 @@ impl Wire {
         let mut errors = errors.enter_context(|| format!("loading wire {}", id));
         Self {
             id,
+            colors: data.colors,
             points: data
                 .points
                 .iter()
                 .map(|(pos, data)| {
-                    let mut errors = errors.enter_context(|| format!("loading wire point at {}, {}", pos.x, pos.y)); 
+                    let mut errors = errors
+                        .enter_context(|| format!("loading wire point at {}, {}", pos.x, pos.y));
                     (*pos, WirePoint::load(data, circuits, &mut errors))
                 })
                 .collect(),
@@ -155,7 +241,9 @@ impl WirePoint {
         let pin = data.pin.as_ref().and_then(|data| {
             circuits
                 .get(data.circuit)
-                .report_none(&mut errors, || format!("circuit {} did not exist", data.circuit))
+                .report_none(&mut errors, || {
+                    format!("circuit {} did not exist", data.circuit)
+                })
                 .and_then(|circ| {
                     circ.info
                         .read()

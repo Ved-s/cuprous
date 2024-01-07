@@ -12,7 +12,7 @@ use std::{
     },
 };
 
-use app::SimulationContext;
+use app::{SimulationContext, Style};
 use board::{ActiveCircuitBoard, CircuitDesignControl};
 use cache::GLOBAL_STR_CACHE;
 use eframe::{
@@ -128,19 +128,21 @@ pub async fn web_main(canvas_id: &str) -> Result<(), JsValue> {
 #[allow(clippy::redundant_allocation)]
 pub struct PaintContext<'a> {
     screen: Screen,
+    style: &'a Style,
     paint: &'a egui::Painter,
     rect: Rect,
     ui: &'a Ui,
 }
 
 impl<'a> PaintContext<'a> {
-    pub fn new_on_ui(ui: &'a Ui, rect: Rect, scale: f32) -> Self {
+    pub fn new_on_ui(ui: &'a Ui, style: &'a Style, rect: Rect, scale: f32) -> Self {
         Self {
             screen: Screen {
                 scr_rect: rect,
                 wld_pos: 0.0.into(),
                 scale,
             },
+            style,
             paint: ui.painter(),
             rect,
             ui,

@@ -35,7 +35,7 @@ use crate::{
         designer::DesignProvider,
         editor::TileDrawBounds,
         selection::{
-            selection_border_color, selection_fill_color, Selection, SelectionImpl, SelectionMode,
+            Selection, SelectionImpl, SelectionMode,
         },
         RectVisuals,
     },
@@ -134,6 +134,7 @@ impl CircuitBoard {
         let wire = Wire {
             id,
             points: HashMap::default(),
+            colors: Default::default()
         };
         wires.set(id, wire);
         id
@@ -149,7 +150,7 @@ impl CircuitBoard {
         self.states.reset_wire(with);
         let with = unwrap_option_or_return!(wires.remove(with));
 
-        let Wire { id: _, points } = with;
+        let Wire { id: _, points, .. } = with;
 
         for point in points.values() {
             if let Some(pin) = &point.pin {
@@ -217,6 +218,7 @@ impl CircuitBoard {
         let new_wire = Wire {
             id: new_wire_id,
             points: new_points,
+            colors: wire.colors
         };
         wires.set(new_wire_id, new_wire);
 
@@ -753,13 +755,13 @@ impl ActiveCircuitBoard {
         }
         let wires = self.wires_at_node(pos, node);
 
-        let center_color = node.wire.get().map(|w| self.state.get_wire(w).color());
+        let center_color = node.wire.get().map(|w| self.state.get_wire_color(w, ctx.style));
 
         for dir in Direction2::iter_all() {
             let wire_color = center_color.or_else(|| {
                 wires
                     .dir(dir.into())
-                    .map(|w| self.state.get_wire(w).color())
+                    .map(|w| self.state.get_wire_color(w, ctx.style))
             });
 
             let wire_color = unwrap_option_or_continue!(wire_color);
@@ -792,7 +794,7 @@ impl ActiveCircuitBoard {
                     Self::draw_wire_point(
                         ctx,
                         pos,
-                        wire.color(&self.state),
+                        wire.color(&self.state, ctx.style),
                         debug && wire.points.get(&pos).is_some_and(|p| p.pin.is_some()),
                     )
                 }
@@ -960,7 +962,7 @@ impl ActiveCircuitBoard {
                 if pin.connected_wire().is_some() {
                     continue;
                 }
-                let color = pin.get_state(&state_ctx.global_state).color();
+                let color = pin.get_state(&state_ctx.global_state).color(ctx.style, None);
                 let pos = circ_ctx.screen.world_to_screen_tile(pos) + circ_ctx.screen.scale / 2.0;
                 circ_ctx.paint.circle_filled(
                     pos.into(),
@@ -1129,7 +1131,7 @@ impl ActiveCircuitBoard {
                 ctx.paint.circle_filled(
                     pos.into(),
                     ActiveCircuitBoard::WIRE_THICKNESS * 0.5 * ctx.screen.scale,
-                    WireState::False.color(),
+                    WireState::False.color(ctx.style, None),
                 );
             }
 
@@ -2560,7 +2562,7 @@ impl SelectionImpl for BoardObjectSelectionImpl {
                     };
                     let rect = ActiveCircuitBoard::calc_wire_part_rect(&ctx.screen, &part);
                     let rect = rect.expand(2.0);
-                    shapes.push(Shape::rect_filled(rect, Rounding::ZERO, Color32::WHITE));
+                    shapes.push(Shape::rect_filled(rect, Rounding::ZERO, ctx.style.selection_border_color()));
 
                     self.possible_points.insert(*pos);
                     self.possible_points.insert(w.pos);
@@ -2576,8 +2578,8 @@ impl SelectionImpl for BoardObjectSelectionImpl {
                     shapes.push(Shape::Rect(RectShape::new(
                         rect,
                         Rounding::ZERO,
-                        selection_fill_color(),
-                        Stroke::new(2.0, selection_border_color()),
+                        ctx.style.selection_fill_color(),
+                        Stroke::new(2.0, ctx.style.selection_border_color()),
                     )));
                 }
             }

@@ -12,30 +12,30 @@ use crate::{
     containers::FixedVec,
     describe_directional_circuit,
     path::{PathItem, PathItemIterator},
-    pool::{PooledBoolVec, PooledStateVec},
+    pool::{PooledBoolVec, PooledColor32Vec, PooledStateVec},
     state::SingleWireState,
     unwrap_option_or_return,
     vector::Vec2f,
     Direction4, Mutex,
 };
 
-pub enum GateWireStates<'a> {
-    States(&'a [WireState]),
+pub enum GateWireColors<'a> {
+    Colors(&'a [Color32]),
     Default(u32),
 }
 
-impl<'a> GateWireStates<'a> {
+impl<'a> GateWireColors<'a> {
     pub fn count(&self) -> usize {
         match self {
-            GateWireStates::States(s) => s.len(),
-            GateWireStates::Default(c) => *c as usize,
+            GateWireColors::Colors(s) => s.len(),
+            GateWireColors::Default(c) => *c as usize,
         }
     }
 
-    pub fn get(&self, index: usize, default: WireState) -> WireState {
+    pub fn get(&self, index: usize, default: Color32) -> Color32 {
         match self {
-            GateWireStates::States(s) => s.get(index).cloned().unwrap_or(default),
-            GateWireStates::Default(_) => default,
+            GateWireColors::Colors(s) => s.get(index).cloned().unwrap_or(default),
+            GateWireColors::Default(_) => default,
         }
     }
 }
@@ -46,7 +46,7 @@ pub trait GateImpl {
 
     fn process(inputs: &[bool], extra: bool) -> bool;
     fn draw(
-        wires: GateWireStates,
+        wires: GateWireColors,
         angle: f32,
         in_world_preview: bool,
         extra: bool,
@@ -212,12 +212,15 @@ where
 {
     fn draw(&self, state: &CircuitStateContext, paint_ctx: &PaintContext) {
         let angle = self.dir.inverted_ud().angle_to_right();
-        let states = self.inputs.iter().map(|i| i.get_state(state));
-        let mut states_pooled = PooledStateVec::new();
-        states_pooled.extend(states);
+        let states = self
+            .inputs
+            .iter()
+            .map(|i| i.wire_or_self_color(state, paint_ctx.style));
+        let mut colors_pooled = PooledColor32Vec::new();
+        colors_pooled.extend(states);
 
         I::draw(
-            GateWireStates::States(&states_pooled),
+            GateWireColors::Colors(&colors_pooled),
             angle,
             false,
             self.extra,
@@ -426,7 +429,7 @@ where
             .get();
         let extra = props.read_clone("extra").unwrap_or(false);
         let angle = dir.inverted_ud().angle_to_right();
-        I::draw(GateWireStates::Default(inputs), angle, in_world, extra, ctx);
+        I::draw(GateWireColors::Default(inputs), angle, in_world, extra, ctx);
     }
 
     fn create_impl(&self) -> Box<dyn CircuitImpl> {
@@ -503,7 +506,7 @@ impl Gate2497 {
         }
     }
 
-    fn draw(angle: f32, in_states: [WireState; 2], in_world_preview: bool, ctx: &PaintContext) {
+    fn draw(angle: f32, in_colors: [Color32; 2], in_world_preview: bool, ctx: &PaintContext) {
         let size = vec2(5.0, 3.0);
         let transformer = |p: Pos2| {
             ctx.rect.lerp_inside(
@@ -519,7 +522,7 @@ impl Gate2497 {
             [transformer(pos2(0.5, 0.5)), transformer(pos2(0.8, 0.5))],
             Stroke::new(
                 ActiveCircuitBoard::WIRE_THICKNESS * ctx.screen.scale,
-                in_states[0].color(),
+                in_colors[0],
             ),
         );
 
@@ -527,7 +530,7 @@ impl Gate2497 {
             [transformer(pos2(0.5, 2.5)), transformer(pos2(0.8, 2.5))],
             Stroke::new(
                 ActiveCircuitBoard::WIRE_THICKNESS * ctx.screen.scale,
-                in_states[1].color(),
+                in_colors[1],
             ),
         );
 
@@ -671,9 +674,7 @@ impl Gate2497 {
             WireState::False => 0.0,
             WireState::True => 1.0,
             WireState::Error => 2.0,
-            WireState::Bundle(bundle) => {
-                bundle.iter().map(Self::state_to_f32).sum()
-            }
+            WireState::Bundle(bundle) => bundle.iter().map(Self::state_to_f32).sum(),
         }
     }
 
@@ -691,7 +692,10 @@ impl Gate2497 {
 impl CircuitImpl for Gate2497 {
     fn draw(&self, ctx: &CircuitStateContext, paint_ctx: &PaintContext) {
         let angle = self.dir.inverted_ud().angle_to_right();
-        let states = [self.in_a.get_state(ctx), self.in_b.get_state(ctx)];
+        let states = [
+            self.in_a.wire_or_self_color(ctx, paint_ctx.style),
+            self.in_b.wire_or_self_color(ctx, paint_ctx.style),
+        ];
         Self::draw(angle, states, false, paint_ctx);
     }
 
@@ -743,7 +747,8 @@ impl CircuitPreviewImpl for Gate2497Preview {
     fn draw_preview(&self, props: &CircuitPropertyStore, ctx: &PaintContext, in_world: bool) {
         let dir = props.read_clone("dir").unwrap_or(Direction4::Right);
         let angle = dir.inverted_ud().angle_to_right();
-        Gate2497::draw(angle, [WireState::False, WireState::False], in_world, ctx);
+        let false_color = ctx.style.wire_colors.false_color();
+        Gate2497::draw(angle, [false_color; 2], in_world, ctx);
     }
 
     fn create_impl(&self) -> Box<dyn CircuitImpl> {

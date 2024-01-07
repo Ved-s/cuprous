@@ -65,13 +65,13 @@ impl Transistor {
 
 impl CircuitImpl for Transistor {
     fn draw(&self, state_ctx: &CircuitStateContext, paint_ctx: &PaintContext) {
-        let collector = self.collector.get_state(state_ctx);
-        let base = self.base.get_state(state_ctx);
-        let emitter = self
-            .emitter
-            .get_wire_state(state_ctx)
-            .unwrap_or_else(|| self.emitter.get_state(state_ctx));
+        let collector_color = self
+            .collector
+            .wire_or_self_color(state_ctx, paint_ctx.style);
+        let base_color = self.base.wire_or_self_color(state_ctx, paint_ctx.style);
+        let emitter_color = self.emitter.wire_or_self_color(state_ctx, paint_ctx.style);
 
+        let base = self.base.get_state(state_ctx);
         let angle = self.dir.inverted_ud().angle_to_left();
         let open = Self::is_open_state(self.ty, &base);
 
@@ -79,9 +79,9 @@ impl CircuitImpl for Transistor {
             self.ty,
             angle,
             self.flip,
-            collector.color(),
-            base.color(),
-            emitter.color(),
+            collector_color,
+            base_color,
+            emitter_color,
             open,
             paint_ctx,
         );
@@ -175,13 +175,14 @@ impl CircuitPreviewImpl for TransistorPreview {
             .angle_to_left();
         let flip = props.read_clone("flip").unwrap_or(false);
         let ty = props.read_clone("ty").unwrap_or(TransistorType::NPN);
+        let false_color = ctx.style.wire_colors.false_color();
         crate::graphics::transistor(
             ty,
             angle,
             flip,
-            WireState::False.color(),
-            WireState::False.color(),
-            WireState::False.color(),
+            false_color,
+            false_color,
+            false_color,
             Transistor::is_open_state(ty, &WireState::False),
             ctx,
         );

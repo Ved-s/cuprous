@@ -6,11 +6,10 @@ use emath::{pos2, remap, Align2, Pos2};
 use crate::{
     board::ActiveCircuitBoard,
     path::{PathItem, PathItemIterator},
-    state::WireState,
     vector::{Vec2f, Vec2u},
 };
 
-use super::gate::{calc_size_from_inputs, GateImpl, GateWireStates};
+use super::gate::{calc_size_from_inputs, GateImpl, GateWireColors};
 
 pub struct Xor;
 
@@ -33,7 +32,7 @@ impl GateImpl for Xor {
     }
 
     fn draw(
-        wires: GateWireStates,
+        wires: GateWireColors,
         angle: f32,
         in_world_preview: bool,
         parity: bool,
@@ -88,7 +87,7 @@ impl GateImpl for Xor {
                     [transformer(start), transformer(end)],
                     Stroke::new(
                         ActiveCircuitBoard::WIRE_THICKNESS * ctx.screen.scale,
-                        wires.get(wire_index, WireState::False).color(),
+                        wires.get(wire_index, ctx.style.wire_colors.false_color()),
                     ),
                 )
             }

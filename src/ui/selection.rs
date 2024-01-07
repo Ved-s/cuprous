@@ -2,7 +2,7 @@ use std::{collections::HashSet, hash::Hash};
 
 use eframe::{
     egui::{self, layers::ShapeIdx, Sense},
-    epaint::{Color32, Rounding, Shape, Stroke},
+    epaint::{Rounding, Shape, Stroke},
 };
 use emath::Rect;
 
@@ -64,14 +64,6 @@ where
     shapes: Vec<Shape>,
 }
 
-pub fn selection_fill_color() -> Color32 {
-    Color32::from_rgba_unmultiplied(200, 200, 255, 10)
-}
-
-pub fn selection_border_color() -> Color32 {
-    Color32::WHITE
-}
-
 impl<I> Selection<I>
 where
     I: SelectionImpl,
@@ -114,11 +106,8 @@ where
                     let rect = Rect::from_min_max(rect_min.into(), rect_max.into());
                     self.rect = Some(rect);
 
-                    ctx.paint.rect_filled(
-                        rect,
-                        Rounding::ZERO,
-                        Color32::from_rgba_unmultiplied(200, 200, 255, 10),
-                    );
+                    ctx.paint
+                        .rect_filled(rect, Rounding::ZERO, ctx.style.selection_fill_color());
 
                     self.change.clear();
                     self.imp.collect_changes(
@@ -231,8 +220,11 @@ where
         }
 
         if let Some(rect) = self.rect {
-            ctx.paint
-                .rect_stroke(rect, Rounding::ZERO, Stroke::new(1.0, Color32::WHITE));
+            ctx.paint.rect_stroke(
+                rect,
+                Rounding::ZERO,
+                Stroke::new(1.0, ctx.style.selection_border_color()),
+            );
         }
     }
 
@@ -287,7 +279,7 @@ impl<I: Clone> InventoryItem<I> for SelectionInventoryItem<I> {
     fn draw(&self, ctx: &PaintContext) {
         let rect = ctx.rect.shrink2(ctx.rect.size() / 5.0);
         ctx.paint
-            .rect_filled(rect, Rounding::ZERO, selection_fill_color());
+            .rect_filled(rect, Rounding::ZERO, ctx.style.selection_fill_color());
         let rect_corners = [
             rect.left_top(),
             rect.right_top(),
@@ -299,7 +291,7 @@ impl<I: Clone> InventoryItem<I> for SelectionInventoryItem<I> {
         let mut shapes = vec![];
         Shape::dashed_line_many(
             &rect_corners,
-            Stroke::new(1.0, selection_border_color()),
+            Stroke::new(1.0, ctx.style.selection_border_color()),
             3.0,
             2.0,
             &mut shapes,

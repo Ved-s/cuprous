@@ -8,11 +8,12 @@ use emath::{pos2, vec2, Pos2, Rect, Vec2};
 
 use crate::{
     vector::{Vec2f, Vec2isize, Vec2u},
-    Direction4, PaintContext, Screen,
+    Direction4, PaintContext, Screen, app::Style,
 };
 
 pub fn draw_dynamic_grid(
     screen: &Screen,
+    style: &Style,
     cell_size: f32,
     highlight_lines: Vec2u,
     paint: &egui::Painter,
@@ -22,6 +23,7 @@ pub fn draw_dynamic_grid(
         grid_ds_cell_size *= cell_size;
     }
     draw_grid(
+        style,
         screen.wld_pos * screen.scale / grid_ds_cell_size,
         grid_ds_cell_size.into(),
         highlight_lines,
@@ -31,6 +33,7 @@ pub fn draw_dynamic_grid(
 }
 
 pub fn draw_grid(
+    style: &Style,
     pos: Vec2f,
     cell_size: Vec2f,
     highlight_lines: Vec2u,
@@ -42,8 +45,17 @@ pub fn draw_grid(
     let start = (pos / cell_size).convert(|v| v as i32);
     let off = pos % cell_size;
 
-    let dim_stroke = Stroke::new(1.0, Color32::from_gray(64));
-    let highlight_stroke = Stroke::new(1.5, Color32::from_gray(96));
+    let dim_color = match style.egui_style.visuals.dark_mode {
+        true => Color32::from_gray(64),
+        false => Color32::from_gray(192),
+    };
+    let highlight_color = match style.egui_style.visuals.dark_mode {
+        true => Color32::from_gray(96),
+        false => Color32::from_gray(160),
+    };
+
+    let dim_stroke = Stroke::new(1.0, dim_color);
+    let highlight_stroke = Stroke::new(1.5, highlight_color);
 
     for i in 0..visible_cells.x {
         let x = i + start.x;
@@ -113,15 +125,19 @@ pub fn draw_grid(
     }
 }
 
-pub fn draw_cross(screen: &Screen, bounds: Rect, paint: &egui::Painter) {
+pub fn draw_cross(screen: &Screen, style: &Style, bounds: Rect, paint: &egui::Painter) {
     let mut cross_pos = screen.world_to_screen(0.0.into());
 
     cross_pos.x = cross_pos.x.clamp(bounds.left(), bounds.right());
     cross_pos.y = cross_pos.y.clamp(bounds.top(), bounds.bottom());
 
     let unit = Vec2f::single_value(screen.scale);
+    let cross_color = match style.egui_style.visuals.dark_mode {
+        true => Color32::WHITE,
+        false => Color32::from_gray(32),
+    };
 
-    let cross_stroke = Stroke::new(2.0, Color32::WHITE);
+    let cross_stroke = Stroke::new(2.0, cross_color);
 
     paint.line_segment(
         [

@@ -5,13 +5,13 @@ use std::{
     time::Duration,
 };
 
-use eframe::egui::Id;
+use eframe::{egui::Id, epaint::Color32};
 use emath::Rect;
 use serde::{Deserialize, Serialize};
 use serde_intermediate::Intermediate;
 
 use crate::{
-    app::SimulationContext,
+    app::{SimulationContext, Style},
     board::CircuitBoard,
     error::ErrorList,
     io::{CircuitCopyData, CircuitDesignControlCopy},
@@ -206,6 +206,14 @@ impl CircuitPinInfo {
         state_ctx
             .read_circuit_state(|cs| cs.pins.get_clone(self.pin.read().id.id).unwrap_or_default())
             .unwrap_or_default()
+    }
+
+    pub fn connected_wire_color(&self, state_ctx: &CircuitStateContext, style: &Style) -> Option<Color32> {
+        self.pin.read().connected_wire().map(|w| state_ctx.global_state.get_wire_color(w, style))
+    }
+
+    pub fn wire_or_self_color(&self, state_ctx: &CircuitStateContext, style: &Style) -> Color32 {
+        self.connected_wire_color(state_ctx, style).unwrap_or_else(|| self.get_state(state_ctx).color(style, None))
     }
 
     pub fn get_wire_state(&self, state_ctx: &CircuitStateContext) -> Option<WireState> {

@@ -17,6 +17,7 @@ pub mod selection;
 pub mod side_panel;
 
 use crate::{
+    app::Style,
     circuits::props::{CircuitProperty, CircuitPropertyImpl, CircuitPropertyStore},
     DynStaticStr, PaintContext, RwLock,
 };
@@ -169,6 +170,7 @@ where
     fn ui(
         mut self,
         ui: &mut eframe::egui::Ui,
+        style: &Style,
         name_resolver: impl Fn(&I) -> Option<DynStaticStr>,
     ) -> eframe::egui::Response {
         let (selected_item, selected_sub_item) = match &self.selected {
@@ -229,8 +231,8 @@ where
         paint.rect(
             rect,
             rounding,
-            Color32::from_gray(32),
-            Stroke::new(1.0, Color32::from_gray(100)),
+            ui.style().visuals.window_fill,
+            Stroke::new(1.0, ui.style().visuals.window_stroke.color),
         );
 
         if let Some(selected) = &self.selected {
@@ -275,7 +277,7 @@ where
             }
         }
 
-        let paint_ctx = PaintContext::new_on_ui(ui, rect, 1.0);
+        let paint_ctx = PaintContext::new_on_ui(ui, style, rect, 1.0);
 
         let click_pos = response
             .clicked_by(PointerButton::Primary)
@@ -334,8 +336,17 @@ where
                         paint_ctx.paint.rect(
                             group_rect.shrink(0.5),
                             rounding,
-                            Color32::from_gray(48),
-                            Stroke::new(1.0, Color32::from_gray(100)),
+                            style.egui_style.visuals.widgets.noninteractive.bg_fill,
+                            Stroke::new(
+                                1.0,
+                                style
+                                    .egui_style
+                                    .visuals
+                                    .widgets
+                                    .noninteractive
+                                    .bg_stroke
+                                    .color,
+                            ),
                         );
 
                         for (i, item) in items.iter().enumerate() {
@@ -346,8 +357,11 @@ where
                                 paint_ctx.paint.rect(
                                     rect,
                                     rounding,
-                                    Color32::from_gray(64),
-                                    Stroke::new(1.0, Color32::from_gray(128)),
+                                    style.egui_style.visuals.widgets.active.bg_fill,
+                                    Stroke::new(
+                                        1.0,
+                                        style.egui_style.visuals.widgets.active.bg_stroke.color,
+                                    ),
                                 );
                             }
                             if click_pos.is_some_and(|pos| rect.contains(pos)) {
@@ -377,8 +391,11 @@ where
                         paint_ctx.paint.rect(
                             rect,
                             rounding,
-                            Color32::from_gray(64),
-                            Stroke::new(1.0, Color32::from_gray(128)),
+                            style.egui_style.visuals.widgets.active.bg_fill,
+                            Stroke::new(
+                                1.0,
+                                style.egui_style.visuals.widgets.active.bg_stroke.color,
+                            ),
                         );
                     }
                     if click_pos.is_some_and(|pos| rect.contains(pos)) {
@@ -1176,7 +1193,7 @@ pub fn align_ui<R>(
     id: impl Into<Id>,
     align: Vec2,
     ignore_cursor: bool,
-    allocate_space: bool,  
+    allocate_space: bool,
     add_contents: impl FnOnce(&mut Ui) -> R,
 ) -> R {
     let id = id.into();
@@ -1205,7 +1222,7 @@ pub fn align_ui<R>(
     };
     let aligned_rect = rect.translate(offset);
 
-    // if let Some(size) = size { 
+    // if let Some(size) = size {
     //     let sized_rect = Rect::from_min_size(aligned_rect.left_top(), size);
     //     ui.painter().rect_stroke(sized_rect, Rounding::ZERO, Stroke::new(1.0, Color32::YELLOW));
     // }

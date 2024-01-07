@@ -8,7 +8,7 @@ use crate::{
     vector::{Vec2f, Vec2u},
 };
 
-use super::gate::{calc_size_from_inputs, GateImpl, GateWireStates};
+use super::gate::{calc_size_from_inputs, GateImpl, GateWireColors};
 
 pub struct Nand;
 
@@ -21,7 +21,7 @@ impl GateImpl for Nand {
     }
 
     fn draw(
-        wires: GateWireStates,
+        wires: GateWireColors,
         angle: f32,
         in_world_preview: bool,
         _: bool,
