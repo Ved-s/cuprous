@@ -6,7 +6,7 @@ use std::{
 
 use eframe::{
     egui::{self, CollapsingHeader, Frame, Margin, RichText, ScrollArea, Ui},
-    epaint::{Rounding, Color32},
+    epaint::{Color32, Rounding},
     CreationContext,
 };
 use emath::{vec2, Align, Align2};
@@ -18,7 +18,8 @@ use crate::{
     error::{ErrorList, ResultReport},
     evenly_spaced_out,
     ui::{editor::CircuitBoardEditor, side_panel::PanelSide},
-    DynStaticStr, RwLock, wires::WireColors,
+    wires::WireColors,
+    DynStaticStr, RwLock,
 };
 
 pub struct SimulationContext {
@@ -43,13 +44,16 @@ pub struct Style {
 
 impl Style {
     pub fn selection_fill_color(&self) -> Color32 {
-        self.egui_style.visuals.selection.bg_fill.linear_multiply(0.6)
+        self.egui_style
+            .visuals
+            .selection
+            .bg_fill
+            .linear_multiply(0.6)
     }
-    
+
     pub fn selection_border_color(&self) -> Color32 {
         self.egui_style.visuals.selection.stroke.color
     }
-    
 }
 pub struct App {
     editor: crate::ui::editor::CircuitBoardEditor,
@@ -434,7 +438,7 @@ impl App {
 
         let style = style_override.unwrap_or_else(|| Style {
             egui_style: cc.egui_ctx.style(),
-            wire_colors: Default::default()
+            wire_colors: Default::default(),
         });
 
         Self::new(ctx, style, errors)
@@ -504,13 +508,7 @@ impl App {
                 ui,
                 tabs.len(),
                 |i| tabs[i].1.into(),
-                |tab, ui| {
-                    ScrollArea::vertical()
-                        .max_width(f32::INFINITY)
-                        .auto_shrink([false, true])
-                        .min_scrolled_height(ui.ctx().screen_rect().height() * 0.8)
-                        .show(ui, |ui| (tabs[tab].0)(self, ui));
-                },
+                |tab, ui| (tabs[tab].0)(self, ui),
             );
     }
 
@@ -537,85 +535,91 @@ impl App {
     fn general_tab(&mut self, ui: &mut Ui) {
         ui.set_min_height(100.0);
 
-        ui.vertical(|ui| {
-            ui.label("Welcome to cuprous!");
-            CollapsingHeader::new("Controls").show(ui, |ui| {
-                ui.label("Left-click and drag to pan around");
-                ui.label("Scroll to zoom");
-                ui.label("0-9 to select items in inventory");
-                ui.label("Esc to deselect");
-                ui.label("While selecting, holding Shift will add to existing selection and Ctrl will remove from it");
-                ui.add_space(5.0);
-                ui.label("In editor:");
-                ui.add_space(2.0);
-                ui.label("  R to rotate selected component (if applicable)");
-                ui.label("  F to flip selected component (if applicable)");
-                let paused = if self.editor.board.state.is_frozen() {
-                    "  P to resume current circuit simulation"
-                } else {
-                    "  P to pause current circuit simulation"
-                };
-                ui.label(paused);
-                ui.add_space(5.0);
+        ScrollArea::vertical()
+            .max_width(f32::INFINITY)
+            .auto_shrink([false, true])
+            .min_scrolled_height(ui.ctx().screen_rect().height() * 0.8)
+            .show(ui, |ui| {
+            ui.vertical(|ui| {
+                ui.label("Welcome to cuprous!");
+                CollapsingHeader::new("Controls").show(ui, |ui| {
+                    ui.label("Left-click and drag to pan around");
+                    ui.label("Scroll to zoom");
+                    ui.label("0-9 to select items in inventory");
+                    ui.label("Esc to deselect");
+                    ui.label("While selecting, holding Shift will add to existing selection and Ctrl will remove from it");
+                    ui.add_space(5.0);
+                    ui.label("In editor:");
+                    ui.add_space(2.0);
+                    ui.label("  R to rotate selected component (if applicable)");
+                    ui.label("  F to flip selected component (if applicable)");
+                    let paused = if self.editor.board.state.is_frozen() {
+                        "  P to resume current circuit simulation"
+                    } else {
+                        "  P to pause current circuit simulation"
+                    };
+                    ui.label(paused);
+                    ui.add_space(5.0);
+                });
+                let editor_text = if self.designer.is_some() { "Editor mode" } else { "Editor mode (current mode)" };
+                CollapsingHeader::new(editor_text).id_source("tut_editor").show(ui, |ui| {
+                    ui.label("Components panel on the left side contains built-in components and custom circuits");
+                    ui.label("Click on custom circuit once to select it for placement and wice to open it");
+                    ui.label("Designer in custom circuit context menu allows to change its appearance when placed");
+                    ui.add_space(5.0);
+                    ui.label("Property editor panel on the right side contains editable properties for selected components");
+                    ui.add_space(5.0);
+                    let queue_text = if self.editor.board.board.is_ordered_queue() {
+                        "WARNING! If you want to make random-dependant circuits like RS latches, press Q to switch this board into Random Queue mode.\n\
+                         Note that this mode can make order-dependant boards unstable, so enable it only for boards that require it.\
+                        "
+                    } else {
+                        "WARNING! This board is in Random Queue mode mode.\n\
+                         This mode allows building circuits like RS latches but can make order-dependant boards unstable.\n\
+                         Press Q to switch to Ordered Mode.\
+                        "
+                    };
+                    ui.label(queue_text);
+                    ui.add_space(5.0);
+                });
+                let designer_text = if self.designer.is_some() { "Designer mode (current mode)" } else { "Designer mode" };
+                CollapsingHeader::new(designer_text).id_source("tut_designer").show(ui, |ui| {
+                    ui.label("Components panel on the left side contains circuit pins, exposable controls from placed components and (later) circuit decorations");
+                    ui.label("Circuit decorations can be selected in the inventory (more will be added later)");
+                    ui.add_space(5.0);
+                    ui.label("Property editor panel on the right side contains editable properties for selected pins or decorations");
+                    ui.add_space(5.0);
+                    ui.label("Resulting circuit size can be adjusted by dragging sides of the purple rectangle");
+                    ui.label("Note that all pins and decorations should be placed inside that size");
+                    ui.add_space(5.0);
+                    ui.label("Rectangle decorations can be moved by dragging them and resized by dragging their edges");
+                    ui.label("Pins can be moved by dragging them");
+                    ui.add_space(5.0);
+                    ui.label("Some components placed on circuit board can be exposed as interactive controls on circuit's design.");
+                    ui.label("Controls can be moved and resized, but will keep original aspect ratio.");
+                    ui.add_space(5.0);
+                });
+                CollapsingHeader::new("Editor debug controls").show(ui, |ui| {
+                    let debug = if self.editor.debug {
+                        "F9 to disable visual debug mode"
+                    } else {
+                        "F9 to enable visual debug mode"
+                    };
+                    ui.label(debug);
+                    ui.label("F8 to reload current board editor");
+                    ui.label("F2 to reset current board state");
+                    ui.label("Ctrl+F2 to reset all states of the current board");
+                    ui.label("Shift+F2 to reset all states of all boards");
+                    let queue = if self.editor.board.board.is_ordered_queue() {
+                        "Q to switch current circuit to random queue mode"
+                    } else {
+                        "Q to switch current circuit to ordered queue mode"
+                    };
+                    ui.label(queue);
+                    ui.add_space(5.0);
+                });
+                ui.label("Project is in early development stage, a lot of things will be added and will change");
             });
-            let editor_text = if self.designer.is_some() { "Editor mode" } else { "Editor mode (current mode)" };
-            CollapsingHeader::new(editor_text).id_source("tut_editor").show(ui, |ui| {
-                ui.label("Components panel on the left side contains built-in components and custom circuits");
-                ui.label("Click on custom circuit once to select it for placement and wice to open it");
-                ui.label("Designer in custom circuit context menu allows to change its appearance when placed");
-                ui.add_space(5.0);
-                ui.label("Property editor panel on the right side contains editable properties for selected components");
-                ui.add_space(5.0);
-                let queue_text = if self.editor.board.board.is_ordered_queue() {
-                    "WARNING! If you want to make random-dependant circuits like RS latches, press Q to switch this board into Random Queue mode.\n\
-                     Note that this mode can make order-dependant boards unstable, so enable it only for boards that require it.\
-                    "
-                } else {
-                    "WARNING! This board is in Random Queue mode mode.\n\
-                     This mode allows building circuits like RS latches but can make order-dependant boards unstable.\n\
-                     Press Q to switch to Ordered Mode.\
-                    "
-                };
-                ui.label(queue_text);
-                ui.add_space(5.0);
-            });
-            let designer_text = if self.designer.is_some() { "Designer mode (current mode)" } else { "Designer mode" };
-            CollapsingHeader::new(designer_text).id_source("tut_designer").show(ui, |ui| {
-                ui.label("Components panel on the left side contains circuit pins, exposable controls from placed components and (later) circuit decorations");
-                ui.label("Circuit decorations can be selected in the inventory (more will be added later)");
-                ui.add_space(5.0);
-                ui.label("Property editor panel on the right side contains editable properties for selected pins or decorations");
-                ui.add_space(5.0);
-                ui.label("Resulting circuit size can be adjusted by dragging sides of the purple rectangle");
-                ui.label("Note that all pins and decorations should be placed inside that size");
-                ui.add_space(5.0);
-                ui.label("Rectangle decorations can be moved by dragging them and resized by dragging their edges");
-                ui.label("Pins can be moved by dragging them");
-                ui.add_space(5.0);
-                ui.label("Some components placed on circuit board can be exposed as interactive controls on circuit's design.");
-                ui.label("Controls can be moved and resized, but will keep original aspect ratio.");
-                ui.add_space(5.0);
-            });
-            CollapsingHeader::new("Editor debug controls").show(ui, |ui| {
-                let debug = if self.editor.debug {
-                    "F9 to disable visual debug mode"
-                } else {
-                    "F9 to enable visual debug mode"
-                };
-                ui.label(debug);
-                ui.label("F8 to reload current board editor");
-                ui.label("F2 to reset current board state");
-                ui.label("Ctrl+F2 to reset all states of the current board");
-                ui.label("Shift+F2 to reset all states of all boards");
-                let queue = if self.editor.board.board.is_ordered_queue() {
-                    "Q to switch current circuit to random queue mode"
-                } else {
-                    "Q to switch current circuit to ordered queue mode"
-                };
-                ui.label(queue);
-                ui.add_space(5.0);
-            });
-            ui.label("Project is in early development stage, a lot of things will be added and will change");
         });
 
         crate::ui::align_ui(ui, "state", vec2(1.0, 0.0), true, false, |ui| {
@@ -679,16 +683,21 @@ impl App {
 
     fn settings_tab(&mut self, ui: &mut Ui) {
         ui.set_min_height(100.0);
-
-        CollapsingHeader::new("egui style").show(ui, |ui| {
-            let mut style_arc = ui.ctx().style().clone();
-            let style = Arc::make_mut(&mut style_arc);
-            style.ui(ui);
-            ui.ctx().set_style(style_arc);
-        });
-        CollapsingHeader::new("Default wire colors").show(ui, |ui| {
-            self.style.wire_colors.ui(ui);
-        });
+        ScrollArea::vertical()
+            .max_width(f32::INFINITY)
+            .auto_shrink([false, true])
+            .min_scrolled_height(ui.ctx().screen_rect().height() * 0.8)
+            .show(ui, |ui| {
+                CollapsingHeader::new("egui style").show(ui, |ui| {
+                    let mut style_arc = ui.ctx().style().clone();
+                    let style = Arc::make_mut(&mut style_arc);
+                    style.ui(ui);
+                    ui.ctx().set_style(style_arc);
+                });
+                CollapsingHeader::new("Default wire colors").show(ui, |ui| {
+                    self.style.wire_colors.ui(ui);
+                });
+            });
     }
 
     fn save_state(&mut self) -> bool {
