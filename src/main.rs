@@ -93,7 +93,7 @@ fn main() {
             viewport: ViewportBuilder::default()
                 .with_app_id("cuprous")
                 .with_drag_and_drop(true),
-                
+
             ..Default::default()
         };
 
@@ -239,23 +239,27 @@ pub struct PanAndZoom {
 
 impl PanAndZoom {
     fn update(&mut self, ui: &egui::Ui, rect: Rect, allow_primary_button_drag: bool) {
+        let interaction = ui.interact(rect, ui.id(), Sense::click_and_drag());
+
         let zoom = ui.input(|input| {
             input
                 .multi_touch()
                 .map(|mt| mt.zoom_delta)
                 .unwrap_or_else(|| {
-                    let v = input.scroll_delta.y / 240.0;
-                    if v < 0.0 {
-                        1.0 / (-v + 1.0)
-                    } else if v > 0.0 {
-                        v + 1.0
+                    if interaction.hovered() {
+                        let v = input.scroll_delta.y / 240.0;
+                        if v < 0.0 {
+                            1.0 / (-v + 1.0)
+                        } else if v > 0.0 {
+                            v + 1.0
+                        } else {
+                            1.0
+                        }
                     } else {
                         1.0
                     }
                 })
         });
-
-        let interaction = ui.interact(rect, ui.id(), Sense::click_and_drag());
 
         if interaction.dragged_by(egui::PointerButton::Secondary)
             || (allow_primary_button_drag && interaction.dragged_by(egui::PointerButton::Primary))
@@ -1007,10 +1011,13 @@ impl PastePreview {
 
                     for (i, control) in circuit_data.design_controls.iter().enumerate() {
                         let control = unwrap_option_or_continue!(control);
-                        design.controls.insert((id, i), CircuitDesignControl {
-                            rect: control.rect,
-                            display_name: control.display_name.as_str().into(),
-                        });
+                        design.controls.insert(
+                            (id, i),
+                            CircuitDesignControl {
+                                rect: control.rect,
+                                display_name: control.display_name.as_str().into(),
+                            },
+                        );
                     }
                 }
 
