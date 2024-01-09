@@ -34,8 +34,6 @@ Logisim-inspired logic circuits simulator
 - Update SVGs
 - Properly reset wires and circuit before placing or after removing
 - Option to floor led position before rendering it
-- Move rendering code from ActiveCircuitBoard to CircuitBoardEditor
-- Individual wire colors
 - Copy/Paste/Save/Load style
 
 ![](progress_preview.png)
