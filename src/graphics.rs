@@ -4,10 +4,9 @@ use eframe::epaint::{PathShape, Stroke, Color32};
 use emath::{pos2, vec2, Pos2};
 
 use crate::{
-    board::ActiveCircuitBoard,
     circuits::{pin::ControlPinPosition, transistor::TransistorType},
     vector::Vec2f,
-    PaintContext,
+    PaintContext, ui::editor::CircuitBoardEditor,
 };
 
 #[allow(clippy::too_many_arguments)] // TODO: cleanup
@@ -26,7 +25,7 @@ pub fn transistor(
         false => emitter,
     };
 
-    let thickness = ActiveCircuitBoard::WIRE_THICKNESS * ctx.screen.scale;
+    let thickness = CircuitBoardEditor::WIRE_THICKNESS * ctx.screen.scale;
 
     let collector_stroke = Stroke::new(thickness, collector);
     let base_stroke = Stroke::new(thickness, base);
@@ -104,7 +103,7 @@ pub fn inside_pin(
             transformer(pos2(0.95, 0.5) + center_off),
             transformer(pos2(1.5, 0.5) + center_off),
         ],
-        Stroke::new(ActiveCircuitBoard::WIRE_THICKNESS * scale, color),
+        Stroke::new(CircuitBoardEditor::WIRE_THICKNESS * scale, color),
     );
 
     if let Some(is_pico) = is_pico {
@@ -149,7 +148,7 @@ pub fn inside_pin(
                 ctl_transformer(pos2(0.5, 1.24)),
             ],
             Stroke::new(
-                ActiveCircuitBoard::WIRE_THICKNESS * scale,
+                CircuitBoardEditor::WIRE_THICKNESS * scale,
                 ctl_state,
             ),
         );
@@ -179,7 +178,7 @@ pub fn outside_pin(color: Color32, directional: bool, pico: Option<bool>, angle:
                 .into(),
         )
     };
-    let scaled_thickness = ActiveCircuitBoard::WIRE_THICKNESS * ctx.screen.scale;
+    let scaled_thickness = CircuitBoardEditor::WIRE_THICKNESS * ctx.screen.scale;
 
     ctx.paint
         .circle_filled(transformer(pos2(0.5, 0.5)), ctx.screen.scale * 0.25, color);

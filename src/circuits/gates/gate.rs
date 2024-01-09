@@ -4,7 +4,6 @@ use eframe::epaint::{Color32, Stroke};
 use emath::{pos2, vec2, Pos2};
 
 use crate::{
-    board::ActiveCircuitBoard,
     circuits::{
         props::{CircuitProperty, CircuitPropertyStore, RangedValue},
         *,
@@ -16,7 +15,7 @@ use crate::{
     state::SingleWireState,
     unwrap_option_or_return,
     vector::Vec2f,
-    Direction4, Mutex,
+    Direction4, Mutex, ui::editor::CircuitBoardEditor,
 };
 
 pub enum GateWireColors<'a> {
@@ -521,7 +520,7 @@ impl Gate2497 {
         ctx.paint.line_segment(
             [transformer(pos2(0.5, 0.5)), transformer(pos2(0.8, 0.5))],
             Stroke::new(
-                ActiveCircuitBoard::WIRE_THICKNESS * ctx.screen.scale,
+                CircuitBoardEditor::WIRE_THICKNESS * ctx.screen.scale,
                 in_colors[0],
             ),
         );
@@ -529,7 +528,7 @@ impl Gate2497 {
         ctx.paint.line_segment(
             [transformer(pos2(0.5, 2.5)), transformer(pos2(0.8, 2.5))],
             Stroke::new(
-                ActiveCircuitBoard::WIRE_THICKNESS * ctx.screen.scale,
+                CircuitBoardEditor::WIRE_THICKNESS * ctx.screen.scale,
                 in_colors[1],
             ),
         );

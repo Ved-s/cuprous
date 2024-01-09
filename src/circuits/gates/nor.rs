@@ -4,9 +4,8 @@ use eframe::epaint::{Color32, Stroke};
 use emath::{pos2, remap, Pos2};
 
 use crate::{
-    board::ActiveCircuitBoard,
     path::{PathItem, PathItemIterator},
-    vector::{Vec2f, Vec2u},
+    vector::{Vec2f, Vec2u}, ui::editor::CircuitBoardEditor,
 };
 
 use super::gate::{calc_size_from_inputs, GateImpl, GateWireColors};
@@ -71,7 +70,7 @@ impl GateImpl for Nor {
                 ctx.paint.line_segment(
                     [transformer(start), transformer(end)],
                     Stroke::new(
-                        ActiveCircuitBoard::WIRE_THICKNESS * ctx.screen.scale,
+                        CircuitBoardEditor::WIRE_THICKNESS * ctx.screen.scale,
                         wires.get(wire_index, ctx.style.wire_colors.false_color()),
                     ),
                 )

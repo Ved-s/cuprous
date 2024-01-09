@@ -4,10 +4,10 @@ use eframe::epaint::{Color32, Stroke};
 use emath::lerp;
 use parking_lot::Mutex;
 
-use crate::board::ActiveCircuitBoard;
 use crate::circuits::props::CircuitProperty;
 use crate::containers::FixedVec;
 use crate::pool::{PooledColor32Vec, PooledStateVec};
+use crate::ui::editor::CircuitBoardEditor;
 use crate::vector::Vec2f;
 use crate::wires::WireColors;
 use crate::{circuits::*, create_safe_prop_enums};
@@ -89,7 +89,7 @@ struct Bundler {
 
 impl Bundler {
     const SLEEVE_THICKNESS: f32 =
-        (ActiveCircuitBoard::WIRE_POINT_THICKNESS + ActiveCircuitBoard::WIRE_THICKNESS) / 2.0;
+        (CircuitBoardEditor::WIRE_POINT_THICKNESS + CircuitBoardEditor::WIRE_THICKNESS) / 2.0;
 
     const BUNDLER_COLOR: Color32 = Color32::from_gray(16);
 
@@ -171,7 +171,7 @@ impl Bundler {
                     transformer([body_x, io_y as f32 + 0.5].into()),
                 ],
                 Stroke::new(
-                    ActiveCircuitBoard::WIRE_THICKNESS * ctx.screen.scale,
+                    CircuitBoardEditor::WIRE_THICKNESS * ctx.screen.scale,
                     preceding_pin,
                 ),
             );
@@ -194,7 +194,7 @@ impl Bundler {
                     transformer([body_x, (io_y + off) as f32 + 0.5].into()),
                 ],
                 Stroke::new(
-                    ActiveCircuitBoard::WIRE_THICKNESS * ctx.screen.scale,
+                    CircuitBoardEditor::WIRE_THICKNESS * ctx.screen.scale,
                     remaining_pin,
                 ),
             );
@@ -216,7 +216,7 @@ impl Bundler {
                     transformer(Vec2u::new(io_x, io_y + off).convert(|v| v as f32 + 0.5)),
                     transformer([body_x, (io_y + off) as f32 + 0.5].into()),
                 ],
-                Stroke::new(ActiveCircuitBoard::WIRE_THICKNESS * ctx.screen.scale, io),
+                Stroke::new(CircuitBoardEditor::WIRE_THICKNESS * ctx.screen.scale, io),
             );
             ctx.paint.line_segment(
                 [
@@ -262,7 +262,7 @@ impl Bundler {
                 transformer([body_x, bundle_connect_y].into()),
             ],
             Stroke::new(
-                ActiveCircuitBoard::WIRE_THICKNESS * ctx.screen.scale,
+                CircuitBoardEditor::WIRE_THICKNESS * ctx.screen.scale,
                 vis.bundle,
             ),
         );
@@ -279,12 +279,12 @@ impl Bundler {
 
         let bundle_start_y = match vis.bundle_side {
             BundlePinSide::TopLeft => 0.980,
-            _ => 0.5 - ActiveCircuitBoard::WIRE_POINT_THICKNESS * 0.5,
+            _ => 0.5 - CircuitBoardEditor::WIRE_POINT_THICKNESS * 0.5,
         };
 
         let bundle_end_y = match vis.bundle_side {
             BundlePinSide::BottomRight => size.y as f32 - 1.0,
-            _ => size.y as f32 - 0.5 + ActiveCircuitBoard::WIRE_POINT_THICKNESS * 0.5,
+            _ => size.y as f32 - 0.5 + CircuitBoardEditor::WIRE_POINT_THICKNESS * 0.5,
         };
 
         ctx.paint.line_segment(
@@ -293,7 +293,7 @@ impl Bundler {
                 transformer([body_x, bundle_end_y].into()),
             ],
             Stroke::new(
-                ActiveCircuitBoard::WIRE_POINT_THICKNESS * ctx.screen.scale,
+                CircuitBoardEditor::WIRE_POINT_THICKNESS * ctx.screen.scale,
                 Self::BUNDLER_COLOR,
             ),
         );

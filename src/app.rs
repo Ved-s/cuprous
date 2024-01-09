@@ -13,7 +13,7 @@ use emath::{vec2, Align, Align2};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    board::{ActiveCircuitBoard, CircuitBoard, StoredCircuitBoard},
+    board::{EditableCircuitBoard, CircuitBoard, StoredCircuitBoard},
     circuits::{self, CircuitPreview, CircuitPreviewImpl},
     error::{ErrorList, ResultReport},
     evenly_spaced_out,
@@ -292,7 +292,7 @@ impl eframe::App for App {
 
                                         let board = boards.values().next().expect("Boards must exist!");
                                         self.editor.board =
-                                            ActiveCircuitBoard::new_main(board.board.clone());
+                                            EditableCircuitBoard::new_main(board.board.clone());
 
                                         discard_state = true;
                                     }
@@ -456,7 +456,7 @@ impl App {
             board.board.activate();
         }
 
-        let board = ActiveCircuitBoard::new_main(
+        let board = EditableCircuitBoard::new_main(
             ctx.boards
                 .read()
                 .values()

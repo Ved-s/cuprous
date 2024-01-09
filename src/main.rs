@@ -13,7 +13,7 @@ use std::{
 };
 
 use app::{SimulationContext, Style};
-use board::{ActiveCircuitBoard, CircuitDesignControl};
+use board::{EditableCircuitBoard, CircuitDesignControl};
 use cache::GLOBAL_STR_CACHE;
 use eframe::{
     egui::{self, Sense, Ui, ViewportBuilder},
@@ -31,7 +31,7 @@ use wasm_bindgen::{prelude::*, JsValue};
 mod pool;
 mod vector;
 
-use ui::editor::TileDrawBounds;
+use ui::editor::{TileDrawBounds, CircuitBoardEditor};
 use vector::{Vec2f, Vec2i, Vec2u};
 use wires::WirePart;
 
@@ -906,7 +906,7 @@ impl PastePreview {
         }
     }
 
-    pub fn draw(&self, board: &ActiveCircuitBoard, pos: Vec2i, ctx: &PaintContext) {
+    pub fn draw(&self, editor: &CircuitBoardEditor, pos: Vec2i, ctx: &PaintContext) {
         let rect = Rect::from_min_size(
             ctx.screen.world_to_screen_tile(pos).into(),
             (self.size.convert(|v| v as f32) * ctx.screen.scale).into(),
@@ -924,7 +924,7 @@ impl PastePreview {
                     length,
                     dir: wire.dir,
                 };
-                board.draw_wire_part(ctx, &part, Color32::from_gray(128))
+                editor.draw_wire_part(ctx, &part, Color32::from_gray(128))
             }
         }
 
@@ -942,7 +942,7 @@ impl PastePreview {
         }
     }
 
-    fn place(&self, board: &mut ActiveCircuitBoard, pos: Vec2i, errors: &mut ErrorList) {
+    fn place(&self, board: &mut EditableCircuitBoard, pos: Vec2i, errors: &mut ErrorList) {
         if self.circuits.iter().any(|(c, p)| {
             !board.can_place_circuit_at(p.describe().size, pos + c.pos.convert(|v| v as i32), None)
         }) {
