@@ -37,7 +37,7 @@ use crate::{
     },
     unwrap_option_or_continue, unwrap_option_or_return,
     vector::{Vec2f, Vec2i, Vec2u},
-    wires::{FoundWireNode, TileWires, Wire, WireNode, WirePart, WirePoint},
+    wires::{FoundWireNode, TileWires, Wire, WireNode, WirePart, WirePoint, WireColors},
     ArcString, Direction2, Direction4, DynStaticStr, PaintContext, PastePreview, RwLock,
 };
 
@@ -471,7 +471,7 @@ impl EditableCircuitBoard {
     /* #region Wire manipulations */
 
     /// Returns placed wire id
-    pub fn place_wire_part(&mut self, part: WirePart, lock_sim: bool) -> Option<usize> {
+    pub fn place_wire_part(&mut self, part: WirePart, lock_sim: bool, colors: WireColors) -> Option<usize> {
         let part = unwrap_option_or_return!(self.optimize_wire_part(part), None);
 
         let sim_lock = { self.board.sim_lock.clone() };
@@ -513,7 +513,13 @@ impl EditableCircuitBoard {
         };
 
         let new_wire = match wires_crossed.len() {
-            0 => self.board.create_wire(),
+            0 => {
+                let id = self.board.create_wire();
+                if let Some(wire) = self.board.wires.write().get_mut(id) {
+                    wire.colors = colors;
+                }
+                id
+            },
             1 => *wires_crossed.iter().next().unwrap(),
             _ => {
                 let main_wire = {

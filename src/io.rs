@@ -158,6 +158,8 @@ pub struct WirePartCopyData {
     // Bottom-right position
     pub pos: Vec2u,
     pub length: u32,
+    #[serde(default)]
+    pub colors: WireColors,
     pub dir: Direction2
 }
 

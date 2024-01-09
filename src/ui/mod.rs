@@ -1,4 +1,4 @@
-use std::{any::TypeId, collections::HashSet, hash::Hash, ops::Deref, sync::Arc};
+use std::{any::TypeId, collections::HashSet, hash::Hash, ops::Deref, sync::Arc, marker::PhantomData};
 
 use eframe::{
     egui::{
@@ -22,22 +22,22 @@ use crate::{
     DynStaticStr, PaintContext, RwLock,
 };
 
-pub enum InventoryItemGroup<I> {
-    SingleItem(Box<dyn InventoryItem<I>>),
-    Group(Vec<Box<dyn InventoryItem<I>>>),
+pub enum InventoryItemGroup<I, P> {
+    SingleItem(Box<dyn InventoryItem<I, P>>),
+    Group(Vec<Box<dyn InventoryItem<I, P>>>),
 }
 
-pub trait InventoryItem<I> {
+pub trait InventoryItem<I, P> {
     fn id(&self) -> I;
-    fn draw(&self, ctx: &PaintContext);
+    fn draw(&self, pass: &P, ctx: &PaintContext);
 }
 
-pub struct Inventory<'a, I>
+pub struct Inventory<'a, I, P>
 where
     I: Eq + Clone + Hash + Send + Sync + 'static,
 {
     selected: &'a mut Option<I>,
-    groups: &'a [InventoryItemGroup<I>],
+    groups: &'a [InventoryItemGroup<I, P>],
     item_size: Vec2,
     item_margin: Margin,
     margin: Margin,
@@ -61,11 +61,11 @@ const NUMBER_KEYS: [Key; 10] = [
     Key::Num9,
 ];
 
-impl<'a, I> Inventory<'a, I>
+impl<'a, I, P> Inventory<'a, I, P>
 where
     I: Eq + Clone + Hash + Send + Sync + 'static,
 {
-    pub fn new(selected: &'a mut Option<I>, groups: &'a [InventoryItemGroup<I>]) -> Self {
+    pub fn new(selected: &'a mut Option<I>, groups: &'a [InventoryItemGroup<I, P>]) -> Self {
         Self {
             selected,
             groups,
@@ -76,7 +76,7 @@ where
     }
 
     fn get_group_icon_item_id(
-        group: &[Box<dyn InventoryItem<I>>],
+        group: &[Box<dyn InventoryItem<I, P>>],
         ui: &Ui,
         self_id: Id,
     ) -> Option<usize> {
@@ -170,6 +170,7 @@ where
     fn ui(
         mut self,
         ui: &mut eframe::egui::Ui,
+        pass: &P,
         style: &Style,
         name_resolver: impl Fn(&I) -> Option<DynStaticStr>,
     ) -> eframe::egui::Response {
@@ -325,7 +326,7 @@ where
                         }
                         let rect = apply_margin_to_rect(rect, self.item_margin);
                         let item_ctx = paint_ctx.with_rect(rect);
-                        item.draw(&item_ctx);
+                        item.draw(pass, &item_ctx);
                         x += full_item_size.x;
                     } else {
                         let group_rect = Rect::from_min_size(
@@ -380,7 +381,7 @@ where
                             }
                             let rect = apply_margin_to_rect(rect, self.item_margin);
                             let item_ctx = paint_ctx.with_rect(rect);
-                            item.draw(&item_ctx);
+                            item.draw(pass, &item_ctx);
                             x += full_item_size.x;
                         }
                     }
@@ -413,7 +414,7 @@ where
                     }
                     let rect = apply_margin_to_rect(rect, self.item_margin);
                     let item_ctx = paint_ctx.with_rect(rect);
-                    item.draw(&item_ctx);
+                    item.draw(pass, &item_ctx);
                     x += full_item_size.x;
                 }
             }
@@ -445,36 +446,37 @@ where
     }
 }
 
-pub struct PaintableInventoryItem<I, F>
+pub struct PaintableInventoryItem<I, P, F>
 where
     I: Clone,
-    F: Fn(&PaintContext),
+    F: Fn(&P, &PaintContext),
 {
     id: I,
     painter: F,
+    _phantom: PhantomData<P>
 }
 
-impl<I, F> PaintableInventoryItem<I, F>
+impl<I, P, F> PaintableInventoryItem<I, P, F>
 where
     I: Clone,
-    F: Fn(&PaintContext),
+    F: Fn(&P, &PaintContext),
 {
     pub fn new(id: I, painter: F) -> Self {
-        Self { id, painter }
+        Self { id, painter, _phantom: PhantomData }
     }
 }
 
-impl<I, F> InventoryItem<I> for PaintableInventoryItem<I, F>
+impl<I, P, F> InventoryItem<I, P> for PaintableInventoryItem<I, P, F>
 where
     I: Clone,
-    F: Fn(&PaintContext),
+    F: Fn(&P, &PaintContext),
 {
     fn id(&self) -> I {
         self.id.clone()
     }
 
-    fn draw(&self, ctx: &PaintContext) {
-        (self.painter)(ctx);
+    fn draw(&self, pass: &P, ctx: &PaintContext) {
+        (self.painter)(pass, ctx);
     }
 }
 

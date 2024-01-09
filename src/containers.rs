@@ -245,6 +245,10 @@ impl<T> FixedVec<T> {
         }
     }
 
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> {
+        self.inner.iter_mut().filter_map(|v| v.as_mut())
+    }
+
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }

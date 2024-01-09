@@ -695,7 +695,7 @@ impl App {
                     ui.ctx().set_style(style_arc);
                 });
                 CollapsingHeader::new("Default wire colors").show(ui, |ui| {
-                    self.style.wire_colors.ui(ui);
+                    self.style.wire_colors.ui(None, ui);
                 });
             });
     }

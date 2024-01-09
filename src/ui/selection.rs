@@ -271,12 +271,12 @@ impl<I: Clone> SelectionInventoryItem<I> {
     }
 }
 
-impl<I: Clone> InventoryItem<I> for SelectionInventoryItem<I> {
+impl<I: Clone, P> InventoryItem<I, P> for SelectionInventoryItem<I> {
     fn id(&self) -> I {
         self.id.clone()
     }
 
-    fn draw(&self, ctx: &PaintContext) {
+    fn draw(&self, _pass: &P, ctx: &PaintContext) {
         let rect = ctx.rect.shrink2(ctx.rect.size() / 5.0);
         ctx.paint
             .rect_filled(rect, Rounding::ZERO, ctx.style.selection_fill_color());

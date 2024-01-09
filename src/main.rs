@@ -924,7 +924,7 @@ impl PastePreview {
                     length,
                     dir: wire.dir,
                 };
-                editor.draw_wire_part(ctx, &part, Color32::from_gray(128))
+                editor.draw_wire_part(ctx, &part, wire.colors.none.or(wire.colors.r#false).unwrap_or(Color32::from_gray(128)))
             }
         }
 
@@ -960,7 +960,7 @@ impl PastePreview {
                     length,
                     dir: wire.dir,
                 };
-                if let Some(id) = board.place_wire_part(part, false) {
+                if let Some(id) = board.place_wire_part(part, false, wire.colors) {
                     wire_ids.insert(id);
                 }
             }

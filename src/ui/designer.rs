@@ -207,7 +207,7 @@ pub struct Designer {
     pan_zoom: PanAndZoom,
     selected_id: Option<SelectedItemId>,
 
-    inventory: Box<[InventoryItemGroup<SelectedItemId>]>,
+    inventory: Box<[InventoryItemGroup<SelectedItemId, ()>]>,
     selection: Selection<DesignerSelectionImpl>,
 
     selected_pin_dir: Option<Direction4>,
@@ -229,7 +229,7 @@ impl Designer {
         }));
 
         let rect_visuals_clone = rect_visuals.clone();
-        let rect_painter = move |ctx: &PaintContext| {
+        let rect_painter = move |_: &(), ctx: &PaintContext| {
             let rect_visuals = rect_visuals_clone.read().scaled_by(ctx.rect.width() * 0.20);
             let rect = ctx.rect.shrink2(ctx.rect.size() / 5.0);
 
@@ -733,6 +733,7 @@ impl Designer {
 
         let inv_resp = Inventory::new(&mut self.selected_id, &self.inventory).ui(
             &mut ui,
+            &(),
             style,
             |id| match id {
                 SelectedItemId::Selection => Some("Selection".into()),

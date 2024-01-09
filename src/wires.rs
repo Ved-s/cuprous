@@ -76,33 +76,64 @@ impl WireColors {
         self.bundle.unwrap_or(Self::BUNDLE)
     }
 
-    pub fn ui(&mut self, ui: &mut Ui) {
-        Grid::new("wire_colors_ui").num_columns(2).show(ui, |ui| {
-            macro_rules! color_row {
+    /// Returns changes
+    pub fn ui(&mut self, default: Option<WireColors>, ui: &mut Ui) -> WireColorChanges {
+        Grid::new("wire_colors_ui")
+            .num_columns(2)
+            .show(ui, |ui| {
+                macro_rules! color_row {
                 ($name:literal, $field:ident) => {
-                    ui.label($name);
-                    let mut color = paste::paste!(self. [<$field _color>]());
-                    if ui.color_edit_button_srgba(&mut color).changed() {
-                        self.$field = Some(color);
-                    }
-                    if self.$field.is_some() {
-                        if ui.button("x").clicked() {
-                            self.$field = None;
+                    {
+                        ui.label($name);
+                        let mut color = match self.$field {
+                            None => match default {
+                                None => paste::paste!(self. [<$field _color>]()),
+                                Some(d) => paste::paste!(d. [<$field _color>]()),
+                            },
+                            Some(c) => c
+                        };
+                        let mut changed = false;
+                        if ui.color_edit_button_srgba(&mut color).changed() {
+                            self.$field = Some(color);
+                            changed = true;
                         }
+                        if self.$field.is_some() {
+                            if ui.button("x").clicked() {
+                                self.$field = None;
+                                changed = true;
+                            }
+                        }
+                        ui.end_row();
+                        changed
                     }
-                    ui.end_row();
                 };
             }
-
-            color_row!("None", none);
-            color_row!("False", r#false);
-            color_row!("True", r#true);
-            color_row!("Error", error);
-            color_row!("Bundle", bundle);
-        });
+                WireColorChanges {
+                    none: color_row!("None", none),
+                    r#false: color_row!("False", r#false),
+                    r#true: color_row!("True", r#true),
+                    error: color_row!("Error", error),
+                    bundle: color_row!("Bundle", bundle),
+                }
+            })
+            .inner
     }
 }
 
+#[derive(Clone, Copy)]
+pub struct WireColorChanges {
+    pub none: bool,
+    pub r#false: bool,
+    pub r#true: bool,
+    pub error: bool,
+    pub bundle: bool,
+}
+
+impl WireColorChanges {
+    pub fn is_empty(self) -> bool {
+        !(self.none || self.r#false || self.r#true || self.error || self.bundle)
+    }
+}
 #[derive(Debug, Default)]
 pub struct Wire {
     pub id: usize,

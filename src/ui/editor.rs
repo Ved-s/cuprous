@@ -1,11 +1,11 @@
-use std::{collections::HashSet, f32::consts::PI, ops::Deref, sync::Arc, num::NonZeroU32};
+use std::{collections::{HashSet, BTreeSet}, f32::consts::PI, num::NonZeroU32, ops::Deref, sync::Arc};
 
 use eframe::{
     egui::{
-        self, CollapsingHeader, Event, Frame, Id, Key, Margin, PointerButton, ScrollArea, Sense,
-        TextEdit, TextStyle, Ui, WidgetText, FontSelection,
+        self, CollapsingHeader, Event, FontSelection, Frame, Id, Key, Margin, PointerButton,
+        ScrollArea, Sense, TextEdit, TextStyle, Ui, WidgetText,
     },
-    epaint::{Color32, PathShape, Rounding, Shape, Stroke, FontId, TextShape},
+    epaint::{Color32, FontId, PathShape, Rounding, Shape, Stroke, TextShape},
 };
 use emath::{pos2, vec2, Align2, Pos2, Rangef, Rect, Vec2};
 use num_traits::Zero;
@@ -13,17 +13,21 @@ use num_traits::Zero;
 use crate::{
     app::{SimulationContext, Style},
     board::{
-        EditableCircuitBoard, BoardDesignProvider, BoardObjectSelectionImpl, CircuitBoard,
+        BoardDesignProvider, BoardObjectSelectionImpl, CircuitBoard, EditableCircuitBoard,
         SelectedBoardObject, SelectedItem, StoredCircuitBoard,
     },
     circuits::{
         props::{CircuitPropertyImpl, CircuitPropertyStore},
-        CircuitPreview, CircuitNode, CircuitStateContext,
+        CircuitNode, CircuitPreview, CircuitStateContext,
     },
+    containers::ChunksLookaround,
     error::{ErrorList, ResultReport},
+    ext::IteratorEqExt,
     string::StringFormatterState,
     vector::{Vec2f, Vec2i},
-    ArcString, Direction4, DynStaticStr, PaintContext, PanAndZoom, PastePreview, Screen, wires::{WirePart, WireNode}, Direction2, containers::ChunksLookaround,
+    wires::{WireNode, WirePart, WireColors},
+    ArcString, Direction2, Direction4, DynStaticStr, PaintContext, PanAndZoom, PastePreview,
+    Screen,
 };
 
 use super::{
@@ -32,7 +36,6 @@ use super::{
     selection::{Selection, SelectionInventoryItem},
     side_panel::{PanelSide, SidePanel},
     DoubleSelectableLabel, Inventory, InventoryItem, InventoryItemGroup, PropertyEditor,
-    PropertyStoreItem,
 };
 
 #[derive(Debug, PartialEq, Eq, Clone, Hash)]
@@ -78,6 +81,16 @@ struct ComponentsUiResponse {
     designer_request: Option<Designer>,
 }
 
+#[derive(PartialEq, Eq)]
+enum SelectedObjectId {
+    Circuit,
+    Wire,
+}
+
+struct InventoryItemDrawData {
+    false_color_override: Option<Color32>
+}
+
 pub struct CircuitBoardEditor {
     pan_zoom: PanAndZoom,
     pub board: EditableCircuitBoard,
@@ -86,13 +99,14 @@ pub struct CircuitBoardEditor {
     errors: ErrorList,
 
     paste: Option<Arc<PastePreview>>,
-    inventory: Arc<[InventoryItemGroup<SelectedItemId>]>,
+    inventory: Arc<[InventoryItemGroup<SelectedItemId, InventoryItemDrawData>]>,
     selected_id: Option<SelectedItemId>,
 
     props_ui: PropertyEditor,
     sim: Arc<SimulationContext>,
 
     wire_drag_pos: Option<Vec2i>,
+    wire_colors: WireColors,
     pub selection: Selection<BoardObjectSelectionImpl>,
 }
 
@@ -116,13 +130,13 @@ static COMPONENT_BUILTIN_ORDER: &[&str] = &[
 ];
 
 struct WireInventoryItem {}
-impl InventoryItem<SelectedItemId> for WireInventoryItem {
+impl InventoryItem<SelectedItemId, InventoryItemDrawData> for WireInventoryItem {
     fn id(&self) -> SelectedItemId {
         SelectedItemId::Wires
     }
 
-    fn draw(&self, ctx: &PaintContext) {
-        let color = ctx.style.wire_colors.false_color();
+    fn draw(&self, pass: &InventoryItemDrawData, ctx: &PaintContext) {
+        let color = pass.false_color_override.unwrap_or_else(|| ctx.style.wire_colors.false_color());
 
         let rect1 = Rect::from_center_size(
             ctx.rect.lerp_inside([0.2, 0.2].into()),
@@ -156,12 +170,12 @@ struct CircuitInventoryItem {
     preview: Arc<CircuitPreview>,
     id: DynStaticStr,
 }
-impl InventoryItem<SelectedItemId> for CircuitInventoryItem {
+impl<P> InventoryItem<SelectedItemId, P> for CircuitInventoryItem {
     fn id(&self) -> SelectedItemId {
         SelectedItemId::Circuit(self.id.clone())
     }
 
-    fn draw(&self, ctx: &PaintContext) {
+    fn draw(&self, _pass: &P, ctx: &PaintContext) {
         let size = self.preview.describe().size.convert(|v| v as f32);
         let scale = Vec2f::from(ctx.rect.size()) / size;
         let scale = scale.x.min(scale.y);
@@ -203,7 +217,6 @@ fn rotated_rect_shape(rect: Rect, angle: f32, origin: Pos2) -> Vec<Pos2> {
 }
 
 impl CircuitBoardEditor {
-
     pub const WIRE_THICKNESS: f32 = 0.2;
     pub const WIRE_POINT_THICKNESS: f32 = 0.35;
 
@@ -215,7 +228,7 @@ impl CircuitBoardEditor {
                 Box::new(CircuitInventoryItem {
                     preview: preview.clone(),
                     id: preview.imp.type_name(),
-                }) as Box<dyn InventoryItem<SelectedItemId>>
+                }) as Box<dyn InventoryItem<SelectedItemId, InventoryItemDrawData>>
             })
             .collect();
 
@@ -237,7 +250,8 @@ impl CircuitBoardEditor {
             props_ui: PropertyEditor::new(),
             sim: ctx.clone(),
             wire_drag_pos: None,
-            selection: Selection::default()
+            wire_colors: Default::default(),
+            selection: Selection::default(),
         }
     }
 
@@ -326,9 +340,11 @@ impl CircuitBoardEditor {
                                 SelectedBoardObject::WirePart { pos, dir } => {
                                     if let Some(w) = self.board.find_wire_node(*pos, (*dir).into())
                                     {
+                                        let colors = self.board.board.wires.read().get(w.wire).map(|w| w.colors).unwrap_or_default();
                                         copy.wires.push(crate::io::WirePartCopyData {
                                             pos: (*pos - min_pos).convert(|v| v as u32),
                                             length: w.distance.get(),
+                                            colors,
                                             dir: *dir,
                                         })
                                     }
@@ -491,7 +507,7 @@ impl CircuitBoardEditor {
             &ctx,
             matches!(&selected_item, Some(SelectedItem::Selection)),
         );
-        
+
         ctx.draw_chunks(
             tile_bounds,
             &self.board.wire_nodes,
@@ -544,78 +560,8 @@ impl CircuitBoardEditor {
 
     pub fn ui_update(&mut self, style: &Style, ui: &mut Ui) -> EditorResponse {
         let components_response = self.components_ui(style, ui);
+        self.properties_ui(style, ui);
 
-        if let Some(SelectedItem::Circuit(p)) = self.selected_item() {
-            let props = [((), &p.props).into()];
-            let changed = Self::properties_ui(&mut self.props_ui, ui, Some(props))
-                .is_some_and(|v| !v.is_empty());
-            if changed {
-                p.redescribe();
-            }
-        } else if !self.selection.selection.is_empty() {
-            let selected_circuit_props = self.selection.selection.iter().filter_map(|o| match o {
-                SelectedBoardObject::Circuit { id } => Some(*id),
-                _ => None,
-            });
-            let board = self.board.board.clone();
-            let circuits = board.circuits.read();
-            let stores: Vec<_> = selected_circuit_props
-                .filter_map(|id| circuits.get(id).map(|c| (id, &c.props).into()))
-                .collect();
-
-            let response = Self::properties_ui(&mut self.props_ui, ui, Some(stores));
-
-            if let Some(changes) = response {
-                for property in changes {
-                    let str_arc = property
-                        .new
-                        .downcast_ref::<ArcString>()
-                        .map(|s| s.get_arc());
-                    let mut formatter =
-                        str_arc.as_ref().map(|str| StringFormatterState::new(str));
-                    if let Some(formatter) = &mut formatter {
-                        let affected_circuits: HashSet<_> = HashSet::from_iter(
-                            property.affected_values.iter().map(|(id, _)| *id),
-                        );
-
-                        for circuit in circuits.iter() {
-                            if affected_circuits.contains(&circuit.id) {
-                                continue;
-                            }
-                            circuit.props.read(&property.id, |s: &ArcString| {
-                                formatter.add_evironment_string(&s.get_str());
-                            });
-                        }
-
-                        let mut affected_circuits: Vec<_> = property
-                            .affected_values
-                            .iter()
-                            .filter_map(|(id, _)| circuits.get(*id).cloned())
-                            .collect();
-                        affected_circuits.sort_by_key(|c| c.id);
-
-                        for circuit in affected_circuits {
-                            circuit.props.write(&property.id, |s: &mut ArcString| {
-                                formatter.process_string(s.get_mut());
-                            });
-                        }
-                    }
-                    for (circuit, old) in property.affected_values {
-                        self.board.circuit_property_changed(
-                            circuit,
-                            &property.id,
-                            old.as_ref(),
-                        );
-                    }
-                }
-            }
-        } else {
-            Self::properties_ui(
-                &mut self.props_ui,
-                ui,
-                None::<[PropertyStoreItem<'_, ()>; 1]>,
-            );
-        }
         {
             let rect = crate::ui::side_panel::remaining_rect(ui).shrink(10.0);
             let mut ui = ui.child_ui(rect, *ui.layout());
@@ -630,8 +576,13 @@ impl CircuitBoardEditor {
                 self.selection.clear();
             }
 
+            let draw_data = InventoryItemDrawData {
+                false_color_override: self.wire_colors.r#false,
+            };
+
             Inventory::new(&mut self.selected_id, &self.inventory).ui(
                 &mut ui,
+                &draw_data,
                 style,
                 |id| match id {
                     SelectedItemId::Wires => Some("Wires".into()),
@@ -719,7 +670,8 @@ impl CircuitBoardEditor {
 
         let mouse_tile_pos_i = mouse_tile_pos.map(|p| p.convert(|v| v.floor() as i32));
 
-        let drawing_wire = EditableCircuitBoard::calc_wire_part(self.wire_drag_pos, mouse_tile_pos_i);
+        let drawing_wire =
+            EditableCircuitBoard::calc_wire_part(self.wire_drag_pos, mouse_tile_pos_i);
         if let Some(ref part) = drawing_wire {
             self.draw_wire_part(ctx, part, Color32::GRAY);
         }
@@ -737,7 +689,7 @@ impl CircuitBoardEditor {
             self.wire_drag_pos = None;
 
             if let Some(part) = drawing_wire {
-                self.board.place_wire_part(part, true);
+                self.board.place_wire_part(part, true, self.wire_colors);
             }
         }
 
@@ -815,7 +767,15 @@ impl CircuitBoardEditor {
 
             if interaction.clicked_by(eframe::egui::PointerButton::Primary) {
                 fn empty_handler(_: &mut EditableCircuitBoard, _: usize) {}
-                self.board.place_circuit(place_pos, true, p.as_ref(), None, false, None, &mut empty_handler);
+                self.board.place_circuit(
+                    place_pos,
+                    true,
+                    p.as_ref(),
+                    None,
+                    false,
+                    None,
+                    &mut empty_handler,
+                );
             }
         } else if let SelectedItem::Paste(p) = selected {
             let size = p.size;
@@ -1416,39 +1376,6 @@ impl CircuitBoardEditor {
         })
     }
 
-    fn properties_ui<'a, T: Clone + 'static>(
-        editor: &'a mut PropertyEditor,
-        ui: &mut Ui,
-        props: Option<impl IntoIterator<Item = PropertyStoreItem<'a, T>>>,
-    ) -> Option<Vec<crate::ui::ChangedProperty<T>>> {
-        let style = ui.style().clone();
-        let tabs = if props.is_some() { 1 } else { 0 };
-        SidePanel::new(PanelSide::Right, "prop-ui")
-            .frame(
-                Frame::side_top_panel(&style)
-                    .rounding(Rounding {
-                        nw: 5.0,
-                        ne: 0.0,
-                        sw: 5.0,
-                        se: 0.0,
-                    })
-                    .outer_margin(Margin::symmetric(0.0, 8.0))
-                    .inner_margin(Margin::symmetric(5.0, 5.0))
-                    .stroke(style.visuals.window_stroke),
-            )
-            .show_separator_line(false)
-            .default_tab(Some(0))
-            .size_range(Rangef::new(120.0, f32::MAX))
-            .show(
-                ui,
-                tabs,
-                |_| "Properties editor".into(),
-                |_, ui| props.map(|props| editor.ui(ui, props).changes),
-            )
-            .inner
-            .flatten()
-    }
-
     fn components_ui(&mut self, style: &Style, ui: &mut Ui) -> ComponentsUiResponse {
         fn builtin_ui(this: &mut CircuitBoardEditor, style: &Style, ui: &mut Ui) {
             let font = TextStyle::Monospace.resolve(ui.style());
@@ -1679,5 +1606,174 @@ impl CircuitBoardEditor {
             )
             .inner
             .unwrap_or_default()
+    }
+
+    fn properties_ui(&mut self, style: &Style, ui: &mut Ui) {
+        let selected_item = self.selected_item();
+        let selected_item = if selected_item
+            .as_ref()
+            .is_some_and(|s| matches!(s, SelectedItem::Circuit(_) | SelectedItem::Wire))
+        {
+            selected_item
+        } else {
+            None
+        };
+
+        let selected_object = selected_item
+            .is_none()
+            .then(|| {
+                self.selection
+                    .iter()
+                    .map(|s| match s {
+                        SelectedBoardObject::WirePart { .. } => SelectedObjectId::Wire,
+                        SelectedBoardObject::Circuit { .. } => SelectedObjectId::Circuit,
+                    })
+                    .same()
+            })
+            .flatten();
+
+        let tabs = if selected_item.is_none() && selected_object.is_none() {
+            0
+        } else {
+            1
+        };
+        let egui_style = ui.style().clone();
+        SidePanel::new(PanelSide::Right, "prop-ui")
+            .frame(
+                Frame::side_top_panel(&egui_style)
+                    .rounding(Rounding {
+                        nw: 5.0,
+                        ne: 0.0,
+                        sw: 5.0,
+                        se: 0.0,
+                    })
+                    .outer_margin(Margin::symmetric(0.0, 8.0))
+                    .inner_margin(Margin::symmetric(5.0, 5.0))
+                    .stroke(egui_style.visuals.window_stroke),
+            )
+            .show_separator_line(false)
+            .default_tab(Some(0))
+            .size_range(Rangef::new(120.0, f32::MAX))
+            .show(
+                ui,
+                tabs,
+                |_| "Properties editor".into(),
+                |_, ui| {
+                    if let Some(item) = selected_item {
+                        match item {
+                            SelectedItem::Selection | SelectedItem::Paste(_) => unreachable!(),
+                            SelectedItem::Circuit(p) => {
+                                let props = [((), &p.props).into()];
+                                let changed = !self.props_ui.ui(ui, props).changes.is_empty();
+                                if changed {
+                                    p.redescribe();
+                                }
+                            }
+                            SelectedItem::Wire => Self::wire_color_properties(style, ui, [&mut self.wire_colors]),
+                        }
+                    } else if let Some(obj) = selected_object {
+                        match obj {
+                            SelectedObjectId::Circuit => self.selected_circuit_properties(ui),
+                            SelectedObjectId::Wire => {
+                                let mut wire_ids = BTreeSet::new();
+                                for object in self.selection.selection.iter() {
+                                    let (pos, dir) = match object {
+                                        SelectedBoardObject::WirePart { pos, dir } => (pos, dir),
+                                         _ => continue,
+                                    };
+                                    let wire = self.board.wires_at(*pos).dir(Direction4::from(*dir));
+                                    let wire = unwrap_option_or_continue!(wire);
+                                    wire_ids.insert(wire);
+                                }
+
+                                let wires = &mut self.board.board.wires.write();
+                                let iter = wires.iter_mut().filter(|w| wire_ids.contains(&w.id)).map(|w| &mut w.colors);
+                                Self::wire_color_properties(style, ui, iter);
+                            },
+                        }
+                    }
+                },
+            );
+    }
+
+    fn wire_color_properties<'a>(style: &Style, ui: &mut Ui, props: impl IntoIterator<Item = &'a mut WireColors>) {
+        let mut props = props.into_iter();
+        let first = props.next();
+        let first = unwrap_option_or_return!(first);
+
+        let changes = first.ui(Some(style.wire_colors), ui);
+
+        if !changes.is_empty() {
+            let value = *first;
+            for prop in props {
+                if changes.none {
+                    prop.none = value.none;
+                }
+                if changes.r#false {
+                    prop.r#false = value.r#false;
+                }
+                if changes.r#true {
+                    prop.r#true = value.r#true;
+                }
+                if changes.error {
+                    prop.error = value.error;
+                }
+                if changes.bundle {
+                    prop.bundle = value.bundle;
+                }
+            }
+        }
+    }
+
+    fn selected_circuit_properties(&mut self, ui: &mut Ui) {
+        let selected_circuit_props = self.selection.selection.iter().filter_map(|o| match o {
+            SelectedBoardObject::Circuit { id } => Some(*id),
+            _ => None,
+        });
+        let board = self.board.board.clone();
+        let circuits = board.circuits.read();
+        let stores: Vec<_> = selected_circuit_props
+            .filter_map(|id| circuits.get(id).map(|c| (id, &c.props).into()))
+            .collect();
+
+        let response = self.props_ui.ui(ui, stores);
+
+        for property in response.changes {
+            let str_arc = property
+                .new
+                .downcast_ref::<ArcString>()
+                .map(|s| s.get_arc());
+            let mut formatter = str_arc.as_ref().map(|str| StringFormatterState::new(str));
+            if let Some(formatter) = &mut formatter {
+                let affected_circuits: HashSet<_> =
+                    HashSet::from_iter(property.affected_values.iter().map(|(id, _)| *id));
+
+                for circuit in circuits.iter() {
+                    if affected_circuits.contains(&circuit.id) {
+                        continue;
+                    }
+                    circuit.props.read(&property.id, |s: &ArcString| {
+                        formatter.add_evironment_string(&s.get_str());
+                    });
+                }
+
+                let mut affected_circuits: Vec<_> = property
+                    .affected_values
+                    .iter()
+                    .filter_map(|(id, _)| circuits.get(*id).cloned())
+                    .collect();
+                affected_circuits.sort_by_key(|c| c.id);
+
+                for circuit in affected_circuits {
+                    circuit.props.write(&property.id, |s: &mut ArcString| {
+                        formatter.process_string(s.get_mut());
+                    });
+                }
+            }
+            for (circuit, old) in property.affected_values {
+                self.board
+                    .circuit_property_changed(circuit, &property.id, old.as_ref());
+            }
+        }
     }
 }
