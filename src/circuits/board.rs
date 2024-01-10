@@ -94,8 +94,7 @@ impl Board {
 
             let rect = ctx.rect.shrink(2.0);
             let galley = WidgetText::from(s)
-                .into_galley(ctx.ui, Some(true), rect.width(), TextStyle::Monospace)
-                .galley;
+                .into_galley(ctx.ui, Some(true), rect.width(), TextStyle::Monospace);
 
             let pos = pos2(
                 rect.left() + (rect.width() - galley.size().x) * 0.5,
@@ -107,6 +106,7 @@ impl Board {
                 galley,
                 underline: Stroke::NONE,
                 override_text_color: Some(Color32::WHITE),
+                fallback_color: Color32::WHITE,
                 angle: 0.0,
             })
         };
@@ -318,8 +318,7 @@ impl CircuitImpl for Board {
 
             let rect = ctx.rect.shrink(2.0);
             let galley = WidgetText::from(s)
-                .into_galley(ctx.ui, Some(true), rect.width(), TextStyle::Monospace)
-                .galley;
+                .into_galley(ctx.ui, Some(true), rect.width(), TextStyle::Monospace);
 
             let pos = pos2(
                 rect.left() + (rect.width() - galley.size().x) * 0.5,
@@ -331,6 +330,7 @@ impl CircuitImpl for Board {
                 galley,
                 underline: Stroke::NONE,
                 override_text_color: Some(Color32::WHITE),
+                fallback_color: Color32::WHITE,
                 angle: 0.0,
             })
         };

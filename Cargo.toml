@@ -7,8 +7,8 @@ edition = "2021"
 bezier-nd = "0.5.0"
 bimap = "0.6.3"
 cfg-if = "1.0.0"
-eframe = { version = "0.24.1", features = ["persistence"] }
-emath = "0.24.1"
+eframe = { version = "0.25.0", features = ["persistence"] }
+emath = "0.25.0"
 geo-nd = "0.5.0"
 num-traits = "0.2.17"
 object-pool = "0.5.4"

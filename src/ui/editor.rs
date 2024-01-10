@@ -1221,11 +1221,13 @@ impl CircuitBoardEditor {
                     visual.window_fill.linear_multiply(1.1),
                     visual.window_stroke,
                 );
+                let color = visual.text_color();
                 ctx.paint.add(TextShape {
                     pos,
-                    galley: galley.galley,
+                    galley,
                     underline: Stroke::NONE,
-                    override_text_color: Some(visual.text_color()),
+                    override_text_color: Some(color),
+                    fallback_color: color,
                     angle: 0.0,
                 });
             }

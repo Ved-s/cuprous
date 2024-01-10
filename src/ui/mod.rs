@@ -247,8 +247,7 @@ where
                         Some(false),
                         f32::INFINITY,
                         FontSelection::Style(TextStyle::Monospace),
-                    )
-                    .galley;
+                    );
                 let inv_width = rect.width();
                 let size = galley.rect.size() + vec2(12.0, 6.0);
                 let width_diff = size.x - (inv_width - 3.0);
@@ -268,11 +267,13 @@ where
                     ui.style().visuals.window_stroke,
                 );
 
+                let color = ui.style().visuals.text_color();
                 paint.add(TextShape {
                     pos: rect.min + vec2(6.0, 3.0),
                     galley,
                     underline: Stroke::NONE,
-                    override_text_color: Some(ui.style().visuals.text_color()),
+                    override_text_color: Some(color),
+                    fallback_color: color,
                     angle: 0.0,
                 });
             }
@@ -728,7 +729,14 @@ impl Widget for DoubleSelectableLabel {
                 ui.painter().rect(rect, visuals.rounding, fill, stroke);
             }
 
-            text.paint_with_visuals(ui.painter(), text_pos, &visuals);
+            ui.painter().add(TextShape {
+                pos: text_pos,
+                galley: text,
+                underline: Stroke::NONE,
+                fallback_color: visuals.fg_stroke.color,
+                override_text_color: Some(visuals.fg_stroke.color),
+                angle: 0.0,
+            });
         }
 
         response

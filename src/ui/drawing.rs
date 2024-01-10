@@ -239,11 +239,13 @@ pub fn draw_pin_names<'a>(
             visual.window_fill.linear_multiply(0.6),
             visual.window_stroke,
         );
+        let color = visual.text_color();
         ctx.paint.add(TextShape {
             pos: textpos,
-            galley: galley.galley,
+            galley,
             underline: Stroke::NONE,
-            override_text_color: Some(visual.text_color()),
+            override_text_color: Some(color),
+            fallback_color: color,
             angle,
         });
     }

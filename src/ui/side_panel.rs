@@ -131,7 +131,6 @@ impl SidePanel {
                         f32::INFINITY,
                         FontSelection::Style(TextStyle::Monospace),
                     )
-                    .galley
             })
             .collect();
         let mut result = None;
@@ -413,6 +412,7 @@ impl SidePanel {
                 galley: tab_name.clone(),
                 underline: Stroke::NONE,
                 override_text_color: Some(text_color),
+                fallback_color: text_color,
                 angle: textangle,
             };
 
