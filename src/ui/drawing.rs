@@ -2,9 +2,9 @@ use std::f32::consts::TAU;
 
 use eframe::{
     egui::{self, FontSelection, WidgetText},
-    epaint::{Color32, FontId, Rounding, Stroke, TextShape},
+    epaint::{Color32, FontId, Rounding, Stroke, TextShape, Shape, Mesh},
 };
-use emath::{pos2, vec2, Pos2, Rect, Vec2};
+use emath::{pos2, vec2, Pos2, Rect, Vec2, lerp};
 
 use crate::{
     vector::{Vec2f, Vec2isize, Vec2u},
@@ -261,4 +261,33 @@ pub fn draw_pin_names<'a>(
             ctx,
         );
     }
+}
+
+
+/// colors: \[(t, color)\], must be ordered ascending by t, t must be in 0.0..=1.0 range 
+pub fn draw_line_gradient(positions: [Pos2; 2], width: f32, colors: &[(f32, Color32)], paint: &egui::Painter) {
+    if colors.len() < 2 {
+        return;
+    }
+
+    let mut mesh = Mesh::default();
+    let angle = (positions[1] - positions[0]).angle();
+    let off1 = Vec2f::from_angle_length(angle + TAU * 0.25, width * 0.5);
+    let off2 = Vec2f::from_angle_length(angle - TAU * 0.25, width * 0.5);
+
+    for i in 0..colors.len() {
+        let (t, color) = colors[i];
+        let pos = lerp(positions[0].to_vec2()..=positions[1].to_vec2(), t);
+        let pos1 = off1 + pos;
+        let pos2 = off2 + pos;
+
+        mesh.colored_vertex(pos1.into(), color);
+        mesh.colored_vertex(pos2.into(), color);
+        if i < colors.len() - 1 {
+            let i = i as u32;
+            mesh.add_triangle(2 * i    , 2 * i + 1, 2 * i + 2);
+            mesh.add_triangle(2 * i + 1, 2 * i + 2, 2 * i + 3);
+        }
+    }
+    paint.add(Shape::mesh(mesh));
 }

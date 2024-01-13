@@ -603,7 +603,6 @@ impl State {
                 v.interval = Some(dur);
             }
             None => {
-                let _i = updates.len();
                 updates.push(CircuitUpdateInfo {
                     id,
                     time_override: false,
@@ -892,7 +891,7 @@ impl State {
         drop(sim_lock);
         match nearest_update {
             Some(t) => Some(t),
-            None if queue_counter >= queue_limit => Some(Instant::now()),
+            None if queue_counter > 0 => Some(Instant::now()),
             _ => None,
         }
     }

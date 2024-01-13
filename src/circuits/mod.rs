@@ -13,6 +13,7 @@ use serde_intermediate::Intermediate;
 use crate::{
     app::{SimulationContext, Style},
     board::CircuitBoard,
+    containers::FixedVec,
     error::ErrorList,
     io::{CircuitCopyData, CircuitDesignControlCopy},
     state::{CircuitState, InternalCircuitState, State, StateCollection, VisitedList, WireState},
@@ -20,7 +21,7 @@ use crate::{
     time::Instant,
     unwrap_option_or_continue,
     vector::{Vec2i, Vec2u},
-    ArcString, Direction4, DynStaticStr, OptionalInt, PaintContext, RwLock, containers::FixedVec,
+    ArcString, Direction4, DynStaticStr, OptionalInt, PaintContext, RwLock,
 };
 
 use self::props::CircuitPropertyStore;
@@ -34,6 +35,7 @@ pub mod led;
 pub mod pin;
 #[macro_use]
 pub mod props;
+pub mod clock;
 pub mod pullup;
 pub mod transistor;
 
@@ -208,12 +210,20 @@ impl CircuitPinInfo {
             .unwrap_or_default()
     }
 
-    pub fn connected_wire_color(&self, state_ctx: &CircuitStateContext, style: &Style) -> Option<Color32> {
-        self.pin.read().connected_wire().map(|w| state_ctx.global_state.get_wire_color(w, style))
+    pub fn connected_wire_color(
+        &self,
+        state_ctx: &CircuitStateContext,
+        style: &Style,
+    ) -> Option<Color32> {
+        self.pin
+            .read()
+            .connected_wire()
+            .map(|w| state_ctx.global_state.get_wire_color(w, style))
     }
 
     pub fn wire_or_self_color(&self, state_ctx: &CircuitStateContext, style: &Style) -> Color32 {
-        self.connected_wire_color(state_ctx, style).unwrap_or_else(|| self.get_state(state_ctx).color(style, None))
+        self.connected_wire_color(state_ctx, style)
+            .unwrap_or_else(|| self.get_state(state_ctx).color(style, None))
     }
 
     pub fn get_wire_state(&self, state_ctx: &CircuitStateContext) -> Option<WireState> {
@@ -426,10 +436,13 @@ impl Circuit {
                 continue;
             }
 
-            controls.set(control, CircuitDesignControlCopy {
-                rect: design.rect,
-                display_name: design.display_name.get_str().to_owned(),
-            });
+            controls.set(
+                control,
+                CircuitDesignControlCopy {
+                    rect: design.rect,
+                    display_name: design.display_name.get_str().to_owned(),
+                },
+            );
         }
 
         crate::io::CircuitCopyData {
@@ -447,7 +460,7 @@ impl Circuit {
                 })
                 .flatten(),
             props: self.props.save(),
-            design_controls: controls.inner
+            design_controls: controls.inner,
         }
     }
 

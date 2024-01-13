@@ -54,7 +54,7 @@ mod board;
 #[macro_use]
 mod macros;
 
-#[cfg(all(feature = "deadlock_detection", not(feature = "single_thread")))]
+#[cfg(all(feature = "deadlock_detection", not(feature = "wasm")))]
 mod debug;
 
 mod app;
@@ -71,18 +71,18 @@ mod web;
 #[macro_use]
 mod ui;
 
-#[cfg(all(feature = "deadlock_detection", not(feature = "single_thread")))]
+#[cfg(all(feature = "deadlock_detection", not(feature = "wasm")))]
 type RwLock<T> = debug::DebugRwLock<T>;
-#[cfg(all(feature = "deadlock_detection", not(feature = "single_thread")))]
+#[cfg(all(feature = "deadlock_detection", not(feature = "wasm")))]
 type Mutex<T> = debug::DebugMutex<T>;
 
-#[cfg(any(not(feature = "deadlock_detection"), feature = "single_thread"))]
+#[cfg(any(not(feature = "deadlock_detection"), feature = "wasm"))]
 type RwLock<T> = parking_lot::RwLock<T>;
-#[cfg(any(not(feature = "deadlock_detection"), feature = "single_thread"))]
+#[cfg(any(not(feature = "deadlock_detection"), feature = "wasm"))]
 type Mutex<T> = parking_lot::Mutex<T>;
 
 fn main() {
-    #[cfg(all(feature = "deadlock_detection", not(feature = "single_thread")))]
+    #[cfg(all(feature = "deadlock_detection", not(feature = "wasm")))]
     debug::set_this_thread_debug_name("egui main thread");
 
     #[cfg(not(feature = "wasm"))]

@@ -1,0 +1,55 @@
+<svg width="4" height="4" xmlns="http://www.w3.org/2000/svg">
+    <circle cx="2.5" cy="1.5" r="0.1" fill="green"/>
+    <!-- rect { x: 0.5, y: 0.5, w: 2, h: 2, rounding: 0.25 } -->
+    <path d="
+        M 0.75 0.5
+        L 2.25 0.5
+        Q 2.5 0.5 2.5 0.75
+        L 2.5 2.25
+        Q 2.5 2.5 2.25 2.5
+        L 0.75 2.5
+        Q 0.5 2.5 0.5 2.25
+        L 0.5 0.75
+        Q 0.5 0.5 0.75 0.5
+        Z
+    " fill="#d0d0d0" /> 
+
+    <defs>
+        <linearGradient id="grad-off-on" x1="1.5" y1="1.805" x2="1.5" y2="1.195" gradientUnits="userSpaceOnUse" >
+            <stop offset="0" stop-color="green" />
+            <stop offset="1" stop-color="lime" />
+        </linearGradient>
+        <linearGradient id="grad-trans-off" x1="0.625" y1="0" x2="0.875" y2="0" gradientUnits="userSpaceOnUse" >
+            <stop offset="0" stop-color="#d0d0d0" />
+            <stop offset="1" stop-color="green" />
+        </linearGradient>
+        <linearGradient id="grad-on-trans" x1="2.125" y1="0" x2="2.375" y2="0" gradientUnits="userSpaceOnUse" >
+            <stop offset="0" stop-color="lime" />
+            <stop offset="1" stop-color="#d0d0d0" />
+        </linearGradient>
+        <linearGradient id="grad-middle" x1="0.625" y1="0" x2="2.375" y2="0" gradientUnits="userSpaceOnUse" >
+            <stop offset="0" stop-color="#d0d0d0" />
+            <stop offset="0.15" stop-color="#b9b8b8" />
+            <stop offset="0.85" stop-color="#b9b8b8" />
+            <stop offset="1" stop-color="#d0d0d0" />
+        </linearGradient>
+    </defs>
+
+    <line x1="0.625" y1="1.5" x2="2.375" y2="1.5" stroke="url(#grad-middle)" stroke-width="0.15" />
+
+    <line x1="0.625" y1="1.875" x2="1.075" y2="1.875" stroke="url(#grad-trans-off)" stroke-width="0.15" />
+    <line x1="0.925" y1="1.125" x2="1.575" y2="1.125" stroke="lime" stroke-width="0.15" />
+    <line x1="1.425" y1="1.875" x2="2.075" y2="1.875" stroke="green" stroke-width="0.15" />
+    <line x1="1.925" y1="1.125" x2="2.375" y2="1.125" stroke="url(#grad-on-trans)" stroke-width="0.15" />
+
+    <line x1="1" y1="1.805" x2="1" y2="1.195" stroke="url(#grad-off-on)" stroke-width="0.15" />
+    <line x1="1.5" y1="1.195" x2="1.5" y2="1.805" stroke="url(#grad-off-on)" stroke-width="0.15" />
+    <line x1="2" y1="1.805" x2="2" y2="1.195" stroke="url(#grad-off-on)" stroke-width="0.15" />
+
+    <text x="1.5" y="2.375" font-family="monospace" font-size="0.3" fill="black" text-anchor="middle" >
+        440 Hz
+    </text>
+    <text x="1.5" y="0.875" font-family="monospace" font-size="0.3" fill="black" text-anchor="middle" >
+        50%
+    </text>
+</svg>

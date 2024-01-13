@@ -1,19 +1,15 @@
-#[cfg(not(feature = "wasm"))]
+#[cfg(all(not(feature = "wasm"), not(feature = "emulate_web_time")))]
 pub type Instant = std::time::Instant;
 
-#[cfg(feature = "wasm")]
+#[cfg(any(feature = "wasm", feature = "emulate_web_time"))]
 pub use time_web::Instant;
 
-#[cfg(feature = "wasm")]
+#[cfg(any(feature = "wasm", feature = "emulate_web_time"))]
 mod time_web {
-    use std::{ops::{Add, Sub}, time::Duration};
+    use std::{ops::{Add, Sub, AddAssign}, time::Duration};
 
     fn now() -> f64 {
-        use wasm_bindgen::prelude::*;
-        js_sys::Reflect::get(&js_sys::global(), &JsValue::from_str("performance"))
-            .expect("failed to get performance from global object")
-            .unchecked_into::<web_sys::Performance>()
-            .now()
+        web_time_provider()
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -41,6 +37,12 @@ mod time_web {
         }
     }
 
+    impl AddAssign<Duration> for Instant {
+        fn add_assign(&mut self, rhs: Duration) {
+            self.micros += rhs.as_micros() as u64;
+        }
+    }
+
     impl Sub for Instant {
         type Output = Duration;
 
@@ -48,4 +50,28 @@ mod time_web {
             Duration::from_micros(self.micros - rhs.micros)
         }
     }
+
+    #[cfg(not(feature = "emulate_web_time"))]
+    fn web_time_provider() -> f64 {
+        use wasm_bindgen::prelude::*;
+        js_sys::Reflect::get(&js_sys::global(), &JsValue::from_str("performance"))
+            .expect("failed to get performance from global object")
+            .unchecked_into::<web_sys::Performance>()
+            .now()
+    }
+    #[cfg(feature = "emulate_web_time")]
+    fn web_time_provider() -> f64 {
+        use std::sync::OnceLock;
+        type StdInstant = std::time::Instant;
+
+        static START_OF_TIME: OnceLock<StdInstant> = OnceLock::new();
+        const PRECISION_MS: f64 = 0.1;
+
+        let start = START_OF_TIME.get_or_init(StdInstant::now);
+        let duration = StdInstant::now() - *start;
+        let ms = duration.as_secs_f64() * 1000.0;
+        
+        (ms / PRECISION_MS).floor() * PRECISION_MS
+    }
 }
+

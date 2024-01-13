@@ -26,6 +26,13 @@ impl<T> Vector2<T> {
         Self { x, y }
     }
 
+    pub fn from_angle_length(angle: T, length: T) -> Self
+    where
+        T: Float
+    {
+        Self::new(angle.cos() * length, angle.sin() * length)
+    }
+
     pub const fn single_value(value: T) -> Self
     where
         T: Copy,
@@ -45,6 +52,35 @@ impl<T> Vector2<T> {
         T: Float,
     {
         self.length_squared().sqrt()
+    }
+
+    pub fn set_length(&mut self, length: T)
+    where 
+        T: Float + FloatConst
+    {
+        let angle = self.angle();
+        *self = Self::from_angle_length(angle, length);
+    }
+
+    pub fn with_length(self, length: T)
+    where 
+        T: Float + FloatConst
+    {
+        let angle = self.angle();
+        Self::from_angle_length(angle, length);
+    }
+
+     /// 0 -> 2PI cloclwise from +X axis (default for operations)
+    pub fn angle(self) -> T
+    where 
+        T: Float + FloatConst
+    {
+        let a = self.y.atan2(self.x);
+        if a.is_sign_negative() {
+            a + T::TAU()
+        } else {
+            a
+        }
     }
 
     pub fn with_x(self, x: T) -> Self {

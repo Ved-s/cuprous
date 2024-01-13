@@ -74,7 +74,6 @@ impl eframe::App for App {
 
         // TODO: timings
         #[cfg(feature = "single_thread")]
-        //let sim_time =
         {
             use crate::time::Instant;
             let start_time = Instant::now();
@@ -92,8 +91,14 @@ impl eframe::App for App {
                     break;
                 }
             }
-            //Instant::now() - start_time
+            // let sim_time = Instant::now() - start_time;
+
+            // if sim_time.as_secs_f32() >= 1.0 {
+            //     println!("warning! simulation took {:.02}s to do a single tick", sim_time.as_secs_f32());
+            // }
         };
+
+        
 
         #[cfg(feature = "wasm")]
         {
@@ -371,6 +376,7 @@ impl App {
             Box::new(circuits::freq_meter::FreqMeterPreview {}),
             Box::new(circuits::pin::Preview {}),
             Box::new(circuits::bundler::Preview {}),
+            Box::new(circuits::clock::Preview {}),
             Box::<circuits::board::BoardPreview>::default(),
         ];
         let mut errors = ErrorList::new();
