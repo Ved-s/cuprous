@@ -801,6 +801,14 @@ impl State {
 
     fn schedule_update(self: &Arc<Self>, task: UpdateTask) {
         let mut queue = self.queue.lock();
+
+        if queue.len() > 10_000_000 {
+            println!("warning! queue contains too many elements! draining...");
+            for _ in 0..1_000_000 {
+                queue.dequeue();
+            }
+        }
+
         queue.enqueue(task);
 
         #[cfg(not(feature = "single_thread"))]

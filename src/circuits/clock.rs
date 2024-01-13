@@ -46,6 +46,9 @@ impl Clock {
 
     #[track_caller]
     fn schedule_next_update(frequency: f32, pwm: f32, state: &mut ClockState) -> Option<Duration> {
+        if frequency <= 0.0 {
+            return None;
+        }
         if pwm <= 0.0 || pwm >= 1.0 {
             return Some(Duration::ZERO);
         }
@@ -216,7 +219,7 @@ impl Clock {
 
 impl CircuitImpl for Clock {
     fn draw(&self, state_ctx: &CircuitStateContext, paint_ctx: &PaintContext) {
-        let enabled = state_ctx
+        let enabled = self.frequency > 0.0 && state_ctx
             .read_circuit_internal_state(|s: &ClockState| s.enabled || s.state)
             .unwrap_or_default();
         Clock::draw(self.pwm, enabled, paint_ctx, false);
@@ -362,7 +365,10 @@ impl CircuitPreviewImpl for Preview {
     }
 
     fn description(&self) -> DynStaticStr {
-        "TODO".into()
+        "Clock pulses its output with set frequency specified in its parameters.\n\
+         % of the time signal stays on during the clock cycle can be set with PWM Fill property.\n\
+         Control pin can be enabled to turn the clock on or off.\
+        ".into()
     }
 
     fn draw_preview(&self, props: &CircuitPropertyStore, ctx: &PaintContext, in_world: bool) {

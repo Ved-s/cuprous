@@ -611,6 +611,7 @@ impl CircuitBoardEditor {
                 _ => (),
             }
 
+            let queue_len = self.board.state.queue_len();
             let states = self.board.board.states.states.read().iter().count();
             let frozen_states = self
                 .board
@@ -631,7 +632,7 @@ impl CircuitBoardEditor {
                 .filter(|s| !s.is_being_used())
                 .count();
 
-            let text = format!("This board has {states} state(s), {frozen_states} are frozen, {unused_states} will be removed");
+            let text = format!("This board has {states} state(s), {frozen_states} are frozen, {unused_states} will be removed\nCurrent queue length: {queue_len}");
 
             ui.monospace(text);
         }
