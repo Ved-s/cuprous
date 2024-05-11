@@ -9,7 +9,7 @@ use app::{SimulationContext, Style};
 use board::{EditableCircuitBoard, CircuitDesignControl};
 use cache::GLOBAL_STR_CACHE;
 use eframe::{
-    egui::{self, Sense, Ui, ViewportBuilder},
+    egui::{self, Sense, Ui},
     epaint::{Color32, Rounding},
     Theme,
 };
@@ -18,6 +18,7 @@ use emath::{vec2, Rect};
 use error::{ErrorList, OptionReport};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_intermediate::Intermediate;
+
 #[cfg(feature = "wasm")]
 use wasm_bindgen::{prelude::*, JsValue};
 
@@ -83,7 +84,7 @@ fn main() {
         let options = eframe::NativeOptions {
             follow_system_theme: false,
             default_theme: Theme::Dark,
-            viewport: ViewportBuilder::default()
+            viewport: eframe::egui::ViewportBuilder::default()
                 .with_app_id("cuprous")
                 .with_drag_and_drop(true),
 
