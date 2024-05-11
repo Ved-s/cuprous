@@ -437,8 +437,8 @@ impl CircuitImpl for Board {
             .map(|d| d.to_info())
             .collect::<Vec<_>>()
             .into_boxed_slice();
-        self.pins = pins.clone();
-        pins
+        self.pins = pins;
+        self.pins.clone()
     }
 
     fn update_signals(&self, state_ctx: &CircuitStateContext, changed_pin: Option<usize>) {
@@ -640,7 +640,10 @@ impl CircuitImpl for Board {
             info.pins = pins.into_boxed_slice();
             info.size = design.size;
 
-            self.pins = info.pins.clone();
+            #[allow(clippy::assigning_clones)] // clippy, you're weird
+            { 
+                self.pins = info.pins.clone();
+            }
 
             let mut controls: Vec<_> = design.controls.keys().copied().collect();
             controls.sort();

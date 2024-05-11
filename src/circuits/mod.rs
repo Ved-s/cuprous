@@ -16,7 +16,7 @@ use crate::{
     containers::FixedVec,
     error::ErrorList,
     io::{CircuitCopyData, CircuitDesignControlCopy},
-    state::{CircuitState, InternalCircuitState, State, StateCollection, VisitedList, WireState},
+    state::{CircuitState, InternalCircuitState, State, StateCollection, VisitedItem, VisitedList, WireState},
     string::StringFormatterState,
     time::Instant,
     unwrap_option_or_continue,
@@ -37,6 +37,7 @@ pub mod pin;
 pub mod props;
 pub mod clock;
 pub mod pullup;
+pub mod relay;
 pub mod transistor;
 
 // so templates are always valid
@@ -210,6 +211,10 @@ impl CircuitPinInfo {
             .unwrap_or_default()
     }
 
+    pub fn connected_wire(&self) -> Option<usize> {
+        self.pin.read().connected_wire()
+    }
+
     pub fn connected_wire_color(
         &self,
         state_ctx: &CircuitStateContext,
@@ -249,6 +254,13 @@ impl CircuitPinInfo {
         if let Some(wire) = pin.wire {
             state_ctx.global_state.update_wire(wire, false)
         }
+    }
+
+    /// Writes this state into pin's state, without triggering any updates
+    pub fn set_raw_state(&self, state_ctx: &CircuitStateContext, value: WireState) {
+        state_ctx.write_circuit_state(|cs| {
+            cs.pins.set(self.pin.read().id.id, value);
+        });
     }
 
     pub fn get_direction(&self, state_ctx: &CircuitStateContext) -> PinDirection {
@@ -293,6 +305,34 @@ impl CircuitPinInfo {
                 ),
             },
         }
+    }
+
+    fn mutate_wire_state(
+        &self,
+        ctx: &CircuitStateContext,
+        state: &mut WireState,
+        visited_items: &mut VisitedList,
+    ) {
+        let Some(wire) = self.connected_wire() else { return; };
+
+        visited_items.push(ctx.circuit.board.uid, VisitedItem::Pin(self.pin.read().id));
+        ctx.global_state.compute_wire_state(wire, state, visited_items);
+        visited_items.pop(ctx.circuit.board.uid);
+    }
+
+    fn apply_wire_state(
+        &self,
+        ctx: &CircuitStateContext,
+        state: &WireState,
+        skip_state_ckeck: bool,
+        visited_items: &mut VisitedList,
+    ) {
+        self.set_raw_state(ctx, state.clone());
+        let Some(wire) = self.connected_wire() else { return; };
+
+        visited_items.push(ctx.circuit.board.uid, VisitedItem::Pin(self.pin.read().id));
+        ctx.global_state.apply_wire_state(wire, state, skip_state_ckeck, visited_items);
+        visited_items.pop(ctx.circuit.board.uid);
     }
 }
 
@@ -861,6 +901,17 @@ impl CircuitPinDescription {
             )),
         }
     }
+
+    pub fn new_unused() -> Self {
+        Self {
+            active: false,
+            display_name: "".into(),
+            display_dir: None,
+            dir: InternalPinDirection::Inside,
+            name: "".into(),
+            pos: [0, 0].into(),
+        }
+    }
 }
 
 impl<const P: usize> CircuitDescription<P> {
@@ -908,7 +959,7 @@ macro_rules! describe_directional_circuit {
         $(
             $pin_name:literal:
                 $pin_dir:expr,
-                $pin_dname:literal,
+                $pin_dname:expr,
                 $pin_ddir:expr,
                 [$pin_x:expr, $pin_y: expr]
                 $(, active: $active:expr)?
@@ -942,7 +993,11 @@ macro_rules! describe_directional_circuit {
                                 display_name: $pin_dname.into(),
                                 display_dir: Option::<Direction4>::from($pin_ddir)
                                     .map(|d| d.rotate_clockwise_by(dir_normalized)),
-                                pos: $crate::circuits::rotate_pos([$pin_x, $pin_y], size_rotated, dir_normalized).into(),
+                                pos: if expr_or_default!($($active)?, true) {
+                                    $crate::circuits::rotate_pos([$pin_x, $pin_y], size_rotated, dir_normalized).into()
+                                } else {
+                                    [0, 0].into()
+                                }
                             },
                         )*
                     ]
@@ -957,7 +1012,6 @@ macro_rules! describe_directional_custom_circuit {
     (
         default_dir: $default_dir:expr,
         dir: $dir:expr,
-        flip: $flip:expr,
         size: [$width:expr, $height: expr],
 
         $(

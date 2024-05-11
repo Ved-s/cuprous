@@ -32,6 +32,8 @@ struct SidePanelUiState {
 
 pub struct SidePanelResponse<T> {
     pub inner: Option<T>,
+
+    #[allow(unused)]
     pub response: Option<Response>,
 }
 

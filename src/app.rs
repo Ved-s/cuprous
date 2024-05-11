@@ -373,6 +373,7 @@ impl App {
             Box::new(circuits::gates::not::NotPreview {}),
             Box::new(circuits::pullup::PullupPreview {}),
             Box::new(circuits::transistor::TransistorPreview {}),
+            Box::new(circuits::relay::RelayPreview {}),
             Box::new(circuits::freq_meter::FreqMeterPreview {}),
             Box::new(circuits::pin::Preview {}),
             Box::new(circuits::bundler::Preview {}),

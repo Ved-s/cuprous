@@ -1,15 +1,8 @@
 use std::{
-    borrow::Borrow,
-    collections::HashSet,
-    f32::consts::TAU,
-    fmt::Debug,
-    hash::Hash,
-    num::NonZeroU32,
-    ops::{Deref, Not, Range},
-    sync::{
+    borrow::Borrow, collections::HashSet, f32::consts::TAU, fmt::Debug, hash::Hash, num::NonZeroU32, ops::{Deref, Not, Range}, sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
-    },
+    }
 };
 
 use app::{SimulationContext, Style};
@@ -1117,10 +1110,7 @@ impl ArcString {
         }
 
         self.check_str.store(false, Ordering::Relaxed);
-        let str = match &self.string {
-            Some(s) => s,
-            None => "",
-        };
+        let str = self.string.as_deref().unwrap_or_default();
         let new_arc = Arc::<str>::from(str);
 
         *arc = Some(new_arc.clone());

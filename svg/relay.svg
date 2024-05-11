@@ -1,0 +1,140 @@
+<svg width="5" height="3">
+
+    <line x1="0" y1="1" x2="5" y2="1" stroke="gray" stroke-width="0.01" />
+    <line x1="0" y1="2" x2="5" y2="2" stroke="gray" stroke-width="0.01" />
+
+    <line x1="1" y1="0" x2="1" y2="3" stroke="gray" stroke-width="0.01" />
+    <line x1="2" y1="0" x2="2" y2="3" stroke="gray" stroke-width="0.01" />
+    <line x1="3" y1="0" x2="3" y2="3" stroke="gray" stroke-width="0.01" />
+    <line x1="4" y1="0" x2="4" y2="3" stroke="gray" stroke-width="0.01" />
+
+    <!-- Mode: Single Pole Double Throw -->
+
+
+    <rect x="0.5" y="0.5" width="2.5" height="2" fill="transparent" stroke="black" stroke-width="0.1" />
+    
+
+    <circle cx="1.5" cy="0.5" r="0.1" fill="green" />
+    <circle cx="1.5" cy="2.5" r="0.1" fill="green" />
+    <circle cx="2.5" cy="0.5" r="0.1" fill="green" />
+
+    <circle cx="1.5" cy="1.125" r="0.12" fill="green" />
+    <circle cx="2.5" cy="1.125" r="0.12" fill="green" />
+    <circle cx="2" cy="1.875" r="0.12" fill="green" />
+
+    <line x1="1.5" y1="0.5" x2="1.5" y2="1.125" stroke="green" stroke-width="0.2" />
+    <line x1="2.5" y1="0.5" x2="2.5" y2="1.125" stroke="green" stroke-width="0.2" />
+
+    <line x1="1.5" y1="2.5" x2="1.5" y2="2.0875" stroke="green" stroke-width="0.2" />
+    <line x1="2" y1="2.2875" x2="2" y2="1.875" stroke="green" stroke-width="0.2" />
+    <line x1="1.4" y1="2.1875" x2="2.1" y2="2.1875" stroke="green" stroke-width="0.2" />
+
+    <line x1="2" y1="1.875" x2="2.5" y2="1.125" stroke="green" stroke-width="0.2" />
+
+
+    <!-- Mode: Double Pole Double Throw -->
+
+    <!-- <rect x="0.5" y="0.5" width="3.5" height="2" fill="transparent" stroke="black" stroke-width="0.1" />
+    
+
+    <circle cx="1.5" cy="0.5" r="0.1" fill="green" />
+    <circle cx="1.5" cy="2.5" r="0.1" fill="green" />
+    <circle cx="2.5" cy="0.5" r="0.1" fill="green" />
+
+    <circle cx="1.5" cy="1" r="0.12" fill="green" />
+    <circle cx="2.5" cy="1" r="0.12" fill="green" />
+    <circle cx="2" cy="1.75" r="0.12" fill="green" />
+
+    <line x1="1.5" y1="0.5" x2="1.5" y2="1" stroke="green" stroke-width="0.2" />
+    <line x1="2.5" y1="0.5" x2="2.5" y2="1" stroke="green" stroke-width="0.2" />
+
+    <line x1="1.5" y1="2.5" x2="1.5" y2="2.025" stroke="green" stroke-width="0.2" />
+    <line x1="2" y1="2.225" x2="2" y2="1.75" stroke="green" stroke-width="0.2" />
+    <line x1="1.4" y1="2.125" x2="2.1" y2="2.125" stroke="green" stroke-width="0.2" />
+
+    <line x1="2" y1="1.75" x2="2.5" y2="1" stroke="green" stroke-width="0.2" />
+
+    <circle cx="3.5" cy="0.5" r="0.1" fill="green" />
+    <circle cx="2.5" cy="2.5" r="0.1" fill="green" />
+    <circle cx="3.5" cy="2.5" r="0.1" fill="green" />
+
+    <circle cx="2.5" cy="2" r="0.12" fill="green" />
+    <circle cx="3.5" cy="2" r="0.12" fill="green" />
+    <circle cx="3" cy="1.25" r="0.12" fill="green" />
+
+    <line x1="2.5" y1="2.5" x2="2.5" y2="2" stroke="green" stroke-width="0.2" />
+    <line x1="3.5" y1="2.5" x2="3.5" y2="2" stroke="green" stroke-width="0.2" />
+
+    <line x1="3.5" y1="0.5" x2="3.5" y2="0.975" stroke="green" stroke-width="0.2" />
+    <line x1="3" y1="0.775" x2="3" y2="1.25" stroke="green" stroke-width="0.2" />
+    <line x1="3.6" y1="0.875" x2="2.9" y2="0.875" stroke="green" stroke-width="0.2" />
+
+    <line x1="3" y1="1.25" x2="3.5" y2="2" stroke="green" stroke-width="0.2" /> -->
+
+
+    <!-- Mode: Single Pole Single Throw -->
+
+
+    <!-- <rect x="0.5" y="0.5" width="2" height="2" fill="transparent" stroke="black" stroke-width="0.1" />
+
+    <circle cx="1.5" cy="0.5" r="0.1" fill="green" />
+    <circle cx="1.5" cy="2.5" r="0.1" fill="green" />
+
+    <circle cx="1.5" cy="1" r="0.12" fill="green" />
+    <circle cx="1.5" cy="2" r="0.12" fill="green" />
+
+    <line x1="1.5" y1="0.5" x2="1.5" y2="1" stroke="green" stroke-width="0.2" />
+    <line x1="1.5" y1="2.5" x2="1.5" y2="2" stroke="green" stroke-width="0.2" />
+
+    <line x1="1.5" y1="2" x2="2" y2="1.25" stroke="green" stroke-width="0.2" /> -->
+
+
+    <!-- Mode: Single Pole Single Throw -->
+
+
+    <!-- <rect x="0.5" y="0.5" width="3" height="2" fill="transparent" stroke="black" stroke-width="0.1" />
+
+
+    <circle cx="1.5" cy="0.5" r="0.1" fill="green" />
+    <circle cx="1.5" cy="2.5" r="0.1" fill="green" />
+
+    <circle cx="1.5" cy="1" r="0.12" fill="green" />
+    <circle cx="1.5" cy="2" r="0.12" fill="green" />
+
+    <line x1="1.5" y1="0.5" x2="1.5" y2="1" stroke="green" stroke-width="0.2" />
+    <line x1="1.5" y1="2.5" x2="1.5" y2="2" stroke="green" stroke-width="0.2" />
+
+    <line x1="1.5" y1="2" x2="2" y2="1.25" stroke="green" stroke-width="0.2" />
+
+
+    <circle cx="2.5" cy="0.5" r="0.1" fill="green" />
+    <circle cx="2.5" cy="2.5" r="0.1" fill="green" />
+
+    <circle cx="2.5" cy="1" r="0.12" fill="green" />
+    <circle cx="2.5" cy="2" r="0.12" fill="green" />
+
+    <line x1="2.5" y1="0.5" x2="2.5" y2="1" stroke="green" stroke-width="0.2" />
+    <line x1="2.5" y1="2.5" x2="2.5" y2="2" stroke="green" stroke-width="0.2" />
+
+    <line x1="2.5" y1="2" x2="3" y2="1.25" stroke="green" stroke-width="0.2" /> -->
+
+
+    <!-- Coil -->
+
+    <circle cx="0.5" cy="1.5" r="0.1" fill="green" />
+
+    <line x1="0.5" y1="1.5" x2="0.81" y2="1.5" stroke="green" stroke-width="0.1" />
+    <path d="
+        M 0.8 2.25
+        C 1.185 2.25 1.185 1.875 0.8 1.875
+        C 1.185 1.875 1.185 1.5 0.8 1.5
+        C 1.185 1.5 1.185 1.125 0.8 1.125
+        C 1.185 1.125 1.185 0.75 0.8 0.75
+    " fill="transparent" stroke="green" stroke-width="0.1" />
+
+    <circle cx="0.8" cy="0.75" r="0.05" fill="green" />
+    <circle cx="0.8" cy="1.125" r="0.05" fill="green" />
+    <circle cx="0.8" cy="1.875" r="0.05" fill="green" />
+    <circle cx="0.8" cy="2.25" r="0.05" fill="green" />
+
+</svg>

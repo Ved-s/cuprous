@@ -521,6 +521,7 @@ pub struct PropertyEditor {
 }
 
 pub struct PropertyEditorResponse<T> {
+    #[allow(unused)]
     pub response: Response,
     pub changes: Vec<ChangedProperty<T>>,
 }
@@ -798,6 +799,7 @@ impl RectVisuals {
     }
 }
 
+#[allow(unused)]
 #[derive(Debug, Clone, Copy)]
 pub enum DragState {
     None,

@@ -756,11 +756,25 @@ where
 
 #[macro_export]
 macro_rules! create_safe_prop_enums {
-    ( $( #[default($default:ident)] $(#[$meta:meta])* enum $name:ident { $($variant:ident($varrep:literal $(, $varname:literal)?),)* } )*) => {
+    ( 
+        $( 
+            #[default($default:ident)] 
+            $(#[$meta:meta])* 
+            enum $name:ident { 
+                $( 
+                    $(#[$varmeta:meta])* 
+                    $variant:ident($varrep:literal $(, $varname:literal)?),
+                )* 
+            } 
+        )*
+    ) => {
         $(
             $(#[$meta])*
             enum $name {
-                $($variant),*
+                $(
+                    $(#[$varmeta])* 
+                    $variant
+                ),*
             }
 
             impl $crate::circuits::props::CircuitPropertyImpl for $name {

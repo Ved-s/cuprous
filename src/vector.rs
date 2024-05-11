@@ -143,6 +143,10 @@ impl<T> Vector2<T> {
             v.abs() // remove weird -0.0
         }
     }
+    
+    pub fn swapped(self) -> Self {
+        Self::new(self.y, self.x)
+    }
 }
 
 impl<T: std::fmt::Display> std::fmt::Display for Vector2<T>

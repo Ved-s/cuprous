@@ -44,7 +44,6 @@ impl Transistor {
         describe_directional_custom_circuit! {
             default_dir: Left,
             dir: dir,
-            flip: flip,
             size: [2, 3],
             "collector": Inside, "Collector", Up, [1, 0],
             "base":      Inside, "Base", Left, [0, 1],

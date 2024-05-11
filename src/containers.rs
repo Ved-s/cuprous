@@ -959,9 +959,9 @@ impl<T, const SIZE: usize> ConstRingBuffer<SIZE, T> {
     pub fn as_slice(&self) -> Option<&[T]> {
         if self.pos >= self.len {
             let start = self.pos - self.len;
-            Some(unsafe { std::mem::transmute(&self.array[start..start + self.len]) })
+            Some(unsafe { assume_init_slice_ref(&self.array[start..start + self.len]) })
         } else if self.pos == 0 {
-            Some(unsafe { std::mem::transmute(&self.array[SIZE - self.len..]) })
+            Some(unsafe { assume_init_slice_ref(&self.array[SIZE - self.len..]) })
         } else {
             None
         }
@@ -970,9 +970,9 @@ impl<T, const SIZE: usize> ConstRingBuffer<SIZE, T> {
     pub fn as_mut_slice(&mut self) -> Option<&mut [T]> {
         if self.pos >= self.len {
             let start = self.pos - self.len;
-            Some(unsafe { std::mem::transmute(&mut self.array[start..start + self.len]) })
+            Some(unsafe { assume_init_slice_mut(&mut self.array[start..start + self.len]) })
         } else if self.pos == 0 {
-            Some(unsafe { std::mem::transmute(&mut self.array[SIZE - self.len..]) })
+            Some(unsafe { assume_init_slice_mut(&mut self.array[SIZE - self.len..]) })
         } else {
             None
         }
@@ -1035,7 +1035,7 @@ impl<T, const SIZE: usize> ConstRingBuffer<SIZE, T> {
             (self.pos + SIZE - self.len) % SIZE
         };
         ConstRingBufferRefIterator {
-            buf: unsafe { std::mem::transmute(self.array.as_ref()) },
+            buf: unsafe { assume_init_slice_ref(self.array.as_ref()) },
             start,
             len: self.len,
             pos: 0,
@@ -1162,4 +1162,12 @@ impl<'a, T> Iterator for QueueIter<'a, T> {
             QueueIter::VecDeque(i) => i.next(),
         }
     }
+}
+
+unsafe fn assume_init_slice_ref<T>(s: &[MaybeUninit<T>]) -> &[T] {
+    unsafe { &*(s as *const [MaybeUninit<T>] as *const [T]) }
+}
+
+unsafe fn assume_init_slice_mut<T>(s: &mut [MaybeUninit<T>]) -> &mut [T] {
+    unsafe { &mut *(s as *mut [MaybeUninit<T>] as *mut [T]) }
 }

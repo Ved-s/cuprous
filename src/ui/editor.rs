@@ -123,6 +123,7 @@ static COMPONENT_BUILTIN_ORDER: &[&str] = &[
     "xnor",
     "not",
     "transistor",
+    "relay",
     "pin",
     "bundler",
     "clock",
