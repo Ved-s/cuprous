@@ -87,6 +87,18 @@ pub enum Direction8 {
 
 #[allow(dead_code)]
 impl Direction8 {
+
+    pub const ALL: [Self; 8] = [
+        Self::Up,
+        Self::UpRight,
+        Self::Right,
+        Self::DownRight,
+        Self::Down,
+        Self::DownLeft,
+        Self::Left,
+        Self::UpLeft,
+    ];
+
     pub fn into_dir_isize(self) -> Vec2isize {
         match self {
             Self::Up => [0, -1],
@@ -172,6 +184,10 @@ impl Direction8 {
             (Direction4Half::UpLeft, false) => Self::UpLeft,
         }
     }
+
+    pub fn iter_along(self, start: Vec2isize, length: usize) -> impl Iterator<Item = Vec2isize> {
+        (0..length).map(move |i| start + self.into_dir_isize() * i as isize)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -200,5 +216,43 @@ impl Direction4Half {
             3 => Self::UpRight,
             _ => unreachable!(),
         }
+    }
+}
+
+#[derive(Default, Clone, Copy)]
+pub struct Direction8Array<T>([T; 8]);
+
+impl<T> Direction8Array<T> {
+    pub fn get(&self, dir: Direction8) -> &T {
+        &self.0[dir.into_index()]
+    }
+
+    pub fn get_mut(&mut self, dir: Direction8) -> &mut T {
+        &mut self.0[dir.into_index()]
+    }
+
+    pub fn from_fn(mut f: impl FnMut(Direction8) -> T) -> Self {
+        Self(std::array::from_fn(|i| f(Direction8::from_index(i))))
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (Direction8, &T)> {
+        self.0.iter().enumerate().map(|(i, v)| (Direction8::from_index(i), v))
+    }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (Direction8, &mut T)> {
+        self.0.iter_mut().enumerate().map(|(i, v)| (Direction8::from_index(i), v))
+    }
+}
+
+#[derive(Default)]
+pub struct Direction4HalfArray<T>([T; 4]);
+
+impl<T> Direction4HalfArray<T> {
+    pub fn get(&self, dir: Direction4Half) -> &T {
+        &self.0[dir.into_index()]
+    }
+
+    pub fn get_mut(&mut self, dir: Direction4Half) -> &mut T {
+        &mut self.0[dir.into_index()]
     }
 }
