@@ -50,7 +50,12 @@ impl eframe::App for DockedApp {
                 .push_to_first_leaf(Tab::new(TabType::BoardView));
         }
 
-        DockArea::new(&mut self.dock).show(ctx, &mut TabViewer(&mut self.app));
+        let mut dock_style = egui_dock::Style::from_egui(&ctx.style());
+        dock_style.tab.tab_body.inner_margin = 2.0.into();
+
+        DockArea::new(&mut self.dock)
+            .style(dock_style)
+            .show(ctx, &mut TabViewer(&mut self.app));
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
