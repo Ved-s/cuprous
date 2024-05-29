@@ -8,8 +8,8 @@ use std::{
 
 use eframe::{
     egui::{
-        remap_clamp, Align, Color32, Key, PointerButton, Rect, Response, Rounding, Sense,
-        Stroke, TextStyle, Ui, WidgetText,
+        remap_clamp, Align, Color32, Key, PointerButton, Rect, Response, Rounding, Sense, Stroke,
+        TextStyle, Ui, WidgetText,
     },
     epaint::TextShape,
 };
@@ -241,7 +241,7 @@ impl BoardView {
                     .get(dir.rotated_clockwise_by(Direction8::DownRight))
                     .is_some()
                     || dirs
-                        .get(dir.rotated_couterclockwise_by(Direction8::DownRight))
+                        .get(dir.rotated_counterclockwise_by(Direction8::DownRight))
                         .is_some()
                 {
                     return true;
@@ -262,7 +262,7 @@ impl BoardView {
                     .get(dir.rotated_clockwise_by(Direction8::UpRight))
                     .is_some()
                     || dirs
-                        .get(dir.rotated_couterclockwise_by(Direction8::UpRight))
+                        .get(dir.rotated_counterclockwise_by(Direction8::UpRight))
                         .is_some()
                 {
                     break;
@@ -287,11 +287,19 @@ impl BoardView {
             true
         }
 
-        fn part_add_len(dirs: &Direction8Array<Option<NonZeroU32>>, diagonal: bool) -> f32 {
-            if node_has_135_deg_turns(dirs) {
+        fn part_add_len(dirs: &Direction8Array<Option<NonZeroU32>>, dir: Direction8) -> f32 {
+            if dirs
+                .get(dir.rotated_clockwise_by(Direction8::UpRight))
+                .is_some()
+                && dirs
+                    .get(dir.rotated_counterclockwise_by(Direction8::UpRight))
+                    .is_some()
+            {
+                0.0
+            } else if node_has_135_deg_turns(dirs) {
                 WIRE_WIDTH / 2.0 * (22.5f32).to_radians().tan()
             } else if node_is_a_45_deg_turn(dirs) {
-                if diagonal {
+                if dir.is_diagonal() {
                     WIRE_WIDTH / 2.0 * -(22.5f32).to_radians().tan()
                 } else {
                     WIRE_WIDTH / 2.0 * (22.5f32).to_radians().tan()
@@ -348,11 +356,13 @@ impl BoardView {
 
                 let len = dist.get() as f32;
 
-                let angle = Direction8::from_half(dir, false).into_angle_xp_cw();
+                let full_dir = Direction8::from_half(dir, false);
 
-                let this_add_len = part_add_len(&node.directions, dir.is_diagonal());
+                let angle = full_dir.into_angle_xp_cw();
+
+                let this_add_len = part_add_len(&node.directions, full_dir);
                 let that_add_len = target_node
-                    .map(|n| part_add_len(&n.directions, dir.is_diagonal()))
+                    .map(|n| part_add_len(&n.directions, full_dir.inverted()))
                     .unwrap_or_default();
 
                 let len = if dir.is_diagonal() { len * SQRT_2 } else { len };

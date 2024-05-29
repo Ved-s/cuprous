@@ -269,7 +269,7 @@ impl Direction8 {
         Self::from_index(self.into_index() + other.into_index())
     }
 
-    pub const fn rotated_couterclockwise_by(self, other: Self) -> Self {
+    pub const fn rotated_counterclockwise_by(self, other: Self) -> Self {
         Self::from_index(self.into_index() + 8 - other.into_index())
     }
 
@@ -280,8 +280,8 @@ impl Direction8 {
     // UpRight (1), Up (0) / Down (4) -> UpLeft (7)
     // Up (0), Left (6) / Right (2) -> Down(4)
     pub const fn flip_by(self, other: Self) -> Self {
-        let angle = self.rotated_couterclockwise_by(other);
-        other.rotated_couterclockwise_by(angle)
+        let angle = self.rotated_counterclockwise_by(other);
+        other.rotated_counterclockwise_by(angle)
     }
 
     pub const fn into_half_option(self) -> Option<Direction4Half> {
