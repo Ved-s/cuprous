@@ -1,15 +1,16 @@
-use std::{num::NonZeroU32, ops::Deref, sync::Arc};
+use std::{num::NonZeroU32, sync::Arc};
 
 use eframe::egui::ahash::{HashMap, HashMapExt};
+use parking_lot::RwLock;
 
 use crate::{
     containers::{Chunks2D, FixedVec},
-    vector::{Vec2isize, Vec2usize},
-    Direction4Half, Direction8, Direction8Array,
+    vector::Vec2isize,
+    Direction4HalfArray, Direction8, Direction8Array, CHUNK_SIZE,
 };
 
 pub struct Board {
-    wires: FixedVec<Arc<Wire>>,
+    pub wires: FixedVec<Arc<Wire>>,
 }
 
 impl Default for Board {
@@ -35,14 +36,10 @@ impl Board {
 
 #[derive(Default)]
 pub struct BoardEditor {
-    pub wires: Chunks2D<16, WireNode>,
+    pub wires: Chunks2D<CHUNK_SIZE, WireNode>,
 
     pub board: Board,
 }
-
-//
-// TODO! reflect changes in backend wires
-// 
 
 impl BoardEditor {
     pub fn place_wire(&mut self, pos: Vec2isize, dir: Direction8, length: NonZeroU32) {
@@ -94,7 +91,7 @@ impl BoardEditor {
 
         let mut distance = 0;
 
-        for i in 0..length {
+        for i in 0..=length {
             let pos = pos + dir.into_dir_isize() * i as isize;
             let node = self.wires.get_or_create_mut(pos);
 
@@ -103,6 +100,19 @@ impl BoardEditor {
                     *node.directions.get_mut(dir.inverted()) = NonZeroU32::new(distance);
 
                     distance += 1;
+                }
+
+                if let Some(wire) = &node.wire {
+                    let (dir, rev) = dir.inverted().into_half();
+                    if !rev {
+                        *wire
+                            .points
+                            .write()
+                            .entry(pos)
+                            .or_default()
+                            .directions
+                            .get_mut(dir) = distance > 0;
+                    }
                 }
 
                 if node.wire.is_some() {
@@ -135,8 +145,9 @@ impl BoardEditor {
                     let Some(wire) = wire else {
                         continue;
                     };
-                    if !max_points.is_some_and(|mp| wire.1.points.len() <= mp) {
-                        max_points = Some(wire.1.points.len());
+                    let points = wire.1.points.read().len();
+                    if !max_points.is_some_and(|mp| points <= mp) {
+                        max_points = Some(points);
                         biggest_wire = Some(wire.1.clone());
                     }
                 }
@@ -149,6 +160,8 @@ impl BoardEditor {
 
         node.wire = Some(wire.clone());
 
+        wire.points.write().insert(pos, WirePoint::default());
+
         self.fix_directions_at_intersection(pos);
 
         wire
@@ -158,6 +171,7 @@ impl BoardEditor {
         let node = self.wires.get(pos);
 
         if let Some(node) = node {
+            #[allow(clippy::question_mark)] // i'd prefer this explicit return
             if node.wire.is_none() {
                 return None;
             }
@@ -165,11 +179,15 @@ impl BoardEditor {
 
         let node = self.wires.get_or_create_mut(pos);
 
-        let ret = node.wire.take();
+        let wire = node.wire.take();
+
+        if let Some(wire) = &wire {
+            wire.points.write().remove(&pos);
+        }
 
         self.fix_directions_at_intersection(pos);
 
-        ret
+        wire
     }
 
     fn fix_directions_at_intersection(&mut self, pos: Vec2isize) {
@@ -195,6 +213,7 @@ impl BoardEditor {
         }
     }
 
+    #[allow(clippy::type_complexity)]
     fn examine_directions(
         &self,
         pos: Vec2isize,
@@ -220,8 +239,9 @@ impl BoardEditor {
         let mut max_points = None;
 
         for wire in iter.clone() {
-            if !max_points.is_some_and(|mp| wire.points.len() <= mp) {
-                max_points = Some(wire.points.len());
+            let points = wire.points.read().len();
+            if !max_points.is_some_and(|mp| points <= mp) {
+                max_points = Some(points);
                 biggest_wire = Some(wire.clone());
             }
         }
@@ -253,23 +273,14 @@ impl BoardEditor {
 }
 
 pub struct Wire {
-    id: usize,
+    pub id: usize,
 
-    points: HashMap<Vec2usize, WirePoint>,
+    pub points: RwLock<HashMap<Vec2isize, WirePoint>>,
 }
 
+#[derive(Default)]
 pub struct WirePoint {
-    directions: [bool; 4],
-}
-
-impl WirePoint {
-    pub fn get_direction(&self, dir: Direction4Half) -> bool {
-        self.directions[dir.into_index()]
-    }
-
-    pub fn get_direction_mut(&mut self, dir: Direction4Half) -> &mut bool {
-        &mut self.directions[dir.into_index()]
-    }
+    directions: Direction4HalfArray<bool>,
 }
 
 #[derive(Default, Clone)]

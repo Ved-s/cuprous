@@ -1,7 +1,6 @@
 use app::DockedApp;
-use eframe::egui::Rect;
-use serde::{Deserialize, Serialize};
-use vector::{Vec2f, Vec2isize};
+use eframe::egui::{Align2, Painter, Rect, Ui};
+use vector::{Vec2f, Vec2isize, Vec2usize};
 
 pub mod app;
 pub mod board;
@@ -12,6 +11,8 @@ pub mod str;
 pub mod tabs;
 pub mod vector;
 pub mod vertex_renderer;
+
+pub const CHUNK_SIZE: usize = 16;
 
 fn main() -> Result<(), eframe::Error> {
     let options = eframe::NativeOptions {
@@ -70,6 +71,53 @@ impl Screen {
             self.world_to_screen(r.left_top()).into(),
             r.size() * self.scale,
         )
+    }
+}
+
+#[derive(Clone)]
+pub struct PaintContext<'a> {
+    pub ui: &'a Ui,
+    pub painter: &'a Painter,
+
+    pub tile_bounds_tl: Vec2isize,
+    pub tile_bounds_br: Vec2isize,
+    pub tile_bounds_size: Vec2usize,
+
+    pub chunk_bounds_tl: Vec2isize,
+    pub chunk_bounds_br: Vec2isize,
+    pub chunk_bounds_size: Vec2usize,
+
+    pub screen: Screen
+}
+
+impl<'a> PaintContext<'a> {
+    pub fn new(ui: &'a Ui, screen: Screen) -> Self {
+        let tl = screen.screen_to_world(screen.screen_rect.left_top());
+        let br = screen.screen_to_world(screen.screen_rect.right_bottom());
+
+        let tl = tl.convert(|v| v.floor() as isize);
+        let br = br.convert(|v| v.floor() as isize);
+        let size = (br - tl).convert(|v| v as usize) + 1;
+
+        let chunks_tl = tl.convert(|v| div_floor_isize(v, CHUNK_SIZE as isize));
+        let chunks_br = br.convert(|v| div_floor_isize(v, CHUNK_SIZE as isize));
+        let chunks_size = (chunks_br - chunks_tl).convert(|v| v as usize) + 1;
+
+        let painter = ui.painter();
+
+        Self {
+            ui,
+            painter,
+            tile_bounds_tl: tl,
+            tile_bounds_br: br,
+            tile_bounds_size: size,
+
+            chunk_bounds_tl: chunks_tl,
+            chunk_bounds_br: chunks_br,
+            chunk_bounds_size: chunks_size,
+
+            screen,
+        }
     }
 }
 
@@ -188,6 +236,19 @@ impl Direction8 {
     pub fn iter_along(self, start: Vec2isize, length: usize) -> impl Iterator<Item = Vec2isize> {
         (0..length).map(move |i| start + self.into_dir_isize() * i as isize)
     }
+
+    pub fn into_align2(self) -> Align2 {
+        match self {
+            Self::Up => Align2::CENTER_TOP,
+            Self::UpRight => Align2::RIGHT_TOP,
+            Self::Right => Align2::RIGHT_CENTER,
+            Self::DownRight => Align2::RIGHT_BOTTOM,
+            Self::Down => Align2::CENTER_BOTTOM,
+            Self::DownLeft => Align2::LEFT_BOTTOM,
+            Self::Left => Align2::LEFT_CENTER,
+            Self::UpLeft => Align2::LEFT_TOP,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -254,5 +315,26 @@ impl<T> Direction4HalfArray<T> {
 
     pub fn get_mut(&mut self, dir: Direction4Half) -> &mut T {
         &mut self.0[dir.into_index()]
+    }
+}
+
+// literally just copied from generated std code
+pub const fn div_floor_isize(lhs: isize, rhs: isize) -> isize {
+    let d = lhs / rhs;
+    let r = lhs % rhs;
+    if (r > 0 && rhs < 0) || (r < 0 && rhs > 0) {
+        d - 1
+    } else {
+        d
+    }
+}
+
+pub const fn div_ceil_isize(lhs: isize, rhs: isize) -> isize {
+    let d = lhs / rhs;
+    let r = lhs % rhs;
+    if (r > 0 && rhs > 0) || (r < 0 && rhs < 0) {
+        d + 1
+    } else {
+        d
     }
 }
