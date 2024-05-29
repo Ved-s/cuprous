@@ -1,7 +1,4 @@
-use std::{
-    ops::Deref,
-    sync::Arc,
-};
+use std::{ops::Deref, sync::Arc};
 
 use app::DockedApp;
 use eframe::{
@@ -287,6 +284,19 @@ impl Direction8 {
         other.rotated_couterclockwise_by(angle)
     }
 
+    pub const fn into_half_option(self) -> Option<Direction4Half> {
+        match self {
+            Self::Up => Some(Direction4Half::Up),
+            Self::UpRight => Some(Direction4Half::UpRight),
+            Self::Right => None,
+            Self::DownRight => None,
+            Self::Down => None,
+            Self::DownLeft => None,
+            Self::Left => Some(Direction4Half::Left),
+            Self::UpLeft => Some(Direction4Half::UpLeft),
+        }
+    }
+
     pub const fn into_half(self) -> (Direction4Half, bool) {
         match self {
             Self::Up => (Direction4Half::Up, false),
@@ -347,14 +357,7 @@ impl Direction8 {
     pub const fn into_angle_xp_cw(self) -> f32 {
         use std::f32::consts::*;
         const TAU_SEGMENTS: [f32; 8] = [
-            0.0,
-            FRAC_PI_4,
-            FRAC_PI_2,
-            2.3561945,
-            PI,
-            3.9269908,
-            4.712389,
-            5.497787,
+            0.0, FRAC_PI_4, FRAC_PI_2, 2.3561945, PI, 3.9269908, 4.712389, 5.497787,
         ];
         let i = match self {
             Direction8::Up => 6,
@@ -444,6 +447,14 @@ impl<T> Direction8Array<T> {
             .iter_mut()
             .enumerate()
             .map(|(i, v)| (Direction8::from_index(i), v))
+    }
+
+    pub fn values(&self) -> impl Iterator<Item = &T> {
+        self.0.iter()
+    }
+
+    pub fn values_mut(&mut self) -> impl Iterator<Item = &mut T> {
+        self.0.iter_mut()
     }
 }
 

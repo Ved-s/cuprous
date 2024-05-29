@@ -131,18 +131,20 @@ impl<T> Vector2<T> {
         Self::new(x, y) + origin
     }
 
-    /// 0 -> 2PI countercloclwise from +X axis
-    pub fn angle_to_x(&self) -> T
+    /// 0 -> τ cloclwise from +X (right) axis
+    pub fn angle_to_xp(&self) -> T
     where 
         T: Float + FloatConst
     {
-        let v = (-self.y).atan2(self.x);
+        // let v = self.y.atan2(self.x);
 
-        if v.is_sign_negative() {
-            T::TAU() + v
-        } else {
-            v.abs() // remove weird -0.0
-        }
+        // if v.is_sign_negative() {
+        //     T::TAU() + v
+        // } else {
+        //     v.abs() // remove weird -0.0
+        // }
+
+        (self.y.atan2(self.x) + T::TAU()) % T::TAU()
     }
     
     pub fn swapped(self) -> Self {

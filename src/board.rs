@@ -1,6 +1,9 @@
-use std::{num::NonZeroU32, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    num::NonZeroU32,
+    sync::Arc,
+};
 
-use eframe::egui::ahash::{HashMap, HashMapExt};
 use parking_lot::RwLock;
 
 use crate::{
@@ -33,6 +36,17 @@ impl Board {
         wires.set(id, arc.clone());
         arc
     }
+
+    pub fn free_wire(&self, wire: &Arc<Wire>) {
+        let mut wires = self.wires.write();
+        let Some(ewire) = wires.inner.get(wire.id) else {
+            return;
+        };
+
+        if ewire.as_ref().is_some_and(|w| Arc::ptr_eq(w, wire)) {
+            wires.remove(wire.id);
+        }
+    }
 }
 
 #[derive(Default)]
@@ -52,22 +66,66 @@ impl BoardEditor {
             }
         }
 
-        let wire = self.set_wire_point(pos, None);
-        let other_wire = self.set_wire_point(
-            pos + dir.into_dir_isize() * length.get() as isize,
-            Some(wire.clone()),
-        );
+        let other_pos = pos + dir.into_dir_isize() * length.get() as isize;
+
+        for pos in [pos, other_pos] {
+            let Some(dirs) = self.examine_directions(pos) else {
+                continue;
+            };
+
+            for wire in dirs.values() {
+                let Some((_, wire)) = wire else {
+                    continue;
+                };
+
+                wire_map.insert(wire.id, wire.clone());
+            }
+        }
+
+        let start = wire_map.values().next().cloned();
+
+        let wire = self.set_wire_point(pos, start, false);
+        let other_wire = self.set_wire_point(other_pos, Some(wire.clone()), false);
 
         wire_map.insert(wire.id, wire);
         wire_map.insert(other_wire.id, other_wire);
 
         self.set_distances(pos, dir, length.get() as usize, true, true);
 
-        if wire_map.len() <= 1 {
-            return;
+        if wire_map.len() > 1 {
+            self.merge_many_wires(wire_map.values().cloned());
         }
 
-        self.merge_many_wires(wire_map.values().cloned());
+        for pos in dir.iter_along(pos, length.get() as usize) {
+            self.remove_needless_point(pos);
+        }
+    }
+
+    pub fn toggle_wire_point(&mut self, pos: Vec2isize) {
+        let Some(node) = self.wires.get(pos) else {
+            return;
+        };
+
+        if node.wire.is_some() {
+            for (dir, dist) in node.directions.iter() {
+                if dist.is_none() {
+                    continue;
+                }
+
+                let other_dist = node.directions.get(dir.inverted()).is_some();
+                if !other_dist {
+                    return;
+                }
+            }
+
+            self.remove_wire_point(pos, true);
+        } else {
+            if node.directions.values().all(|d| d.is_none()) {
+                return;
+            }
+
+            self.set_wire_point(pos, None, true);
+        }
     }
 
     fn set_distances(
@@ -125,16 +183,21 @@ impl BoardEditor {
         }
     }
 
-    fn set_wire_point(&mut self, pos: Vec2isize, new_wire: Option<Arc<Wire>>) -> Arc<Wire> {
+    fn set_wire_point(
+        &mut self,
+        pos: Vec2isize,
+        new_wire: Option<Arc<Wire>>,
+        merge: bool,
+    ) -> Arc<Wire> {
         let node = self.wires.get(pos);
 
         if let Some(wire) = node.and_then(|n| n.wire.clone()) {
             return wire;
         }
 
-        let directions = self.examine_directions(pos);
+        let mut merge_wires = HashMap::new();
 
-        let node = self.wires.get_or_create_mut(pos);
+        let directions = self.examine_directions(pos);
 
         let wire = match &directions {
             None => new_wire.unwrap_or_else(|| self.board.create_wire()),
@@ -142,14 +205,18 @@ impl BoardEditor {
                 let mut biggest_wire = None;
                 let mut max_points = None;
 
-                for (_, wire) in array.iter() {
-                    let Some(wire) = wire else {
+                for wire in array.values() {
+                    let Some((_, wire)) = wire else {
                         continue;
                     };
-                    let points = wire.1.points.read().len();
+                    let points = wire.points.read().len();
                     if !max_points.is_some_and(|mp| points <= mp) {
                         max_points = Some(points);
-                        biggest_wire = Some(wire.1.clone());
+                        biggest_wire = Some(wire.clone());
+                    }
+
+                    if merge {
+                        merge_wires.insert(wire.id, wire.clone());
                     }
                 }
 
@@ -159,16 +226,21 @@ impl BoardEditor {
             }
         };
 
+        let node = self.wires.get_or_create_mut(pos);
         node.wire = Some(wire.clone());
 
         wire.points.write().insert(pos, WirePoint::default());
 
         self.fix_directions_at_intersection(pos);
 
+        if merge_wires.len() > 1 {
+            self.merge_many_wires(merge_wires.values().cloned());
+        }
+
         wire
     }
 
-    fn remove_wire_point(&mut self, pos: Vec2isize) -> Option<Arc<Wire>> {
+    fn remove_wire_point(&mut self, pos: Vec2isize, unmerge: bool) -> Option<Arc<Wire>> {
         let node = self.wires.get(pos);
 
         if let Some(node) = node {
@@ -183,10 +255,21 @@ impl BoardEditor {
         let wire = node.wire.take();
 
         if let Some(wire) = &wire {
-            wire.points.write().remove(&pos);
+            let mut points = wire.points.write();
+            points.remove(&pos);
+
+            if points.is_empty() {
+                self.board.free_wire(wire);
+            }
         }
 
         self.fix_directions_at_intersection(pos);
+
+        if unmerge {
+            if let Some(wire) = wire.clone() {
+                self.unmerge_wire(wire);
+            }
+        }
 
         wire
     }
@@ -261,27 +344,143 @@ impl BoardEditor {
     }
 
     fn merge_wires(&mut self, from: Arc<Wire>, into: Arc<Wire>) {
-        // unimplemented!
+        let mut points_from = from.points.write();
+        let mut points_into = into.points.write();
+
+        for (pos, point) in points_from.drain() {
+            points_into.insert(pos, point);
+            self.wires.get_or_create_mut(pos).wire = Some(into.clone());
+        }
+
+        self.board.free_wire(&from);
     }
 
     fn unmerge_wire(&mut self, wire: Arc<Wire>) {
-        // unimplemented!
+        let start_wire_id = wire.id;
+        let mut points = wire.points.write_arc();
+        let mut positions: HashSet<_> = HashSet::from_iter(points.keys().copied());
+        let mut trav_positions = HashSet::new();
+
+        points.clear();
+
+        let mut wire = Some((wire, points));
+
+        while let Some(pos) = positions.iter().next().copied() {
+            positions.remove(&pos);
+
+            if !self.wires.get(pos).is_some_and(|n| n.wire.is_some()) {
+                continue;
+            };
+
+            let mut wire = wire.take().unwrap_or_else(|| {
+                let wire = self.board.create_wire();
+                (wire.clone(), wire.points.write_arc())
+            });
+
+            trav_positions.clear();
+            trav_positions.insert(pos);
+
+            while let Some(pos) = trav_positions.iter().next().copied() {
+                positions.remove(&pos);
+                trav_positions.remove(&pos);
+
+                if wire.1.contains_key(&pos) {
+                    continue;
+                }
+
+                let Some(node) = self.wires.get_mut(pos).filter(|n| n.wire.is_some()) else {
+                    continue;
+                };
+
+                node.wire = Some(wire.0.clone());
+                let directions = node.directions;
+
+                let mut point_directions = Direction4HalfArray::default();
+
+                for (dir, dist) in directions.iter() {
+                    let Some(dist) = *dist else {
+                        continue;
+                    };
+
+                    let target_pos = pos + dir.into_dir_isize() * dist.get() as isize;
+                    if !self
+                        .wires
+                        .get(target_pos)
+                        .is_some_and(|n| n.wire.as_ref().is_some_and(|w| w.id == start_wire_id))
+                    {
+                        continue;
+                    };
+
+                    if let Some(dir) = dir.into_half_option() {
+                        *point_directions.get_mut(dir) = true;
+                    }
+
+                    if !wire.1.contains_key(&target_pos) {
+                        trav_positions.insert(target_pos);
+                    }
+                }
+
+                wire.1.insert(
+                    pos,
+                    WirePoint {
+                        directions: point_directions,
+                    },
+                );
+            }
+
+            if wire.1.is_empty() {
+                self.board.free_wire(&wire.0);
+            }
+        }
+
+        if let Some(wire) = wire {
+            self.board.free_wire(&wire.0);
+        }
     }
 
-    fn remove_unneeded_point(&mut self, pos: Vec2isize) {
-        // unimplemented!
+    fn remove_needless_point(&mut self, pos: Vec2isize) {
+        let Some(node) = self.wires.get(pos) else {
+            return;
+        };
+
+        if node.wire.is_none() {
+            return;
+        }
+
+        let mut dirs = 0;
+
+        for (dir, dist) in node.directions.iter() {
+            if dist.is_none() {
+                continue;
+            }
+
+            let other_dist = node.directions.get(dir.inverted()).is_some();
+            if other_dist {
+                dirs += 1;
+
+                // Node is a crossing
+                if dirs > 2 {
+                    return;
+                }
+            } else {
+                // Node has a wire not in line with others
+                return;
+            }
+        }
+
+        self.remove_wire_point(pos, false);
     }
 }
 
 pub struct Wire {
     pub id: usize,
 
-    pub points: RwLock<HashMap<Vec2isize, WirePoint>>,
+    pub points: Arc<RwLock<HashMap<Vec2isize, WirePoint>>>,
 }
 
 #[derive(Default)]
 pub struct WirePoint {
-    directions: Direction4HalfArray<bool>,
+    pub directions: Direction4HalfArray<bool>,
 }
 
 #[derive(Default, Clone)]
