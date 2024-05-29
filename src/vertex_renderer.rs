@@ -1,4 +1,8 @@
+use std::f32::consts::TAU;
+
 use glow::{Buffer, Context, HasContext, Program, UniformLocation, VertexArray};
+
+use crate::vector::Vec2f;
 
 const VERT_SHADER: &str = r#"#version 330 core
   layout (location = 0) in vec2 pos;
@@ -251,6 +255,16 @@ impl VertexRenderer {
             br: Vertex::new([tl[0] + size[0], tl[1] + size[1]], rgba),
         });
     }
+
+    pub fn add_quad_line(&mut self, a: Vec2f, b: Vec2f, width: f32, rgba: impl Into<[f32; 4]>) {
+        let diff = b - a;
+        let angle = diff.angle_to_x();
+        let up = Vec2f::from_angle_length(angle + TAU / 4.0, width / 2.0);
+        let down = Vec2f::from_angle_length(angle - TAU / 4.0, width / 2.0);
+
+        self.add_singlecolor_quad([(a + up).into(), (b + up).into(), (a + down).into(), (b + down).into()], rgba.into());
+    }
+
 }
 
 #[derive(Clone, Copy)]

@@ -1,21 +1,24 @@
-use std::{f32::consts::TAU, num::NonZeroU32, sync::Arc};
+use std::{
+    f32::consts::{SQRT_2, TAU},
+    num::NonZeroU32,
+    sync::Arc,
+};
 
 use eframe::{
     egui::{
-        remap_clamp, Align, Color32, Key, PaintCallback, PaintCallbackInfo,
-        PointerButton, Rect, Response, Rounding, Sense, Stroke, TextStyle, Ui, WidgetText,
+        remap_clamp, Align, Color32, Key, PointerButton, Rect,
+        Response, Rounding, Sense, Stroke, TextStyle, Ui, WidgetText,
     },
-    egui_glow,
     epaint::TextShape,
 };
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 
 use crate::{
     app::App,
     board::BoardEditor,
     vector::{Vec2f, Vec2isize, Vector2},
     vertex_renderer::VertexRenderer,
-    Direction8, PaintContext, Screen, CHUNK_SIZE,
+    Direction4Half, Direction8, PaintContext, Screen, VertexPaintContext, CHUNK_SIZE, WIRE_WIDTH,
 };
 
 use super::{TabCreation, TabImpl};
@@ -26,7 +29,7 @@ pub struct BoardView {
 
     wire_draw_start: Option<Vec2isize>,
 
-    editor: BoardEditor,
+    editor: Arc<RwLock<BoardEditor>>,
     fixed_screen_pos: Option<(Rect, PanAndZoom)>,
 }
 
@@ -110,13 +113,20 @@ impl TabImpl for BoardView {
         let ctx = PaintContext::new(ui, screen);
 
         self.draw_grid(&ctx);
+
+        let editor = self.editor.clone();
+        ctx.draw_vertexes(self.vertexes.clone(), move |mut ctx| {
+            Self::draw_wires(&mut ctx, &editor.read());
+            ctx.vertexes.draw_tris(ctx.gl, ctx.full_screen_size.into());
+        });
+        // Self::draw_wires(&ctx, &editor.read());
         self.draw_wire_debug(&ctx);
-        self.handle_wire_drawing(&ctx, &interaction);
+        self.handle_wire_intearctions(&ctx, &interaction);
     }
 }
 
 impl BoardView {
-    fn draw_grid_layer(vertexes: &mut VertexRenderer, screen: Screen, chunks: bool) {
+    fn draw_grid_layer(ctx: &mut VertexPaintContext, chunks: bool) {
         let (scale_mul, fade_min, fade_max) = if chunks {
             (
                 CHUNK_SIZE as f32,
@@ -127,122 +137,169 @@ impl BoardView {
             (1.0, CHUNK_SIZE as f32 / 4.0, CHUNK_SIZE as f32)
         };
 
-        let scale = screen.scale * scale_mul;
+        let scale = ctx.screen.scale * scale_mul;
 
-        if screen.scale > fade_min {
-            let alpha = remap_clamp(screen.scale, fade_min..=fade_max, 0.0..=1.0);
+        if ctx.screen.scale > fade_min {
+            let alpha = remap_clamp(ctx.screen.scale, fade_min..=fade_max, 0.0..=1.0);
 
-            let offx = (1.0 - ((screen.world_pos.x / scale_mul).fract() + 1.0).fract()) * scale;
-            let offy = (1.0 - ((screen.world_pos.y / scale_mul).fract() + 1.0).fract()) * scale;
+            let offx = (1.0 - ((ctx.screen.world_pos.x / scale_mul).fract() + 1.0).fract()) * scale;
+            let offy = (1.0 - ((ctx.screen.world_pos.y / scale_mul).fract() + 1.0).fract()) * scale;
 
-            let countx = (screen.screen_rect.width() / scale).ceil() as usize;
-            let county = (screen.screen_rect.height() / scale).ceil() as usize;
+            let countx = (ctx.screen.screen_rect.width() / scale).ceil() as usize;
+            let county = (ctx.screen.screen_rect.height() / scale).ceil() as usize;
 
             let white = if chunks { 0.2 } else { 0.15 };
 
             for i in 0..countx {
-                let x = offx + i as f32 * scale + screen.screen_rect.left();
-                let wx = i as isize + (screen.world_pos.x / scale_mul).floor() as isize + 1;
+                let x = offx + i as f32 * scale + ctx.screen.screen_rect.left();
+                let wx = i as isize + (ctx.screen.world_pos.x / scale_mul).floor() as isize + 1;
 
                 if (wx % CHUNK_SIZE as isize) == 0 && !chunks || wx == 0 {
                     continue;
                 }
 
-                vertexes.add_singlecolor_line(
-                    [x, screen.screen_rect.top()],
-                    [x, screen.screen_rect.bottom()],
+                ctx.vertexes.add_singlecolor_line(
+                    [x, ctx.screen.screen_rect.top()],
+                    [x, ctx.screen.screen_rect.bottom()],
                     [white * alpha, white * alpha, white * alpha, alpha],
                 );
             }
 
             for i in 0..county {
-                let y = offy + i as f32 * scale + screen.screen_rect.top();
-                let wy = i as isize + (screen.world_pos.y / scale_mul).floor() as isize + 1;
+                let y = offy + i as f32 * scale + ctx.screen.screen_rect.top();
+                let wy = i as isize + (ctx.screen.world_pos.y / scale_mul).floor() as isize + 1;
 
                 if (wy % CHUNK_SIZE as isize) == 0 && !chunks || wy == 0 {
                     continue;
                 }
 
-                vertexes.add_singlecolor_line(
-                    [screen.screen_rect.left(), y],
-                    [screen.screen_rect.right(), y],
+                ctx.vertexes.add_singlecolor_line(
+                    [ctx.screen.screen_rect.left(), y],
+                    [ctx.screen.screen_rect.right(), y],
                     [white * alpha, white * alpha, white * alpha, alpha],
                 );
             }
         }
 
-        let zero = screen.world_to_screen(0.0);
+        let zero = ctx.screen.world_to_screen(0.0);
 
-        if screen.screen_rect.left() <= zero.x && zero.x < screen.screen_rect.right() {
-            vertexes.add_singlecolor_line(
-                [zero.x, screen.screen_rect.top()],
-                [zero.x, screen.screen_rect.bottom()],
+        if ctx.screen.screen_rect.left() <= zero.x && zero.x < ctx.screen.screen_rect.right() {
+            ctx.vertexes.add_singlecolor_line(
+                [zero.x, ctx.screen.screen_rect.top()],
+                [zero.x, ctx.screen.screen_rect.bottom()],
                 [0.2, 1.0, 0.2, 1.0],
             );
         }
 
-        if screen.screen_rect.top() <= zero.y && zero.y < screen.screen_rect.bottom() {
-            vertexes.add_singlecolor_line(
-                [screen.screen_rect.left(), zero.y],
-                [screen.screen_rect.right(), zero.y],
+        if ctx.screen.screen_rect.top() <= zero.y && zero.y < ctx.screen.screen_rect.bottom() {
+            ctx.vertexes.add_singlecolor_line(
+                [ctx.screen.screen_rect.left(), zero.y],
+                [ctx.screen.screen_rect.right(), zero.y],
                 [1.0, 0.2, 0.2, 1.0],
             );
         }
     }
 
-    fn draw_grid_cross(vertexes: &mut VertexRenderer, screen: Screen) {
-        let cross_pos = screen.world_to_screen(0.0);
-        let cross_pos = screen.screen_rect.clamp(cross_pos.into());
+    fn draw_grid_cross(ctx: &mut VertexPaintContext) {
+        let cross_pos = ctx.screen.world_to_screen(0.0);
+        let cross_pos = ctx.screen.screen_rect.clamp(cross_pos.into());
 
-        vertexes.add_singlecolor_line(
-            [cross_pos.x - screen.scale, cross_pos.y],
-            [cross_pos.x + screen.scale, cross_pos.y],
+        ctx.vertexes.add_singlecolor_line(
+            [cross_pos.x - ctx.screen.scale, cross_pos.y],
+            [cross_pos.x + ctx.screen.scale, cross_pos.y],
             [1.0; 4],
         );
 
-        vertexes.add_singlecolor_line(
-            [cross_pos.x, cross_pos.y - screen.scale],
-            [cross_pos.x, cross_pos.y + screen.scale],
+        ctx.vertexes.add_singlecolor_line(
+            [cross_pos.x, cross_pos.y - ctx.screen.scale],
+            [cross_pos.x, cross_pos.y + ctx.screen.scale],
             [1.0; 4],
         );
     }
 
-    fn draw_grid(&mut self, ctx: &PaintContext) {
-        let vertexes = self.vertexes.clone();
-        let screen = ctx.screen;
-        let callback = move |pi: PaintCallbackInfo, p: &egui_glow::Painter| {
-            use glow::HasContext;
-
-            unsafe {
-                p.gl().viewport(
-                    0,
-                    0,
-                    pi.screen_size_px[0] as i32,
-                    pi.screen_size_px[1] as i32,
-                );
-            };
-
-            let mut vertexes = vertexes.lock();
-            let vertexes = vertexes.get_or_insert_with(|| {
-                VertexRenderer::new(p.gl()).expect("running in OpenGL context")
-            });
-
-            vertexes.clear();
-            Self::draw_grid_layer(vertexes, screen, false);
-            Self::draw_grid_layer(vertexes, screen, true);
-            Self::draw_grid_cross(vertexes, screen);
-            let screen_size = [pi.screen_size_px[0] as f32, pi.screen_size_px[1] as f32];
-            vertexes.draw_lines(p.gl(), screen_size, 1.0);
-        };
-        ctx.painter.add(PaintCallback {
-            rect: screen.screen_rect,
-            callback: Arc::new(egui_glow::CallbackFn::new(callback)),
+    fn draw_grid(&self, ctx: &PaintContext) {
+        ctx.draw_vertexes(self.vertexes.clone(), |mut ctx| {
+            Self::draw_grid_layer(&mut ctx, false);
+            Self::draw_grid_layer(&mut ctx, true);
+            Self::draw_grid_cross(&mut ctx);
+            ctx.vertexes
+                .draw_lines(ctx.gl, ctx.full_screen_size.into(), 1.0);
         });
     }
 
-    fn draw_wire_debug(&mut self, ctx: &PaintContext) {
-        for (pos, lookaround, node) in self
-            .editor
+    fn draw_wires(ctx: &mut VertexPaintContext, editor: &BoardEditor) {
+
+        let tl = [ctx.tile_bounds_tl.x - 1, ctx.tile_bounds_tl.y].into();
+        let size = [ctx.tile_bounds_size.x + 2, ctx.tile_bounds_size.y + 1].into();
+
+        for (pos, lookaround, node) in editor
+            .wires
+            .iter_area_with_lookaround(tl, size)
+        {
+            for dir in Direction4Half::ALL {
+                let dist = node.directions.get(dir.into());
+                let Some(dist) = dist else {
+                    continue;
+                };
+
+                let wire = match &node.wire {
+                    Some(wire) => wire,
+                    None => {
+                        match dir {
+                            Direction4Half::Left if pos.x > ctx.tile_bounds_br.x => (),
+                            Direction4Half::UpLeft
+                                if pos.y > ctx.tile_bounds_br.y || pos.x > ctx.tile_bounds_br.x => {
+                            }
+                            Direction4Half::Up if pos.y > ctx.tile_bounds_br.y => {}
+                            Direction4Half::UpRight
+                                if pos.y > ctx.tile_bounds_br.y
+                                    || pos.x < ctx.tile_bounds_tl.x => {}
+                            _ => continue,
+                        }
+
+                        let dir = Direction8::from_half(dir, true);
+                        let dist = node.directions.get(dir);
+                        let Some(dist) = dist else {
+                            continue;
+                        };
+                        let rel = dir.into_dir_isize() * dist.get() as isize;
+                        let wire = lookaround.get_relative(rel).and_then(|n| n.wire.as_ref());
+                        let Some(wire) = wire else {
+                            continue;
+                        };
+                        wire
+                    }
+                };
+
+                let len = dist.get() as f32;
+
+                let len = if dir.is_diagonal() { len * SQRT_2 } else { len };
+                let pos = ctx.screen.world_to_screen(pos.convert(|v| v as f32 + 0.5));
+
+                let pos2 = pos
+                    + Vec2f::from_angle_length(
+                        Direction8::from_half(dir, false).into_angle_xp_cw(),
+                        len * ctx.screen.scale,
+                    );
+
+                ctx.vertexes.add_quad_line(
+                    pos,
+                    pos2,
+                    WIRE_WIDTH * ctx.screen.scale,
+                    Color32::GREEN.to_normalized_gamma_f32(),
+                );
+
+                // ctx.painter.line_segment(
+                //     [pos.into(), pos2.into()],
+                //     Stroke::new(WIRE_WIDTH * ctx.screen.scale, Color32::GREEN),
+                // );
+            }
+        }
+    }
+
+    fn draw_wire_debug(&self, ctx: &PaintContext) {
+        let editor = self.editor.read();
+        for (pos, lookaround, node) in editor
             .wires
             .iter_area_with_lookaround(ctx.tile_bounds_tl, ctx.tile_bounds_size)
         {
@@ -292,10 +349,10 @@ impl BoardView {
 
                 let pos = screen_pos + (ctx.screen.scale / 2.0) - (galley.size() / 2.0);
 
-                let correct_wire = self
-                    .editor
+                let correct_wire = editor
                     .board
                     .wires
+                    .read()
                     .get(wire.id)
                     .is_some_and(|board_wire| Arc::ptr_eq(wire, board_wire));
 
@@ -318,7 +375,7 @@ impl BoardView {
         }
     }
 
-    fn handle_wire_drawing(&mut self, ctx: &PaintContext, interaction: &Response) {
+    fn handle_wire_intearctions(&mut self, ctx: &PaintContext, interaction: &Response) {
         let world_mouse = ctx
             .ui
             .input(|input| input.pointer.latest_pos())
@@ -357,7 +414,7 @@ impl BoardView {
 
             let length = diff.length();
 
-            let length = if segment_index % 2 == 1 {
+            let length = if direction.is_diagonal() {
                 length / std::f32::consts::SQRT_2
             } else {
                 length
@@ -372,7 +429,7 @@ impl BoardView {
 
             ctx.painter.line_segment(
                 [startf.into(), endf.into()],
-                Stroke::new(0.2 * ctx.screen.scale, Color32::from_gray(100)),
+                Stroke::new(WIRE_WIDTH * ctx.screen.scale, Color32::from_gray(100)),
             );
 
             if !ctx
@@ -380,7 +437,9 @@ impl BoardView {
                 .input(|input| input.pointer.button_down(PointerButton::Primary))
             {
                 if let Some(nonzero_len) = NonZeroU32::new(length) {
-                    self.editor.place_wire(start, direction, nonzero_len);
+                    self.editor
+                        .write()
+                        .place_wire(start, direction, nonzero_len);
                 }
                 self.wire_draw_start = None;
             }

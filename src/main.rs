@@ -1,6 +1,16 @@
+use std::{
+    ops::Deref,
+    sync::Arc,
+};
+
 use app::DockedApp;
-use eframe::egui::{Align2, Painter, Rect, Ui};
+use eframe::{
+    egui::{Align2, PaintCallback, PaintCallbackInfo, Painter, Rect, Ui},
+    egui_glow,
+};
+use parking_lot::Mutex;
 use vector::{Vec2f, Vec2isize, Vec2usize};
+use vertex_renderer::VertexRenderer;
 
 pub mod app;
 pub mod board;
@@ -13,6 +23,7 @@ pub mod vector;
 pub mod vertex_renderer;
 
 pub const CHUNK_SIZE: usize = 16;
+pub const WIRE_WIDTH: f32 = 0.2;
 
 fn main() -> Result<(), eframe::Error> {
     let options = eframe::NativeOptions {
@@ -87,7 +98,23 @@ pub struct PaintContext<'a> {
     pub chunk_bounds_br: Vec2isize,
     pub chunk_bounds_size: Vec2usize,
 
-    pub screen: Screen
+    pub screen: Screen,
+}
+
+pub struct VertexPaintContext<'a> {
+    pub vertexes: &'a mut VertexRenderer,
+
+    pub tile_bounds_tl: Vec2isize,
+    pub tile_bounds_br: Vec2isize,
+    pub tile_bounds_size: Vec2usize,
+
+    pub chunk_bounds_tl: Vec2isize,
+    pub chunk_bounds_br: Vec2isize,
+    pub chunk_bounds_size: Vec2usize,
+    pub full_screen_size: Vec2f,
+    pub gl: &'a glow::Context,
+
+    pub screen: Screen,
 }
 
 impl<'a> PaintContext<'a> {
@@ -119,6 +146,60 @@ impl<'a> PaintContext<'a> {
             screen,
         }
     }
+
+    pub fn draw_vertexes(
+        &self,
+        vertexes: Arc<Mutex<Option<VertexRenderer>>>,
+        draw: impl Fn(VertexPaintContext) + Sync + Send + 'static,
+    ) {
+        let tile_bounds_tl = self.tile_bounds_tl;
+        let tile_bounds_br = self.tile_bounds_br;
+        let tile_bounds_size = self.tile_bounds_size;
+        let chunk_bounds_tl = self.chunk_bounds_tl;
+        let chunk_bounds_br = self.chunk_bounds_br;
+        let chunk_bounds_size = self.chunk_bounds_size;
+        let screen = self.screen;
+
+        let callback = move |pi: PaintCallbackInfo, p: &egui_glow::Painter| {
+            use glow::HasContext;
+
+            unsafe {
+                p.gl().viewport(
+                    0,
+                    0,
+                    pi.screen_size_px[0] as i32,
+                    pi.screen_size_px[1] as i32,
+                );
+            };
+
+            let mut vertexes = vertexes.lock();
+            let vertexes = vertexes.get_or_insert_with(|| {
+                VertexRenderer::new(p.gl()).expect("running in OpenGL context")
+            });
+            let screen_size = [pi.screen_size_px[0] as f32, pi.screen_size_px[1] as f32];
+
+            vertexes.clear();
+
+            let ctx = VertexPaintContext {
+                vertexes,
+                tile_bounds_tl,
+                tile_bounds_br,
+                tile_bounds_size,
+                chunk_bounds_tl,
+                chunk_bounds_br,
+                chunk_bounds_size,
+                screen,
+                gl: p.gl().deref(),
+                full_screen_size: screen_size.into(),
+            };
+
+            draw(ctx);
+        };
+        self.painter.add(PaintCallback {
+            rect: self.screen.screen_rect,
+            callback: Arc::new(egui_glow::CallbackFn::new(callback)),
+        });
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -135,7 +216,6 @@ pub enum Direction8 {
 
 #[allow(dead_code)]
 impl Direction8 {
-
     pub const ALL: [Self; 8] = [
         Self::Up,
         Self::UpRight,
@@ -147,8 +227,8 @@ impl Direction8 {
         Self::UpLeft,
     ];
 
-    pub fn into_dir_isize(self) -> Vec2isize {
-        match self {
+    pub const fn into_dir_isize(self) -> Vec2isize {
+        let [x, y] = match self {
             Self::Up => [0, -1],
             Self::UpRight => [1, -1],
             Self::Right => [1, 0],
@@ -157,11 +237,11 @@ impl Direction8 {
             Self::DownLeft => [-1, 1],
             Self::Left => [-1, 0],
             Self::UpLeft => [-1, -1],
-        }
-        .into()
+        };
+        Vec2isize::new(x, y)
     }
 
-    pub fn into_index(self) -> usize {
+    pub const fn into_index(self) -> usize {
         match self {
             Self::Up => 0,
             Self::UpRight => 1,
@@ -174,7 +254,7 @@ impl Direction8 {
         }
     }
 
-    pub fn from_index(i: usize) -> Self {
+    pub const fn from_index(i: usize) -> Self {
         match i % 8 {
             0 => Self::Up,
             1 => Self::UpRight,
@@ -188,26 +268,26 @@ impl Direction8 {
         }
     }
 
-    pub fn rotated_clockwise_by(self, other: Self) -> Self {
+    pub const fn rotated_clockwise_by(self, other: Self) -> Self {
         Self::from_index(self.into_index() + other.into_index())
     }
 
-    pub fn rotated_couterclockwise_by(self, other: Self) -> Self {
+    pub const fn rotated_couterclockwise_by(self, other: Self) -> Self {
         Self::from_index(self.into_index() + 8 - other.into_index())
     }
 
-    pub fn inverted(self) -> Self {
+    pub const fn inverted(self) -> Self {
         Self::from_index(self.into_index() + 4)
     }
 
     // UpRight (1), Up (0) / Down (4) -> UpLeft (7)
     // Up (0), Left (6) / Right (2) -> Down(4)
-    pub fn flip_by(self, other: Self) -> Self {
+    pub const fn flip_by(self, other: Self) -> Self {
         let angle = self.rotated_couterclockwise_by(other);
         other.rotated_couterclockwise_by(angle)
     }
 
-    pub fn into_half(self) -> (Direction4Half, bool) {
+    pub const fn into_half(self) -> (Direction4Half, bool) {
         match self {
             Self::Up => (Direction4Half::Up, false),
             Self::UpRight => (Direction4Half::UpRight, false),
@@ -220,7 +300,7 @@ impl Direction8 {
         }
     }
 
-    pub fn from_half(dir: Direction4Half, reverse: bool) -> Direction8 {
+    pub const fn from_half(dir: Direction4Half, reverse: bool) -> Direction8 {
         match (dir, reverse) {
             (Direction4Half::Up, false) => Self::Up,
             (Direction4Half::UpRight, false) => Self::UpRight,
@@ -237,7 +317,7 @@ impl Direction8 {
         (0..length).map(move |i| start + self.into_dir_isize() * i as isize)
     }
 
-    pub fn into_align2(self) -> Align2 {
+    pub const fn into_align2(self) -> Align2 {
         match self {
             Self::Up => Align2::CENTER_TOP,
             Self::UpRight => Align2::RIGHT_TOP,
@@ -248,6 +328,45 @@ impl Direction8 {
             Self::Left => Align2::LEFT_CENTER,
             Self::UpLeft => Align2::LEFT_TOP,
         }
+    }
+
+    pub const fn is_diagonal(self) -> bool {
+        match self {
+            Self::Up => false,
+            Self::UpRight => true,
+            Self::Right => false,
+            Self::DownRight => true,
+            Self::Down => false,
+            Self::DownLeft => true,
+            Self::Left => false,
+            Self::UpLeft => true,
+        }
+    }
+
+    /// Returns angle in radians, 0 being at +X (Right), clockwise
+    pub const fn into_angle_xp_cw(self) -> f32 {
+        use std::f32::consts::*;
+        const TAU_SEGMENTS: [f32; 8] = [
+            0.0,
+            FRAC_PI_4,
+            FRAC_PI_2,
+            2.3561945,
+            PI,
+            3.9269908,
+            4.712389,
+            5.497787,
+        ];
+        let i = match self {
+            Direction8::Up => 6,
+            Direction8::UpRight => 7,
+            Direction8::Right => 0,
+            Direction8::DownRight => 1,
+            Direction8::Down => 2,
+            Direction8::DownLeft => 3,
+            Direction8::Left => 4,
+            Direction8::UpLeft => 5,
+        };
+        TAU_SEGMENTS[i]
     }
 }
 
@@ -260,6 +379,17 @@ pub enum Direction4Half {
 }
 
 impl Direction4Half {
+    pub const ALL: [Self; 4] = [Self::Left, Self::UpLeft, Self::Up, Self::UpRight];
+
+    fn is_diagonal(self) -> bool {
+        match self {
+            Self::Up => false,
+            Self::UpRight => true,
+            Self::Left => false,
+            Self::UpLeft => true,
+        }
+    }
+
     pub fn into_index(self) -> usize {
         match self {
             Self::Left => 0,
@@ -280,6 +410,12 @@ impl Direction4Half {
     }
 }
 
+impl From<Direction4Half> for Direction8 {
+    fn from(value: Direction4Half) -> Self {
+        Self::from_half(value, false)
+    }
+}
+
 #[derive(Default, Clone, Copy)]
 pub struct Direction8Array<T>([T; 8]);
 
@@ -297,11 +433,17 @@ impl<T> Direction8Array<T> {
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (Direction8, &T)> {
-        self.0.iter().enumerate().map(|(i, v)| (Direction8::from_index(i), v))
+        self.0
+            .iter()
+            .enumerate()
+            .map(|(i, v)| (Direction8::from_index(i), v))
     }
 
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (Direction8, &mut T)> {
-        self.0.iter_mut().enumerate().map(|(i, v)| (Direction8::from_index(i), v))
+        self.0
+            .iter_mut()
+            .enumerate()
+            .map(|(i, v)| (Direction8::from_index(i), v))
     }
 }
 

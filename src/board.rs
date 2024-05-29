@@ -10,26 +10,27 @@ use crate::{
 };
 
 pub struct Board {
-    pub wires: FixedVec<Arc<Wire>>,
+    pub wires: RwLock<FixedVec<Arc<Wire>>>,
 }
 
 impl Default for Board {
     fn default() -> Self {
         Self {
-            wires: vec![].into(),
+            wires: RwLock::new(vec![].into()),
         }
     }
 }
 
 impl Board {
-    pub fn create_wire(&mut self) -> Arc<Wire> {
-        let id = self.wires.first_free_pos();
+    pub fn create_wire(&self) -> Arc<Wire> {
+        let mut wires = self.wires.write();
+        let id = wires.first_free_pos();
         let wire = Wire {
             id,
             points: Default::default(),
         };
         let arc = Arc::new(wire);
-        self.wires.set(id, arc.clone());
+        wires.set(id, arc.clone());
         arc
     }
 }
@@ -38,7 +39,7 @@ impl Board {
 pub struct BoardEditor {
     pub wires: Chunks2D<CHUNK_SIZE, WireNode>,
 
-    pub board: Board,
+    pub board: Arc<Board>,
 }
 
 impl BoardEditor {
