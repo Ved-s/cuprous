@@ -2,7 +2,7 @@ use std::{
     f32::consts::{PI, SQRT_2, TAU},
     hash::{DefaultHasher, Hasher},
     num::NonZeroU32,
-    ops::Not,
+    ops::{Deref, Not},
     sync::Arc,
 };
 
@@ -19,7 +19,7 @@ use crate::{
     app::App,
     board::BoardEditor,
     vector::{Vec2f, Vec2isize, Vector2},
-    vertex_renderer::VertexRenderer,
+    vertex_renderer::{LineBuffer, TriangleBuffer, VertexRenderer},
     Direction4Half, Direction8, Direction8Array, PaintContext, Screen, VertexPaintContext,
     CHUNK_SIZE, WIRE_WIDTH,
 };
@@ -28,31 +28,38 @@ use super::{TabCreation, TabImpl};
 
 pub struct BoardView {
     pan_zoom: PanAndZoom,
-    vertexes: Arc<Mutex<Option<VertexRenderer>>>,
+
+    vertexes: Option<Arc<VertexRenderer>>,
 
     wire_draw_start: Option<Vec2isize>,
 
     editor: Arc<RwLock<BoardEditor>>,
     fixed_screen_pos: Option<(Rect, PanAndZoom)>,
     wire_debug: bool,
+
+    grid_buffer: Arc<Mutex<LineBuffer>>,
+    wire_part_buffer: Arc<Mutex<TriangleBuffer>>,
 }
 
 impl TabCreation for BoardView {
     fn new() -> Self {
         Self {
             pan_zoom: Default::default(),
-            vertexes: Arc::new(Mutex::new(None)),
+            vertexes: None,
             wire_draw_start: None,
 
             editor: Default::default(),
             fixed_screen_pos: None,
             wire_debug: false,
+
+            grid_buffer: Arc::new(Mutex::new(LineBuffer::new(1.0))),
+            wire_part_buffer: Default::default(),
         }
     }
 }
 
 impl TabImpl for BoardView {
-    fn update(&mut self, _app: &mut App, ui: &mut Ui) {
+    fn update(&mut self, app: &mut App, ui: &mut Ui) {
         let screen_rect = ui.max_rect();
         let interaction = ui.interact(
             screen_rect,
@@ -121,13 +128,16 @@ impl TabImpl for BoardView {
 
         let ctx = PaintContext::new(ui, screen);
 
-        self.draw_grid(&ctx);
+        let vertexes = self
+            .vertexes
+            .get_or_insert_with(|| {
+                Arc::new(VertexRenderer::new(&app.gl).expect("vertex renderer init"))
+            })
+            .clone();
 
-        let editor = self.editor.clone();
-        ctx.draw_vertexes(self.vertexes.clone(), move |mut ctx| {
-            Self::draw_wires(&mut ctx, &editor.read());
-            ctx.vertexes.draw_tris(ctx.gl, ctx.full_screen_size.into());
-        });
+        self.draw_grid(&ctx, vertexes.clone());
+        self.prepare_wire_draw(&ctx);
+        self.draw_wires(&ctx, vertexes.clone());
 
         if self.wire_debug {
             self.draw_wire_debug(&ctx);
@@ -137,7 +147,7 @@ impl TabImpl for BoardView {
 }
 
 impl BoardView {
-    fn draw_grid_layer(ctx: &mut VertexPaintContext, chunks: bool) {
+    fn draw_grid_layer(ctx: &VertexPaintContext, buffer: &mut LineBuffer, chunks: bool) {
         let (scale_mul, fade_min, fade_max) = if chunks {
             (
                 CHUNK_SIZE as f32,
@@ -169,7 +179,7 @@ impl BoardView {
                     continue;
                 }
 
-                ctx.vertexes.add_singlecolor_line(
+                buffer.add_singlecolor_line(
                     [x, ctx.screen.screen_rect.top()],
                     [x, ctx.screen.screen_rect.bottom()],
                     [white * alpha, white * alpha, white * alpha, alpha],
@@ -184,7 +194,7 @@ impl BoardView {
                     continue;
                 }
 
-                ctx.vertexes.add_singlecolor_line(
+                buffer.add_singlecolor_line(
                     [ctx.screen.screen_rect.left(), y],
                     [ctx.screen.screen_rect.right(), y],
                     [white * alpha, white * alpha, white * alpha, alpha],
@@ -195,7 +205,7 @@ impl BoardView {
         let zero = ctx.screen.world_to_screen(0.0);
 
         if ctx.screen.screen_rect.left() <= zero.x && zero.x < ctx.screen.screen_rect.right() {
-            ctx.vertexes.add_singlecolor_line(
+            buffer.add_singlecolor_line(
                 [zero.x, ctx.screen.screen_rect.top()],
                 [zero.x, ctx.screen.screen_rect.bottom()],
                 [0.2, 1.0, 0.2, 1.0],
@@ -203,7 +213,7 @@ impl BoardView {
         }
 
         if ctx.screen.screen_rect.top() <= zero.y && zero.y < ctx.screen.screen_rect.bottom() {
-            ctx.vertexes.add_singlecolor_line(
+            buffer.add_singlecolor_line(
                 [ctx.screen.screen_rect.left(), zero.y],
                 [ctx.screen.screen_rect.right(), zero.y],
                 [1.0, 0.2, 0.2, 1.0],
@@ -211,34 +221,40 @@ impl BoardView {
         }
     }
 
-    fn draw_grid_cross(ctx: &mut VertexPaintContext) {
+    fn draw_grid_cross(ctx: &VertexPaintContext, buffer: &mut LineBuffer) {
         let cross_pos = ctx.screen.world_to_screen(0.0);
         let cross_pos = ctx.screen.screen_rect.clamp(cross_pos.into());
 
-        ctx.vertexes.add_singlecolor_line(
+        buffer.add_singlecolor_line(
             [cross_pos.x - ctx.screen.scale, cross_pos.y],
             [cross_pos.x + ctx.screen.scale, cross_pos.y],
             [1.0; 4],
         );
 
-        ctx.vertexes.add_singlecolor_line(
+        buffer.add_singlecolor_line(
             [cross_pos.x, cross_pos.y - ctx.screen.scale],
             [cross_pos.x, cross_pos.y + ctx.screen.scale],
             [1.0; 4],
         );
     }
 
-    fn draw_grid(&self, ctx: &PaintContext) {
-        ctx.draw_vertexes(self.vertexes.clone(), |mut ctx| {
-            Self::draw_grid_layer(&mut ctx, false);
-            Self::draw_grid_layer(&mut ctx, true);
-            Self::draw_grid_cross(&mut ctx);
+    fn draw_grid(&self, ctx: &PaintContext, vertexes: Arc<VertexRenderer>) {
+        let buffer = self.grid_buffer.clone();
+
+        ctx.draw_vertexes(vertexes, move |ctx| {
+            let mut buffer = buffer.lock();
+            buffer.clear();
+
+            Self::draw_grid_layer(&ctx, &mut buffer, false);
+            Self::draw_grid_layer(&ctx, &mut buffer, true);
+            Self::draw_grid_cross(&ctx, &mut buffer);
+
             ctx.vertexes
-                .draw_lines(ctx.gl, ctx.full_screen_size.into(), 1.0);
+                .draw(ctx.gl, ctx.full_screen_size.into(), buffer.deref());
         });
     }
 
-    fn draw_wires(ctx: &mut VertexPaintContext, editor: &BoardEditor) {
+    fn prepare_wire_draw(&mut self, ctx: &PaintContext) {
         fn node_has_135_deg_turns(dirs: &Direction8Array<Option<NonZeroU32>>) -> bool {
             for (dir, dist) in dirs.iter() {
                 if dist.is_none() {
@@ -318,6 +334,11 @@ impl BoardView {
             }
         }
 
+        let mut part_buffer = self.wire_part_buffer.lock();
+        let editor = self.editor.read();
+
+        part_buffer.clear();
+
         let tl = [ctx.tile_bounds_tl.x - 1, ctx.tile_bounds_tl.y].into();
         let size = [ctx.tile_bounds_size.x + 2, ctx.tile_bounds_size.y + 1].into();
 
@@ -376,12 +397,12 @@ impl BoardView {
 
                 let len = if dir.is_diagonal() { len * SQRT_2 } else { len };
                 let len = len + that_add_len;
-                let pos = ctx.screen.world_to_screen(pos.convert(|v| v as f32 + 0.5));
+                let posf = ctx.screen.world_to_screen(pos.convert(|v| v as f32 + 0.5));
 
                 let pos1 =
-                    pos + Vec2f::from_angle_length(angle + PI, this_add_len * ctx.screen.scale);
+                    posf + Vec2f::from_angle_length(angle + PI, this_add_len * ctx.screen.scale);
 
-                let pos2 = pos + Vec2f::from_angle_length(angle, len * ctx.screen.scale);
+                let pos2 = posf + Vec2f::from_angle_length(angle, len * ctx.screen.scale);
 
                 let mut hasher = DefaultHasher::new();
                 hasher.write_usize(178543947551947561);
@@ -393,7 +414,7 @@ impl BoardView {
 
                 let color = Color32::from_rgb(r, g, b);
 
-                ctx.vertexes.add_quad_line(
+                part_buffer.add_quad_line(
                     pos1,
                     pos2,
                     (WIRE_WIDTH * ctx.screen.scale).max(1.0),
@@ -401,6 +422,17 @@ impl BoardView {
                 );
             }
         }
+    }
+
+    fn draw_wires(&self, ctx: &PaintContext, vertexes: Arc<VertexRenderer>) {
+        let part_buffer = self.wire_part_buffer.clone();
+        ctx.draw_vertexes(vertexes, move |ctx| {
+            ctx.vertexes.draw(
+                ctx.gl,
+                ctx.full_screen_size.into(),
+                part_buffer.lock().deref(),
+            );
+        });
     }
 
     fn draw_wire_debug(&self, ctx: &PaintContext) {
@@ -574,7 +606,7 @@ impl BoardView {
             };
 
             let add_len = if direction.is_diagonal() {
-                WIRE_WIDTH / 2.0 * (22.5f32).to_radians().tan()  
+                WIRE_WIDTH / 2.0 * (22.5f32).to_radians().tan()
             } else {
                 WIRE_WIDTH / 2.0
             };

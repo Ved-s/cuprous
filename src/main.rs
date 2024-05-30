@@ -5,7 +5,6 @@ use eframe::{
     egui::{Align2, PaintCallback, PaintCallbackInfo, Painter, Rect, Ui},
     egui_glow,
 };
-use parking_lot::Mutex;
 use vector::{Vec2f, Vec2isize, Vec2usize};
 use vertex_renderer::VertexRenderer;
 
@@ -99,7 +98,7 @@ pub struct PaintContext<'a> {
 }
 
 pub struct VertexPaintContext<'a> {
-    pub vertexes: &'a mut VertexRenderer,
+    pub vertexes: Arc<VertexRenderer>,
 
     pub tile_bounds_tl: Vec2isize,
     pub tile_bounds_br: Vec2isize,
@@ -146,7 +145,7 @@ impl<'a> PaintContext<'a> {
 
     pub fn draw_vertexes(
         &self,
-        vertexes: Arc<Mutex<Option<VertexRenderer>>>,
+        vertexes: Arc<VertexRenderer>,
         draw: impl Fn(VertexPaintContext) + Sync + Send + 'static,
     ) {
         let tile_bounds_tl = self.tile_bounds_tl;
@@ -169,16 +168,10 @@ impl<'a> PaintContext<'a> {
                 );
             };
 
-            let mut vertexes = vertexes.lock();
-            let vertexes = vertexes.get_or_insert_with(|| {
-                VertexRenderer::new(p.gl()).expect("running in OpenGL context")
-            });
             let screen_size = [pi.screen_size_px[0] as f32, pi.screen_size_px[1] as f32];
 
-            vertexes.clear();
-
             let ctx = VertexPaintContext {
-                vertexes,
+                vertexes: vertexes.clone(),
                 tile_bounds_tl,
                 tile_bounds_br,
                 tile_bounds_size,
@@ -387,7 +380,7 @@ impl Direction8 {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Direction4Half {
     Left,
     UpLeft,

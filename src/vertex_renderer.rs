@@ -61,9 +61,146 @@ pub struct VertexRenderer {
     vertex_array: VertexArray,
     program: Program,
     screen_size_location: UniformLocation,
+}
 
-    tris: Vec<Triangle>,
-    lines: Vec<Line>,
+pub trait VertexBuffer {
+    const DRAW_MODE: u32;
+
+    fn get_vertex_slice(&self) -> &[Vertex];
+
+    fn before_draw(&self, gl: &glow::Context) {
+        let _ = gl;
+    }
+}
+
+#[derive(Default)]
+pub struct TriangleBuffer(Vec<Vertex>);
+
+impl TriangleBuffer {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
+
+    pub fn push_quad(&mut self, quad: Quad) {
+        let [a, b] = quad.into();
+        self.push_triangle(a);
+        self.push_triangle(b);
+    }
+
+    pub fn push_triangle(&mut self, tri: Triangle) {
+        self.0.extend(tri.0);
+    }
+
+    pub fn add_singlecolor_triangle(&mut self, points: [[f32; 2]; 3], rgba: impl Into<[f32; 4]>) {
+        let rgba = rgba.into();
+        self.push_triangle(Triangle([
+            Vertex::new(points[0], rgba),
+            Vertex::new(points[1], rgba),
+            Vertex::new(points[2], rgba),
+        ]));
+    }
+
+    pub fn add_singlecolor_quad(&mut self, points: [[f32; 2]; 4], rgba: impl Into<[f32; 4]>) {
+        let rgba = rgba.into();
+        self.push_quad(Quad {
+            tl: Vertex::new(points[0], rgba),
+            tr: Vertex::new(points[1], rgba),
+            bl: Vertex::new(points[2], rgba),
+            br: Vertex::new(points[3], rgba),
+        });
+    }
+
+    pub fn add_singlecolor_rect(
+        &mut self,
+        tl: impl Into<[f32; 2]>,
+        size: impl Into<[f32; 2]>,
+        rgba: impl Into<[f32; 4]>,
+    ) {
+        let rgba = rgba.into();
+        let tl = tl.into();
+        let size = size.into();
+        self.push_quad(Quad {
+            tl: Vertex::new([tl[0], tl[1]], rgba),
+            tr: Vertex::new([tl[0] + size[0], tl[1]], rgba),
+            bl: Vertex::new([tl[0], tl[1] + size[1]], rgba),
+            br: Vertex::new([tl[0] + size[0], tl[1] + size[1]], rgba),
+        });
+    }
+
+    pub fn add_quad_line(&mut self, a: Vec2f, b: Vec2f, width: f32, rgba: impl Into<[f32; 4]>) {
+        let diff = b - a;
+        let angle = diff.angle_to_xp();
+        let up = Vec2f::from_angle_length(angle - TAU / 4.0, width / 2.0);
+        let down = Vec2f::from_angle_length(angle + TAU / 4.0, width / 2.0);
+
+        self.add_singlecolor_quad(
+            [
+                (a + up).into(),
+                (b + up).into(),
+                (a + down).into(),
+                (b + down).into(),
+            ],
+            rgba.into(),
+        );
+    }
+}
+
+impl VertexBuffer for TriangleBuffer {
+    const DRAW_MODE: u32 = glow::TRIANGLES;
+
+    fn get_vertex_slice(&self) -> &[Vertex] {
+        &self.0
+    }
+}
+
+#[derive(Default)]
+pub struct LineBuffer(Vec<Vertex>, f32);
+
+impl LineBuffer {
+    pub fn new(line_width: f32) -> Self {
+        Self(vec![], line_width)
+    }
+
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
+
+    pub fn push_line(&mut self, line: Line) {
+        self.0.extend(line.0);
+    }
+
+    pub fn set_line_width(&mut self, width: f32) {
+        self.1 = width;
+    }
+
+    pub fn add_singlecolor_line(
+        &mut self,
+        a: impl Into<[f32; 2]>,
+        b: impl Into<[f32; 2]>,
+        rgba: impl Into<[f32; 4]>,
+    ) {
+        let rgba = rgba.into();
+        self.push_line(Line([
+            Vertex::new(a.into(), rgba),
+            Vertex::new(b.into(), rgba),
+        ]));
+    }
+}
+
+impl VertexBuffer for LineBuffer {
+    const DRAW_MODE: u32 = glow::LINES;
+
+    fn get_vertex_slice(&self) -> &[Vertex] {
+        &self.0
+    }
+
+    fn before_draw(&self, gl: &glow::Context) {
+        unsafe { gl.line_width(self.1) };
+    }
 }
 
 #[allow(dead_code)]
@@ -140,22 +277,26 @@ impl VertexRenderer {
                 vertex_array,
                 program,
                 screen_size_location,
-
-                tris: vec![],
-                lines: vec![],
             })
         }
     }
 
-    fn draw(&self, gl: &Context, screen_size: [f32; 2], data: &[u8], mode: u32, count: i32) {
-        if data.is_empty() {
+    pub fn draw<B: VertexBuffer>(&self, gl: &Context, screen_size: [f32; 2], buffer: &B) {
+        let vertexes = buffer.get_vertex_slice();
+        if vertexes.is_empty() {
             return;
         }
+
+        buffer.before_draw(gl);
 
         unsafe {
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.buffer));
 
-            gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, data, glow::STREAM_DRAW);
+            gl.buffer_data_u8_slice(
+                glow::ARRAY_BUFFER,
+                Vertex::slice_to_bytes(vertexes),
+                glow::STREAM_DRAW,
+            );
 
             gl.bind_vertex_array(Some(self.vertex_array));
             gl.use_program(Some(self.program));
@@ -165,106 +306,13 @@ impl VertexRenderer {
                 screen_size[1],
             );
 
-            gl.draw_arrays(mode, 0, count);
+            gl.draw_arrays(B::DRAW_MODE, 0, vertexes.len() as i32);
 
             gl.use_program(None);
             gl.bind_buffer(glow::ARRAY_BUFFER, None);
             gl.bind_vertex_array(None);
         }
     }
-
-    pub fn draw_tris(&self, gl: &Context, screen_size: [f32; 2]) {
-        self.draw(
-            gl,
-            screen_size,
-            Triangle::slice_to_bytes(&self.tris),
-            glow::TRIANGLES,
-            self.tris.len() as i32 * 3,
-        );
-    }
-
-    pub fn draw_lines(&self, gl: &Context, screen_size: [f32; 2], line_width: f32) {
-        unsafe { gl.line_width(line_width) };
-        self.draw(
-            gl,
-            screen_size,
-            Line::slice_to_bytes(&self.lines),
-            glow::LINES,
-            self.lines.len() as i32 * 2,
-        );
-    }
-
-    pub fn clear(&mut self) {
-        self.tris.clear();
-        self.lines.clear();
-    }
-
-    pub fn push_line(&mut self, line: Line) {
-        self.lines.push(line);
-    }
-
-    pub fn push_quad(&mut self, quad: Quad) {
-        let tris: [Triangle; 2] = quad.into();
-        self.tris.extend(tris);
-    }
-
-    pub fn push_triangle(&mut self, tri: Triangle) {
-        self.tris.push(tri);
-    }
-
-    pub fn add_singlecolor_line(&mut self, a: impl Into<[f32; 2]>, b: impl Into<[f32; 2]>, rgba: impl Into<[f32; 4]>) {
-        let rgba = rgba.into();
-        self.push_line(Line([
-            Vertex::new(a.into(), rgba),
-            Vertex::new(b.into(), rgba),
-        ]));
-    }
-
-    pub fn add_singlecolor_triangle(&mut self, points: [[f32; 2]; 3], rgba: impl Into<[f32; 4]>) {
-        let rgba = rgba.into();
-        self.push_triangle(Triangle([
-            Vertex::new(points[0], rgba),
-            Vertex::new(points[1], rgba),
-            Vertex::new(points[2], rgba),
-        ]));
-    }
-
-    pub fn add_singlecolor_quad(&mut self, points: [[f32; 2]; 4], rgba: impl Into<[f32; 4]>) {
-        let rgba = rgba.into();
-        self.push_quad(Quad {
-            tl: Vertex::new(points[0], rgba),
-            tr: Vertex::new(points[1], rgba),
-            bl: Vertex::new(points[2], rgba),
-            br: Vertex::new(points[3], rgba),
-        });
-    }
-
-    pub fn add_singlecolor_rect(
-        &mut self,
-        tl: impl Into<[f32; 2]>,
-        size: impl Into<[f32; 2]>,
-        rgba: impl Into<[f32; 4]>,
-    ) {
-        let rgba = rgba.into();
-        let tl = tl.into();
-        let size = size.into();
-        self.push_quad(Quad {
-            tl: Vertex::new([tl[0], tl[1]], rgba),
-            tr: Vertex::new([tl[0] + size[0], tl[1]], rgba),
-            bl: Vertex::new([tl[0], tl[1] + size[1]], rgba),
-            br: Vertex::new([tl[0] + size[0], tl[1] + size[1]], rgba),
-        });
-    }
-
-    pub fn add_quad_line(&mut self, a: Vec2f, b: Vec2f, width: f32, rgba: impl Into<[f32; 4]>) {
-        let diff = b - a;
-        let angle = diff.angle_to_xp();
-        let up = Vec2f::from_angle_length(angle - TAU / 4.0, width / 2.0);
-        let down = Vec2f::from_angle_length(angle + TAU / 4.0, width / 2.0);
-
-        self.add_singlecolor_quad([(a + up).into(), (b + up).into(), (a + down).into(), (b + down).into()], rgba.into());
-    }
-
 }
 
 #[derive(Clone, Copy)]

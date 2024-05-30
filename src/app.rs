@@ -1,13 +1,19 @@
+use std::sync::Arc;
+
 use eframe::CreationContext;
 use egui_dock::{DockArea, DockState};
 
 use crate::tabs::{SafeTabType, Tab, TabSerde, TabType, TabViewer};
 
-pub struct App {}
+pub struct App {
+    pub gl: Arc<glow::Context>,
+}
 
 impl App {
     pub fn create(cc: &CreationContext, dock_load_error: Option<ron::error::SpannedError>) -> Self {
-        Self {}
+        Self {
+            gl: cc.gl.clone().expect("started in OpenGL context"),
+        }
     }
 }
 
