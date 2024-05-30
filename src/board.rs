@@ -60,7 +60,7 @@ impl BoardEditor {
     pub fn place_wire(&mut self, pos: Vec2isize, dir: Direction8, length: NonZeroU32) {
         let mut wire_map = HashMap::new();
 
-        for pos in dir.iter_along(pos, length.get() as usize) {
+        for pos in dir.iter_along(pos, length.get() as usize + 1) {
             if let Some(wire) = self.wires.get(pos).and_then(|n| n.wire.clone()) {
                 wire_map.insert(wire.id, wire);
             }
@@ -92,12 +92,70 @@ impl BoardEditor {
 
         self.set_distances(pos, dir, length.get() as usize, true, true);
 
+        for pos in dir.iter_along(pos, length.get() as usize + 1) {
+            self.remove_needless_point(pos);
+        }
+
         if wire_map.len() > 1 {
             self.merge_many_wires(wire_map.values().cloned());
         }
+    }
 
-        for pos in dir.iter_along(pos, length.get() as usize) {
+    pub fn remove_wire(&mut self, pos: Vec2isize, dir: Direction8, length: NonZeroU32) {
+        let other_pos = pos + dir.into_dir_isize() * length.get() as isize;
+
+        // Place wire points if they don't exist and nodes have connections
+        let start_wire = self
+            .wires
+            .get(pos)
+            .map(|n| {
+                (
+                    n.wire.clone(),
+                    n.wire.is_none() && n.directions.values().any(|d| d.is_some()),
+                )
+            })
+            .and_then(|(wire, any_dir)| {
+                wire.or_else(|| any_dir.then(|| self.set_wire_point(pos, None, true)))
+            });
+
+        let end_wire = self
+            .wires
+            .get(other_pos)
+            .map(|n| {
+                (
+                    n.wire.clone(),
+                    n.wire.is_none() && n.directions.values().any(|d| d.is_some()),
+                )
+            })
+            .and_then(|(wire, any_dir)| {
+                wire.or_else(|| any_dir.then(|| self.set_wire_point(other_pos, None, true)))
+            });
+
+        let mut wire_map = HashMap::new();
+        let mut iter = dir.iter_along(pos, length.get() as usize - 1);
+        iter.next();
+
+        for pos in iter {
+            if let Some(wire) = self.wires.get(pos).and_then(|n| n.wire.clone()) {
+                wire_map.insert(wire.id, wire);
+            }
+        }
+
+        self.set_distances(pos, dir, length.get() as usize, false, true);
+
+        if let Some(start) = start_wire {
+            wire_map.insert(start.id, start);
+        }
+        if let Some(end) = end_wire {
+            wire_map.insert(end.id, end);
+        }
+
+        for pos in dir.iter_along(pos, length.get() as usize + 1) {
             self.remove_needless_point(pos);
+        }
+
+        for wire in wire_map.values() {
+            self.unmerge_wire(wire.clone());
         }
     }
 
@@ -150,35 +208,38 @@ impl BoardEditor {
 
         let mut distance = 0;
 
+        let back_dir = dir.inverted();
+
         for i in 0..=length {
             let pos = pos + dir.into_dir_isize() * i as isize;
             let node = self.wires.get_or_create_mut(pos);
 
             if set {
                 if distance > 0 {
-                    *node.directions.get_mut(dir.inverted()) = NonZeroU32::new(distance);
+                    *node.directions.get_mut(back_dir) = NonZeroU32::new(distance);
 
                     distance += 1;
-                }
-
-                if let Some(wire) = &node.wire {
-                    let (dir, rev) = dir.inverted().into_half();
-                    if !rev {
-                        *wire
-                            .points
-                            .write()
-                            .entry(pos)
-                            .or_default()
-                            .directions
-                            .get_mut(dir) = distance > 0;
-                    }
                 }
 
                 if node.wire.is_some() {
                     distance = 1;
                 }
+            } else if i > 0 {
+                *node.directions.get_mut(back_dir) = None;
             } else {
-                *node.directions.get_mut(dir.inverted()) = None;
+                continue;
+            }
+
+            if let Some(wire) = &node.wire {
+                if let Some(dir) = back_dir.into_half_option() {
+                    *wire
+                        .points
+                        .write()
+                        .entry(pos)
+                        .or_default()
+                        .directions
+                        .get_mut(dir) = node.directions.get(back_dir).is_some();
+                }
             }
         }
     }
@@ -388,7 +449,11 @@ impl BoardEditor {
                     continue;
                 }
 
-                let Some(node) = self.wires.get_mut(pos).filter(|n| n.wire.is_some()) else {
+                let Some(node) = self
+                    .wires
+                    .get_mut(pos)
+                    .filter(|n| n.wire.as_ref().is_some_and(|w| w.id == start_wire_id))
+                else {
                     continue;
                 };
 
@@ -403,13 +468,6 @@ impl BoardEditor {
                     };
 
                     let target_pos = pos + dir.into_dir_isize() * dist.get() as isize;
-                    if !self
-                        .wires
-                        .get(target_pos)
-                        .is_some_and(|n| n.wire.as_ref().is_some_and(|w| w.id == start_wire_id))
-                    {
-                        continue;
-                    };
 
                     if let Some(dir) = dir.into_half_option() {
                         *point_directions.get_mut(dir) = true;

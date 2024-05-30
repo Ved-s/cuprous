@@ -238,6 +238,20 @@ impl Direction8 {
         Vec2isize::new(x, y)
     }
 
+    pub const fn into_dir_f32(self) -> Vec2f {
+        let [x, y] = match self {
+            Self::Up => [0.0, -1.0],
+            Self::UpRight => [1.0, -1.0],
+            Self::Right => [1.0, 0.0],
+            Self::DownRight => [1.0, 1.0],
+            Self::Down => [0.0, 1.0],
+            Self::DownLeft => [-1.0, 1.0],
+            Self::Left => [-1.0, 0.0],
+            Self::UpLeft => [-1.0, -1.0],
+        };
+        Vec2f::new(x, y)
+    }
+
     pub const fn into_index(self) -> usize {
         match self {
             Self::Up => 0,

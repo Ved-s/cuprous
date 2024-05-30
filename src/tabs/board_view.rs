@@ -34,6 +34,7 @@ pub struct BoardView {
 
     editor: Arc<RwLock<BoardEditor>>,
     fixed_screen_pos: Option<(Rect, PanAndZoom)>,
+    wire_debug: bool,
 }
 
 impl TabCreation for BoardView {
@@ -45,6 +46,7 @@ impl TabCreation for BoardView {
 
             editor: Default::default(),
             fixed_screen_pos: None,
+            wire_debug: false,
         }
     }
 }
@@ -113,6 +115,10 @@ impl TabImpl for BoardView {
             );
         }
 
+        if ui.input(|input| input.key_pressed(Key::F9)) {
+            self.wire_debug = !self.wire_debug;
+        }
+
         let ctx = PaintContext::new(ui, screen);
 
         self.draw_grid(&ctx);
@@ -123,7 +129,9 @@ impl TabImpl for BoardView {
             ctx.vertexes.draw_tris(ctx.gl, ctx.full_screen_size.into());
         });
 
-        // self.draw_wire_debug(&ctx);
+        if self.wire_debug {
+            self.draw_wire_debug(&ctx);
+        }
         self.handle_wire_interactions(&ctx, &interaction);
     }
 }
@@ -288,6 +296,7 @@ impl BoardView {
         }
 
         fn part_add_len(dirs: &Direction8Array<Option<NonZeroU32>>, dir: Direction8) -> f32 {
+            // Arrow shape with `dir` being the middle
             if dirs
                 .get(dir.rotated_clockwise_by(Direction8::UpRight))
                 .is_some()
@@ -387,7 +396,7 @@ impl BoardView {
                 ctx.vertexes.add_quad_line(
                     pos1,
                     pos2,
-                    WIRE_WIDTH * ctx.screen.scale,
+                    (WIRE_WIDTH * ctx.screen.scale).max(1.0),
                     color.to_normalized_gamma_f32(),
                 );
             }
@@ -557,9 +566,27 @@ impl BoardView {
             let startf = ctx.screen.world_to_screen(startf);
             let endf = ctx.screen.world_to_screen(endf);
 
+            let place = !ctx.ui.input(|input| input.modifiers.shift);
+            let color = if place {
+                Color32::from_gray(100)
+            } else {
+                Color32::from_rgb(255, 100, 100)
+            };
+
+            let add_len = if direction.is_diagonal() {
+                WIRE_WIDTH / 2.0 * (22.5f32).to_radians().tan()  
+            } else {
+                WIRE_WIDTH / 2.0
+            };
+
+            let vec = direction.into_dir_f32() * add_len * ctx.screen.scale;
+
+            let startf = startf - vec;
+            let endf = endf + vec;
+
             ctx.painter.line_segment(
                 [startf.into(), endf.into()],
-                Stroke::new(WIRE_WIDTH * ctx.screen.scale, Color32::from_gray(100)),
+                Stroke::new(WIRE_WIDTH * ctx.screen.scale, color),
             );
 
             if !ctx
@@ -567,9 +594,11 @@ impl BoardView {
                 .input(|input| input.pointer.button_down(PointerButton::Primary))
             {
                 if let Some(nonzero_len) = NonZeroU32::new(length) {
-                    self.editor
-                        .write()
-                        .place_wire(start, direction, nonzero_len);
+                    let mut editor = self.editor.write();
+                    match place {
+                        true => editor.place_wire(start, direction, nonzero_len),
+                        false => editor.remove_wire(start, direction, nonzero_len),
+                    }
                 }
                 self.wire_draw_start = None;
             }
