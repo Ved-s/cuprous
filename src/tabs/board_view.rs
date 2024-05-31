@@ -16,7 +16,7 @@ use eframe::{
 use parking_lot::{Mutex, RwLock};
 
 use crate::{
-    app::App,
+    app::{App, SelectedItem},
     board::{BoardEditor, BoardSelectionImpl, SelectedBoardItem},
     selection::{Selection, SelectionRenderer},
     vector::{Vec2f, Vec2isize, Vector2},
@@ -44,7 +44,6 @@ pub struct BoardView {
     selection: Selection<BoardSelectionImpl>,
     selection_renderer: Arc<Mutex<SelectionRenderer>>,
 
-    wire: bool,
     debug_not_render_wires: bool,
 }
 
@@ -65,14 +64,13 @@ impl TabCreation for BoardView {
             selection: Selection::new(),
             selection_renderer: Arc::new(Mutex::new(SelectionRenderer::new(&app.gl))),
 
-            wire: true,
             debug_not_render_wires: false,
         }
     }
 }
 
 impl TabImpl for BoardView {
-    fn update(&mut self, _app: &mut App, ui: &mut Ui) {
+    fn update(&mut self, app: &mut App, ui: &mut Ui) {
         let screen_rect = ui.max_rect();
         let interaction = ui.interact(
             screen_rect,
@@ -140,22 +138,18 @@ impl TabImpl for BoardView {
             &interaction,
             ui,
             screen,
-            !self.wire,
+            matches!(app.selected_item, Some(SelectedItem::Selection)),
         );
 
         if ui.input(|input| input.key_pressed(Key::F9)) {
             self.wire_debug = !self.wire_debug;
         }
 
-        if ui.input(|input| input.key_pressed(Key::F8)) {
-            self.wire = !self.wire;
-        }
-
         if ui.input(|input| input.key_pressed(Key::F10)) {
             self.debug_not_render_wires = !self.debug_not_render_wires;
         }
 
-        let ctx = PaintContext::new(ui, screen, Default::default());
+        let ctx = PaintContext::new(ui, screen, app.style.clone());
 
         self.draw_grid(&ctx);
 
@@ -174,7 +168,13 @@ impl TabImpl for BoardView {
 
         self.selection.draw_overlay(&ctx);
 
-        self.handle_wire_interactions(&ctx, &interaction, self.wire);
+        self.handle_wire_interactions(&ctx, &interaction, matches!(app.selected_item, Some(SelectedItem::Wires)));
+    }
+
+    fn tab_style_override(&self, global: &egui_dock::TabStyle) -> Option<egui_dock::TabStyle> {
+        let mut style = global.clone();
+        style.tab_body.inner_margin = 2.0.into();
+        Some(style)
     }
 }
 

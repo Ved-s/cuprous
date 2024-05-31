@@ -1,8 +1,15 @@
 mod board_view;
+mod component_list;
 
-use std::{error::Error, sync::Arc};
+use std::{
+    error::Error,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+};
 
-use eframe::egui::{Ui, WidgetText};
+use eframe::egui::{Id, Ui, WidgetText};
 use serde::{Deserialize, Serialize};
 
 use crate::{app::App, define_tab_type, str::ArcStaticStr};
@@ -10,12 +17,21 @@ use crate::{app::App, define_tab_type, str::ArcStaticStr};
 define_tab_type! {
     #[derive(Clone, Copy)]
     pub enum TabType {
+        #[id = "component_list"]
+        #[impl = component_list::ComponentList, loadable = true]
+        #[title = "Components"]
+        #[closeable = false]
+        ComponentList,
+
         #[id = "board_view"]
         #[impl = board_view::BoardView, loadable = true]
         #[title = "Board view"]
+        #[closeable = false]
         BoardView,
     }
 }
+
+static TAB_ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone)]
 pub enum SafeTabType {
@@ -32,6 +48,7 @@ pub struct TabSerde {
 }
 
 pub struct Tab {
+    id: usize,
     ty: SafeTabType,
     imp: Box<dyn TabImpl>,
 }
@@ -39,6 +56,7 @@ pub struct Tab {
 impl Tab {
     pub fn new(ty: TabType, app: &App) -> Self {
         Self {
+            id: Self::next_id(),
             ty: SafeTabType::Loaded(ty),
             imp: ty.create_impl(app),
         }
@@ -72,7 +90,11 @@ impl Tab {
             }),
         };
 
-        Self { ty, imp }
+        Self {
+            id: Self::next_id(),
+            ty,
+            imp,
+        }
     }
 
     pub fn save(&self) -> TabSerde {
@@ -88,6 +110,17 @@ impl Tab {
 
     pub fn ty(&self) -> SafeTabType {
         self.ty.clone()
+    }
+
+    pub fn loaded_ty(&self) -> Option<TabType> {
+        match &self.ty {
+            SafeTabType::Loaded(ty) => Some(*ty),
+            SafeTabType::Unloaded(_) => None,
+        }
+    }
+
+    pub fn next_id() -> usize {
+        TAB_ID_COUNTER.fetch_add(1, Ordering::Relaxed)
     }
 }
 
@@ -117,6 +150,11 @@ pub trait TabImpl {
     fn show_reset_button(&self) -> bool {
         false
     }
+
+    fn tab_style_override(&self, global: &egui_dock::TabStyle) -> Option<egui_dock::TabStyle> {
+        let _ = global;
+        None
+    }
 }
 
 struct ErrorTab {
@@ -144,6 +182,21 @@ pub struct TabViewer<'a>(pub &'a mut App);
 
 impl<'a> egui_dock::TabViewer for TabViewer<'a> {
     type Tab = Tab;
+
+    fn id(&mut self, tab: &mut Self::Tab) -> Id {
+        Id::new("cuprtabs").with(tab.id)
+    }
+
+    fn closeable(&mut self, tab: &mut Self::Tab) -> bool {
+        match &tab.ty {
+            SafeTabType::Loaded(ty) => ty.closeable(),
+            SafeTabType::Unloaded(_) => true,
+        }
+    }
+
+    fn tab_style_override(&self, tab: &Self::Tab, global_style: &egui_dock::TabStyle) -> Option<egui_dock::TabStyle> {
+        tab.imp.tab_style_override(global_style)
+    }
 
     fn title(&mut self, tab: &mut Self::Tab) -> WidgetText {
         tab.imp.title().unwrap_or_else(|| match &tab.ty {

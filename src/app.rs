@@ -1,18 +1,24 @@
 use std::sync::Arc;
 
 use eframe::CreationContext;
-use egui_dock::{DockArea, DockState};
+use egui_dock::{DockArea, DockState, NodeIndex};
 
-use crate::tabs::{SafeTabType, Tab, TabSerde, TabType, TabViewer};
+use crate::{tabs::{SafeTabType, Tab, TabSerde, TabType, TabViewer}, Style};
 
 pub struct App {
     pub gl: Arc<glow::Context>,
+    pub selected_item: Option<SelectedItem>,
+    pub selected_tab: Option<TabType>,
+    pub style: Arc<Style>,
 }
 
 impl App {
     pub fn create(cc: &CreationContext, dock_load_error: Option<ron::error::SpannedError>) -> Self {
         Self {
             gl: cc.gl.clone().expect("started in OpenGL context"),
+            selected_item: None,
+            selected_tab: None,
+            style: Arc::new(Style::default()),
         }
     }
 }
@@ -58,11 +64,23 @@ impl eframe::App for DockedApp {
                 .push_to_first_leaf(Tab::new(TabType::BoardView, &self.app));
         }
 
-        let mut dock_style = egui_dock::Style::from_egui(&ctx.style());
-        dock_style.tab.tab_body.inner_margin = 2.0.into();
+        'b: {
+            for tab in self.dock.iter_all_tabs() {
+                if matches!(tab.1.ty(), SafeTabType::Loaded(TabType::ComponentList)) {
+                    break 'b;
+                }
+            }
+
+            let tab = Tab::new(TabType::ComponentList, &self.app);
+
+            let surface = self.dock.main_surface_mut();
+
+            surface.split_left(NodeIndex::root(), 0.2, vec![tab]);
+        }
+
+        self.app.selected_tab = self.dock.find_active_focused().and_then(|(_, tab)| tab.loaded_ty());
 
         DockArea::new(&mut self.dock)
-            .style(dock_style)
             .show(ctx, &mut TabViewer(&mut self.app));
     }
 
@@ -73,4 +91,9 @@ impl eframe::App for DockedApp {
             storage.set_string("dock", dock);
         }
     }
+}
+
+pub enum SelectedItem {
+    Wires,
+    Selection,
 }

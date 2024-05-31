@@ -7,6 +7,7 @@ macro_rules! define_tab_type {
                 #[id = $id:literal]
                 #[impl = $impl:ty, loadable = $loadable:ident]
                 #[title = $title:literal]
+                #[closeable = $closeable:ident]
                 $membername:ident
             ),*
 
@@ -36,6 +37,12 @@ macro_rules! define_tab_type {
             pub fn title(&self) -> &'static str {
                 match self {
                     $(Self::$membername => $title),*
+                }
+            }
+
+            pub fn closeable(&self) -> bool {
+                match self {
+                    $(Self::$membername => $closeable),*
                 }
             }
 
