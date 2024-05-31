@@ -135,7 +135,13 @@ impl TabImpl for BoardView {
             );
         }
 
-        self.selection.update(self.editor.read().deref(), &interaction, ui, screen, !self.wire);
+        self.selection.update(
+            self.editor.read().deref(),
+            &interaction,
+            ui,
+            screen,
+            !self.wire,
+        );
 
         if ui.input(|input| input.key_pressed(Key::F9)) {
             self.wire_debug = !self.wire_debug;
@@ -352,15 +358,15 @@ impl BoardView {
             {
                 0.0
             } else if node_has_135_deg_turns(dirs) {
-                WIRE_WIDTH / 2.0 * (22.5f32).to_radians().tan()
+                0.5 * (22.5f32).to_radians().tan()
             } else if node_is_a_45_deg_turn(dirs) {
                 if dir.is_diagonal() {
-                    WIRE_WIDTH / 2.0 * -(22.5f32).to_radians().tan()
+                    0.5 * -(22.5f32).to_radians().tan()
                 } else {
-                    WIRE_WIDTH / 2.0 * (22.5f32).to_radians().tan()
+                    0.5 * (22.5f32).to_radians().tan()
                 }
             } else {
-                WIRE_WIDTH / 2.0
+                0.5
             }
         }
 
@@ -380,15 +386,12 @@ impl BoardView {
                     continue;
                 };
 
-                let target_rel = Direction8::from_half(dir, false).into_dir_isize()
-                    * dist.get() as isize;
+                let target_rel =
+                    Direction8::from_half(dir, false).into_dir_isize() * dist.get() as isize;
                 let target_node = lookaround.get_relative(target_rel);
 
                 let (wire, part_pos) = match &node.wire {
-                    Some(wire) => {
-                        
-                        (wire, pos)
-                    }
+                    Some(wire) => (wire, pos),
                     None => {
                         match dir {
                             Direction4Half::Left if pos.x > ctx.tile_bounds_br.x => (),
@@ -408,8 +411,9 @@ impl BoardView {
 
                         let dir = Direction8::from_half(dir, true);
                         let dist = node.directions.get(dir);
-                        let pos = pos + dir.into_dir_isize() * dist.map(|d| d.get() as isize).unwrap_or(0);
-                        
+                        let pos = pos
+                            + dir.into_dir_isize() * dist.map(|d| d.get() as isize).unwrap_or(0);
+
                         (wire, pos)
                     }
                 };
@@ -426,22 +430,44 @@ impl BoardView {
                     .unwrap_or_default();
 
                 let len = if dir.is_diagonal() { len * SQRT_2 } else { len };
-                let len = len + that_add_len;
                 let posf = ctx.screen.world_to_screen(pos.convert(|v| v as f32 + 0.5));
 
-                let pos1 =
-                    posf + Vec2f::from_angle_length(angle + PI, this_add_len * ctx.screen.scale);
+                if self
+                    .selection
+                    .contains(&SelectedBoardItem::WirePart { pos: part_pos, dir })
+                {
+                    let wire_width = WIRE_WIDTH + 0.1;
 
-                let pos2 = posf + Vec2f::from_angle_length(angle, len * ctx.screen.scale);
+                    let pos1 = posf
+                        + Vec2f::from_angle_length(
+                            angle + PI,
+                            this_add_len * wire_width * ctx.screen.scale,
+                        );
+
+                    let pos2 = posf
+                        + Vec2f::from_angle_length(
+                            angle,
+                            (len + that_add_len * wire_width) * ctx.screen.scale,
+                        );
+
+                    let line_width = (wire_width * ctx.screen.scale).max(3.0);
+
+                    selecion_renderer.add_selection_line(pos1, pos2, line_width, true);
+                }
+
+                let pos1 = posf
+                    + Vec2f::from_angle_length(
+                        angle + PI,
+                        this_add_len * WIRE_WIDTH * ctx.screen.scale,
+                    );
+
+                let pos2 = posf
+                    + Vec2f::from_angle_length(
+                        angle,
+                        (len + that_add_len * WIRE_WIDTH) * ctx.screen.scale,
+                    );
 
                 let line_width = (WIRE_WIDTH * ctx.screen.scale).max(1.0);
-
-                if self.selection.contains(&SelectedBoardItem::WirePart {
-                    pos: part_pos,
-                    dir,
-                }) {
-                    selecion_renderer.add_selection_line(pos1, pos2, line_width, ctx.screen.scale);
-                }
 
                 let mut hasher = DefaultHasher::new();
                 hasher.write_usize(178543947551947561);
@@ -599,7 +625,12 @@ impl BoardView {
         }
     }
 
-    fn handle_wire_interactions(&mut self, ctx: &PaintContext, interaction: &Response, active: bool) {
+    fn handle_wire_interactions(
+        &mut self,
+        ctx: &PaintContext,
+        interaction: &Response,
+        active: bool,
+    ) {
         let world_mouse = ctx
             .ui
             .input(|input| input.pointer.latest_pos())
@@ -607,7 +638,8 @@ impl BoardView {
 
         let world_mouse_tile = world_mouse.map(|v| v.convert(|v| v.floor() as isize));
 
-        if active && interaction.hovered()
+        if active
+            && interaction.hovered()
             && ctx
                 .ui
                 .input(|input| input.pointer.button_pressed(PointerButton::Primary))

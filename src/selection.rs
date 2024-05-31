@@ -5,7 +5,6 @@ use std::{
 };
 
 use eframe::egui::{Rect, Response, Rounding, Stroke, Ui};
-use geo_nd::Vector;
 use glow::{Context, HasContext};
 
 use crate::{
@@ -250,15 +249,12 @@ impl SelectionRenderer {
         self.fill_buffer.clear();
     }
 
-    pub fn add_selection_line(&mut self, a: Vec2f, b: Vec2f, width: f32, scale: f32) {
-        self.fill_buffer.add_quad_line(a, b, width, ());
-
-        let dir = (b - a).normalize();
-        let a = a - (dir * scale * 0.05);
-        let b = b + (dir * scale * 0.05);
-        let width = width + (scale * 0.1);
-
-        self.border_buffer.add_quad_line(a, b, width, ());
+    pub fn add_selection_line(&mut self, a: Vec2f, b: Vec2f, width: f32, border: bool) {
+        if border {
+            self.border_buffer.add_quad_line(a, b, width, ());
+        } else {
+            self.fill_buffer.add_quad_line(a, b, width, ());
+        }
     }
 
     pub fn draw(&mut self, ctx: &CustomPaintContext) {
@@ -334,7 +330,6 @@ impl SelectionRenderer {
             gl.uniform_4_f32(draw_color_location.as_ref(), 0.0, 1.0, 0.0, 1.0);
             self.renderer_borderfill
                 .draw(gl, ctx.paint_info.screen_size_px, &self.fill_buffer);
-
 
             gl.bind_framebuffer(glow::FRAMEBUFFER, None);
 

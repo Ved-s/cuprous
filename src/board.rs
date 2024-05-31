@@ -577,13 +577,16 @@ impl SelectionImpl for BoardSelectionImpl {
                 let Some(dist) = dist else {
                     continue;
                 };
+                
                 let cell_edge = center_pos + dir.into_dir_f32() * 0.5;
                 let rect = Rect::from_two_pos(center_pos.into(), cell_edge.into())
                     .expand(WIRE_WIDTH / 2.0);
                 if area.intersects(rect) || center_intersects {
                     let (half_dir, rev) = dir.into_half();
                     let target_rel = if !rev {
-                        0.into()
+                        let di = dir.inverted();
+                        let dist = node.directions.get(di).map(|d| d.get() as isize).unwrap_or(0);
+                        di.into_dir_isize() * dist
                     } else {
                         dir.into_dir_isize() * dist.get() as isize
                     };
