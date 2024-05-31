@@ -150,6 +150,18 @@ impl<T> Vector2<T> {
     pub fn swapped(self) -> Self {
         Self::new(self.y, self.x)
     }
+
+    pub fn floor(self) -> Self where T: Float {
+        Self::new(self.x.floor(), self.y.floor())
+    }
+
+    pub fn ceil(self) -> Self where T: Float {
+        Self::new(self.x.ceil(), self.y.ceil())
+    }
+    
+    pub fn round(self) -> Self where T: Float {
+        Self::new(self.x.round(), self.y.round())
+    }
 }
 
 impl<T: std::fmt::Display> std::fmt::Display for Vector2<T>

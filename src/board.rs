@@ -4,12 +4,14 @@ use std::{
     sync::Arc,
 };
 
+use eframe::egui::{vec2, Rect};
 use parking_lot::RwLock;
 
 use crate::{
     containers::{Chunks2D, FixedVec},
-    vector::Vec2isize,
-    Direction4HalfArray, Direction8, Direction8Array, CHUNK_SIZE,
+    selection::SelectionImpl,
+    vector::{Vec2f, Vec2isize},
+    Direction4Half, Direction4HalfArray, Direction8, Direction8Array, CHUNK_SIZE, WIRE_WIDTH,
 };
 
 pub struct Board {
@@ -545,4 +547,58 @@ pub struct WirePoint {
 pub struct WireNode {
     pub wire: Option<Arc<Wire>>,
     pub directions: Direction8Array<Option<NonZeroU32>>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SelectedBoardItem {
+    WirePart { pos: Vec2isize, dir: Direction4Half },
+}
+
+pub struct BoardSelectionImpl;
+
+impl SelectionImpl for BoardSelectionImpl {
+    type Item = SelectedBoardItem;
+    type Pass = BoardEditor;
+
+    fn include_area(pass: &Self::Pass, items: &mut HashSet<Self::Item>, area: eframe::egui::Rect) {
+        let tl = Vec2f::from(area.left_top()).convert(|v| v.floor() as isize);
+        let br = Vec2f::from(area.right_bottom()).convert(|v| v.floor() as isize);
+
+        let size = (br - tl).convert(|v| v as usize) + 1;
+
+        for (pos, lookaround, node) in pass.wires.iter_area_with_lookaround(tl, size) {
+            let center_pos = pos.convert(|v| v as f32 + 0.5);
+            let center_rect =
+                Rect::from_center_size(center_pos.into(), vec2(WIRE_WIDTH, WIRE_WIDTH));
+
+            let center_intersects = area.intersects(center_rect);
+
+            for (dir, dist) in node.directions.iter() {
+                let Some(dist) = dist else {
+                    continue;
+                };
+                let cell_edge = center_pos + dir.into_dir_f32() * 0.5;
+                let rect = Rect::from_two_pos(center_pos.into(), cell_edge.into())
+                    .expand(WIRE_WIDTH / 2.0);
+                if area.intersects(rect) || center_intersects {
+                    let (half_dir, rev) = dir.into_half();
+                    let target_rel = if !rev {
+                        0.into()
+                    } else {
+                        dir.into_dir_isize() * dist.get() as isize
+                    };
+
+                    if lookaround
+                        .get_relative(target_rel)
+                        .is_some_and(|n| n.wire.is_some())
+                    {
+                        items.insert(SelectedBoardItem::WirePart {
+                            pos: pos + target_rel,
+                            dir: half_dir,
+                        });
+                    }
+                }
+            }
+        }
+    }
 }

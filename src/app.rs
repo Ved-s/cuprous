@@ -35,9 +35,11 @@ impl DockedApp {
             None => (DockState::new(vec![]), None),
         };
 
+        let app = App::create(cc, dock_error);
+
         Self {
-            dock: dock.map_tabs(Tab::load),
-            app: App::create(cc, dock_error),
+            dock: dock.map_tabs(|s| Tab::load(s, &app)),
+            app,
         }
     }
 }
@@ -53,7 +55,7 @@ impl eframe::App for DockedApp {
 
             self.dock
                 .main_surface_mut()
-                .push_to_first_leaf(Tab::new(TabType::BoardView));
+                .push_to_first_leaf(Tab::new(TabType::BoardView, &self.app));
         }
 
         let mut dock_style = egui_dock::Style::from_egui(&ctx.style());

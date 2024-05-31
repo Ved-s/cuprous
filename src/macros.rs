@@ -39,15 +39,15 @@ macro_rules! define_tab_type {
                 }
             }
 
-            pub fn create_impl(&self) -> Box<dyn TabImpl> {
+            pub fn create_impl(&self, init: &App) -> Box<dyn TabImpl> {
                 match self {
-                    $(Self::$membername => Box::new(<$impl as TabCreation>::new())),*
+                    $(Self::$membername => Box::new(<$impl as TabCreation>::new(init))),*
                 }
             }
 
-            pub fn load_impl(&self, data: &str) -> Result<Box<dyn TabImpl>, Box<dyn std::error::Error>> {
+            pub fn load_impl(&self, data: &str, init: &App) -> Result<Box<dyn TabImpl>, Box<dyn std::error::Error>> {
                 Ok(match self {
-                    $(Self::$membername => Box::new(<$impl as TabCreation>::load(data)?)),*
+                    $(Self::$membername => Box::new(<$impl as TabCreation>::load(data,init)?)),*
                 })
             }
         }

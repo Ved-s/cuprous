@@ -17,10 +17,11 @@ use parking_lot::{Mutex, RwLock};
 
 use crate::{
     app::App,
-    board::BoardEditor,
+    board::{BoardEditor, BoardSelectionImpl, SelectedBoardItem},
+    selection::{Selection, SelectionRenderer},
     vector::{Vec2f, Vec2isize, Vector2},
-    vertex_renderer::{LineBuffer, TriangleBuffer, VertexRenderer},
-    Direction4Half, Direction8, Direction8Array, PaintContext, Screen, VertexPaintContext,
+    vertex_renderer::{ColoredLineBuffer, ColoredTriangleBuffer, ColoredVertexRenderer},
+    CustomPaintContext, Direction4Half, Direction8, Direction8Array, PaintContext, Screen,
     CHUNK_SIZE, WIRE_WIDTH,
 };
 
@@ -29,7 +30,7 @@ use super::{TabCreation, TabImpl};
 pub struct BoardView {
     pan_zoom: PanAndZoom,
 
-    vertexes: Option<Arc<VertexRenderer>>,
+    vertexes: Arc<ColoredVertexRenderer>,
 
     wire_draw_start: Option<Vec2isize>,
 
@@ -37,29 +38,41 @@ pub struct BoardView {
     fixed_screen_pos: Option<(Rect, PanAndZoom)>,
     wire_debug: bool,
 
-    grid_buffer: Arc<Mutex<LineBuffer>>,
-    wire_part_buffer: Arc<Mutex<TriangleBuffer>>,
+    grid_buffer: Arc<Mutex<ColoredLineBuffer>>,
+    wire_part_buffer: Arc<Mutex<ColoredTriangleBuffer>>,
+
+    selection: Selection<BoardSelectionImpl>,
+    selection_renderer: Arc<Mutex<SelectionRenderer>>,
+
+    wire: bool,
+    debug_not_render_wires: bool,
 }
 
 impl TabCreation for BoardView {
-    fn new() -> Self {
+    fn new(app: &App) -> Self {
         Self {
             pan_zoom: Default::default(),
-            vertexes: None,
+            vertexes: Arc::new(ColoredVertexRenderer::new(&app.gl).expect("initialized renderer")),
             wire_draw_start: None,
 
             editor: Default::default(),
             fixed_screen_pos: None,
             wire_debug: false,
 
-            grid_buffer: Arc::new(Mutex::new(LineBuffer::new(1.0))),
+            grid_buffer: Arc::new(Mutex::new(ColoredLineBuffer::new(1.0))),
             wire_part_buffer: Default::default(),
+
+            selection: Selection::new(),
+            selection_renderer: Arc::new(Mutex::new(SelectionRenderer::new(&app.gl))),
+
+            wire: true,
+            debug_not_render_wires: false,
         }
     }
 }
 
 impl TabImpl for BoardView {
-    fn update(&mut self, app: &mut App, ui: &mut Ui) {
+    fn update(&mut self, _app: &mut App, ui: &mut Ui) {
         let screen_rect = ui.max_rect();
         let interaction = ui.interact(
             screen_rect,
@@ -122,32 +135,45 @@ impl TabImpl for BoardView {
             );
         }
 
+        self.selection.update(self.editor.read().deref(), &interaction, ui, screen, !self.wire);
+
         if ui.input(|input| input.key_pressed(Key::F9)) {
             self.wire_debug = !self.wire_debug;
         }
 
-        let ctx = PaintContext::new(ui, screen);
+        if ui.input(|input| input.key_pressed(Key::F8)) {
+            self.wire = !self.wire;
+        }
 
-        let vertexes = self
-            .vertexes
-            .get_or_insert_with(|| {
-                Arc::new(VertexRenderer::new(&app.gl).expect("vertex renderer init"))
-            })
-            .clone();
+        if ui.input(|input| input.key_pressed(Key::F10)) {
+            self.debug_not_render_wires = !self.debug_not_render_wires;
+        }
 
-        self.draw_grid(&ctx, vertexes.clone());
+        let ctx = PaintContext::new(ui, screen, Default::default());
+
+        self.draw_grid(&ctx);
+
+        self.selection_renderer.lock().clear_draw();
+
         self.prepare_wire_draw(&ctx);
-        self.draw_wires(&ctx, vertexes.clone());
+        self.draw_selection(&ctx);
+
+        if !self.debug_not_render_wires {
+            self.draw_wires(&ctx);
+        }
 
         if self.wire_debug {
             self.draw_wire_debug(&ctx);
         }
-        self.handle_wire_interactions(&ctx, &interaction);
+
+        self.selection.draw_overlay(&ctx);
+
+        self.handle_wire_interactions(&ctx, &interaction, self.wire);
     }
 }
 
 impl BoardView {
-    fn draw_grid_layer(ctx: &VertexPaintContext, buffer: &mut LineBuffer, chunks: bool) {
+    fn draw_grid_layer(ctx: &CustomPaintContext, buffer: &mut ColoredLineBuffer, chunks: bool) {
         let (scale_mul, fade_min, fade_max) = if chunks {
             (
                 CHUNK_SIZE as f32,
@@ -221,7 +247,7 @@ impl BoardView {
         }
     }
 
-    fn draw_grid_cross(ctx: &VertexPaintContext, buffer: &mut LineBuffer) {
+    fn draw_grid_cross(ctx: &CustomPaintContext, buffer: &mut ColoredLineBuffer) {
         let cross_pos = ctx.screen.world_to_screen(0.0);
         let cross_pos = ctx.screen.screen_rect.clamp(cross_pos.into());
 
@@ -238,10 +264,11 @@ impl BoardView {
         );
     }
 
-    fn draw_grid(&self, ctx: &PaintContext, vertexes: Arc<VertexRenderer>) {
+    fn draw_grid(&self, ctx: &PaintContext) {
         let buffer = self.grid_buffer.clone();
+        let vertexes = self.vertexes.clone();
 
-        ctx.draw_vertexes(vertexes, move |ctx| {
+        ctx.custom_draw(move |ctx| {
             let mut buffer = buffer.lock();
             buffer.clear();
 
@@ -249,8 +276,11 @@ impl BoardView {
             Self::draw_grid_layer(&ctx, &mut buffer, true);
             Self::draw_grid_cross(&ctx, &mut buffer);
 
-            ctx.vertexes
-                .draw(ctx.gl, ctx.full_screen_size.into(), buffer.deref());
+            vertexes.draw(
+                ctx.painter.gl(),
+                ctx.paint_info.screen_size_px,
+                buffer.deref(),
+            );
         });
     }
 
@@ -335,6 +365,7 @@ impl BoardView {
         }
 
         let mut part_buffer = self.wire_part_buffer.lock();
+        let mut selecion_renderer = self.selection_renderer.lock();
         let editor = self.editor.read();
 
         part_buffer.clear();
@@ -349,12 +380,14 @@ impl BoardView {
                     continue;
                 };
 
-                let (wire, target_node) = match &node.wire {
+                let target_rel = Direction8::from_half(dir, false).into_dir_isize()
+                    * dist.get() as isize;
+                let target_node = lookaround.get_relative(target_rel);
+
+                let (wire, part_pos) = match &node.wire {
                     Some(wire) => {
-                        let rel = Direction8::from_half(dir, false).into_dir_isize()
-                            * dist.get() as isize;
-                        let target = lookaround.get_relative(rel);
-                        (wire, target)
+                        
+                        (wire, pos)
                     }
                     None => {
                         match dir {
@@ -368,19 +401,16 @@ impl BoardView {
                             }
                             _ => continue,
                         }
-
-                        let dir = Direction8::from_half(dir, true);
-                        let dist = node.directions.get(dir);
-                        let Some(dist) = dist else {
-                            continue;
-                        };
-                        let rel = dir.into_dir_isize() * dist.get() as isize;
-                        let target = lookaround.get_relative(rel);
-                        let wire = target.and_then(|n| n.wire.as_ref());
+                        let wire = target_node.and_then(|n| n.wire.as_ref());
                         let Some(wire) = wire else {
                             continue;
                         };
-                        (wire, target)
+
+                        let dir = Direction8::from_half(dir, true);
+                        let dist = node.directions.get(dir);
+                        let pos = pos + dir.into_dir_isize() * dist.map(|d| d.get() as isize).unwrap_or(0);
+                        
+                        (wire, pos)
                     }
                 };
 
@@ -404,6 +434,15 @@ impl BoardView {
 
                 let pos2 = posf + Vec2f::from_angle_length(angle, len * ctx.screen.scale);
 
+                let line_width = (WIRE_WIDTH * ctx.screen.scale).max(1.0);
+
+                if self.selection.contains(&SelectedBoardItem::WirePart {
+                    pos: part_pos,
+                    dir,
+                }) {
+                    selecion_renderer.add_selection_line(pos1, pos2, line_width, ctx.screen.scale);
+                }
+
                 let mut hasher = DefaultHasher::new();
                 hasher.write_usize(178543947551947561);
                 hasher.write_usize(wire.id);
@@ -414,24 +453,29 @@ impl BoardView {
 
                 let color = Color32::from_rgb(r, g, b);
 
-                part_buffer.add_quad_line(
-                    pos1,
-                    pos2,
-                    (WIRE_WIDTH * ctx.screen.scale).max(1.0),
-                    color.to_normalized_gamma_f32(),
-                );
+                part_buffer.add_quad_line(pos1, pos2, line_width, color.to_normalized_gamma_f32());
             }
         }
     }
 
-    fn draw_wires(&self, ctx: &PaintContext, vertexes: Arc<VertexRenderer>) {
+    fn draw_wires(&self, ctx: &PaintContext) {
         let part_buffer = self.wire_part_buffer.clone();
-        ctx.draw_vertexes(vertexes, move |ctx| {
-            ctx.vertexes.draw(
-                ctx.gl,
-                ctx.full_screen_size.into(),
+        let vertexes = self.vertexes.clone();
+
+        ctx.custom_draw(move |ctx| {
+            vertexes.draw(
+                ctx.painter.gl(),
+                ctx.paint_info.screen_size_px,
                 part_buffer.lock().deref(),
             );
+        });
+    }
+
+    fn draw_selection(&self, ctx: &PaintContext) {
+        let renderer = self.selection_renderer.clone();
+
+        ctx.custom_draw(move |ctx| {
+            renderer.lock().draw(&ctx);
         });
     }
 
@@ -555,7 +599,7 @@ impl BoardView {
         }
     }
 
-    fn handle_wire_interactions(&mut self, ctx: &PaintContext, interaction: &Response) {
+    fn handle_wire_interactions(&mut self, ctx: &PaintContext, interaction: &Response, active: bool) {
         let world_mouse = ctx
             .ui
             .input(|input| input.pointer.latest_pos())
@@ -563,12 +607,16 @@ impl BoardView {
 
         let world_mouse_tile = world_mouse.map(|v| v.convert(|v| v.floor() as isize));
 
-        if interaction.hovered()
+        if active && interaction.hovered()
             && ctx
                 .ui
                 .input(|input| input.pointer.button_pressed(PointerButton::Primary))
         {
             self.wire_draw_start = world_mouse_tile;
+        }
+
+        if self.wire_draw_start.is_some() && !active {
+            self.wire_draw_start = None;
         }
 
         if let Some((start, end)) = self.wire_draw_start.zip(world_mouse_tile) {
@@ -645,7 +693,7 @@ impl BoardView {
         }
 
         if let Some(world_mouse_tile) = world_mouse_tile {
-            if interaction.clicked_by(PointerButton::Primary) {
+            if active && interaction.clicked_by(PointerButton::Primary) {
                 self.editor.write().toggle_wire_point(world_mouse_tile);
             }
         }

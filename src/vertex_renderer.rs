@@ -1,33 +1,8 @@
-use std::f32::consts::TAU;
+use std::{f32::consts::TAU, marker::PhantomData};
 
 use glow::{Buffer, Context, HasContext, Program, UniformLocation, VertexArray};
 
 use crate::vector::Vec2f;
-
-const VERT_SHADER: &str = r#"#version 330 core
-  layout (location = 0) in vec2 pos;
-  layout (location = 1) in vec4 color_in;
-
-  uniform vec2 screenSize;
-
-  out vec4 color;
-  void main() {
-
-    vec2 norm = pos / screenSize;
-    vec2 clip = norm * 2 - 1;
-
-    gl_Position = vec4(clip.x, -clip.y, 0.0, 1.0);
-    color = color_in;
-  }
-"#;
-
-const FRAG_SHADER: &str = r#"#version 330 core
-  in vec4 color;
-
-  void main() {
-    gl_FragColor = color;
-  }
-"#;
 
 #[derive(Debug, thiserror::Error)]
 pub enum RendererInitError {
@@ -51,167 +26,39 @@ pub enum RendererInitError {
 
     #[error("Shader program linking: {0}")]
     ShaderProgramLinking(String),
-
-    #[error("Could not find shader uniform \"screenSize\"")]
-    UniformError,
 }
 
-pub struct VertexRenderer {
+pub type ColoredVertexRenderer = VertexRenderer<ColoredVertex, ColoredVertexDefaultShader>;
+pub type ColoredLineBuffer = LineBuffer<ColoredVertex>;
+pub type ColoredTriangleBuffer = TriangleBuffer<ColoredVertex>;
+
+pub struct VertexRenderer<V: Vertex, S: Shaders<V>> {
     buffer: Buffer,
     vertex_array: VertexArray,
     program: Program,
-    screen_size_location: UniformLocation,
-}
-
-pub trait VertexBuffer {
-    const DRAW_MODE: u32;
-
-    fn get_vertex_slice(&self) -> &[Vertex];
-
-    fn before_draw(&self, gl: &glow::Context) {
-        let _ = gl;
-    }
-}
-
-#[derive(Default)]
-pub struct TriangleBuffer(Vec<Vertex>);
-
-impl TriangleBuffer {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn clear(&mut self) {
-        self.0.clear();
-    }
-
-    pub fn push_quad(&mut self, quad: Quad) {
-        let [a, b] = quad.into();
-        self.push_triangle(a);
-        self.push_triangle(b);
-    }
-
-    pub fn push_triangle(&mut self, tri: Triangle) {
-        self.0.extend(tri.0);
-    }
-
-    pub fn add_singlecolor_triangle(&mut self, points: [[f32; 2]; 3], rgba: impl Into<[f32; 4]>) {
-        let rgba = rgba.into();
-        self.push_triangle(Triangle([
-            Vertex::new(points[0], rgba),
-            Vertex::new(points[1], rgba),
-            Vertex::new(points[2], rgba),
-        ]));
-    }
-
-    pub fn add_singlecolor_quad(&mut self, points: [[f32; 2]; 4], rgba: impl Into<[f32; 4]>) {
-        let rgba = rgba.into();
-        self.push_quad(Quad {
-            tl: Vertex::new(points[0], rgba),
-            tr: Vertex::new(points[1], rgba),
-            bl: Vertex::new(points[2], rgba),
-            br: Vertex::new(points[3], rgba),
-        });
-    }
-
-    pub fn add_singlecolor_rect(
-        &mut self,
-        tl: impl Into<[f32; 2]>,
-        size: impl Into<[f32; 2]>,
-        rgba: impl Into<[f32; 4]>,
-    ) {
-        let rgba = rgba.into();
-        let tl = tl.into();
-        let size = size.into();
-        self.push_quad(Quad {
-            tl: Vertex::new([tl[0], tl[1]], rgba),
-            tr: Vertex::new([tl[0] + size[0], tl[1]], rgba),
-            bl: Vertex::new([tl[0], tl[1] + size[1]], rgba),
-            br: Vertex::new([tl[0] + size[0], tl[1] + size[1]], rgba),
-        });
-    }
-
-    pub fn add_quad_line(&mut self, a: Vec2f, b: Vec2f, width: f32, rgba: impl Into<[f32; 4]>) {
-        let diff = b - a;
-        let angle = diff.angle_to_xp();
-        let up = Vec2f::from_angle_length(angle - TAU / 4.0, width / 2.0);
-        let down = Vec2f::from_angle_length(angle + TAU / 4.0, width / 2.0);
-
-        self.add_singlecolor_quad(
-            [
-                (a + up).into(),
-                (b + up).into(),
-                (a + down).into(),
-                (b + down).into(),
-            ],
-            rgba.into(),
-        );
-    }
-}
-
-impl VertexBuffer for TriangleBuffer {
-    const DRAW_MODE: u32 = glow::TRIANGLES;
-
-    fn get_vertex_slice(&self) -> &[Vertex] {
-        &self.0
-    }
-}
-
-#[derive(Default)]
-pub struct LineBuffer(Vec<Vertex>, f32);
-
-impl LineBuffer {
-    pub fn new(line_width: f32) -> Self {
-        Self(vec![], line_width)
-    }
-
-    pub fn clear(&mut self) {
-        self.0.clear();
-    }
-
-    pub fn push_line(&mut self, line: Line) {
-        self.0.extend(line.0);
-    }
-
-    pub fn set_line_width(&mut self, width: f32) {
-        self.1 = width;
-    }
-
-    pub fn add_singlecolor_line(
-        &mut self,
-        a: impl Into<[f32; 2]>,
-        b: impl Into<[f32; 2]>,
-        rgba: impl Into<[f32; 4]>,
-    ) {
-        let rgba = rgba.into();
-        self.push_line(Line([
-            Vertex::new(a.into(), rgba),
-            Vertex::new(b.into(), rgba),
-        ]));
-    }
-}
-
-impl VertexBuffer for LineBuffer {
-    const DRAW_MODE: u32 = glow::LINES;
-
-    fn get_vertex_slice(&self) -> &[Vertex] {
-        &self.0
-    }
-
-    fn before_draw(&self, gl: &glow::Context) {
-        unsafe { gl.line_width(self.1) };
-    }
+    screen_size_location: Option<UniformLocation>,
+    _phantom: PhantomData<(V, S)>,
 }
 
 #[allow(dead_code)]
-impl VertexRenderer {
+impl<V: Vertex, S: Shaders<V>> VertexRenderer<V, S> {
     pub fn new(gl: &Context) -> Result<Self, RendererInitError> {
+        Self::new_inner(gl, None)
+    }
+    /// For drawing static vertexes with `Self::draw_no_copy`
+    pub fn new_with_data<B: VertexBuffer<V>>(
+        gl: &Context,
+        buffer: &B,
+    ) -> Result<Self, RendererInitError> {
+        Self::new_inner(gl, Some(vertex_slice_to_bytes(buffer.get_vertex_slice())))
+    }
+    fn new_inner(gl: &Context, data: Option<&[u8]>) -> Result<Self, RendererInitError> {
         unsafe {
             let vert_shader = gl
                 .create_shader(glow::VERTEX_SHADER)
                 .map_err(RendererInitError::ShaderCreation)?;
 
-            gl.shader_source(vert_shader, VERT_SHADER);
+            gl.shader_source(vert_shader, S::VERT_SHADER);
             gl.compile_shader(vert_shader);
 
             if !gl.get_shader_compile_status(vert_shader) {
@@ -223,7 +70,7 @@ impl VertexRenderer {
                 .create_shader(glow::FRAGMENT_SHADER)
                 .map_err(RendererInitError::ShaderCreation)?;
 
-            gl.shader_source(frag_shader, FRAG_SHADER);
+            gl.shader_source(frag_shader, S::FRAG_SHADER);
             gl.compile_shader(frag_shader);
 
             if !gl.get_shader_compile_status(frag_shader) {
@@ -244,9 +91,7 @@ impl VertexRenderer {
                 return Err(RendererInitError::ShaderProgramLinking(log));
             }
 
-            let screen_size_location = gl
-                .get_uniform_location(program, "screenSize")
-                .ok_or(RendererInitError::UniformError)?;
+            let screen_size_location = gl.get_uniform_location(program, "screenSize");
 
             gl.delete_shader(vert_shader);
             gl.delete_shader(frag_shader);
@@ -260,14 +105,14 @@ impl VertexRenderer {
                 .map_err(RendererInitError::VertexArrayCreation)?;
 
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(buffer));
+
+            if let Some(data) = data {
+                gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, data, glow::STATIC_DRAW);
+            }
+
             gl.bind_vertex_array(Some(vertex_array));
 
-            let stride = std::mem::size_of::<Vertex>() as i32;
-
-            gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, stride, 0);
-            gl.vertex_attrib_pointer_f32(1, 4, glow::FLOAT, false, stride, 8);
-            gl.enable_vertex_attrib_array(0);
-            gl.enable_vertex_attrib_array(1);
+            V::init_vertex_buffer(gl);
 
             gl.bind_buffer(glow::ARRAY_BUFFER, None);
             gl.bind_vertex_array(None);
@@ -277,54 +122,297 @@ impl VertexRenderer {
                 vertex_array,
                 program,
                 screen_size_location,
+
+                _phantom: PhantomData,
             })
         }
     }
 
-    pub fn draw<B: VertexBuffer>(&self, gl: &Context, screen_size: [f32; 2], buffer: &B) {
+    pub fn draw<B: VertexBuffer<V>>(&self, gl: &Context, screen_size: [u32; 2], buffer: &B) {
         let vertexes = buffer.get_vertex_slice();
         if vertexes.is_empty() {
             return;
         }
 
         buffer.before_draw(gl);
+        self.draw_inner(
+            gl,
+            screen_size,
+            Some(vertex_slice_to_bytes(vertexes)),
+            B::DRAW_MODE,
+            buffer.vertex_count() as i32,
+        );
+    }
 
+    /// Drawing with existing vertex data, without copying it from the `buffer`<br>
+    /// Data is initialized with `Self::new_with_data`
+    pub fn draw_no_copy<B: VertexBuffer<V>>(&self, gl: &Context, screen_size: [u32; 2], buffer: &B) {
+        buffer.before_draw(gl);
+        self.draw_inner(
+            gl,
+            screen_size,
+            None,
+            B::DRAW_MODE,
+            buffer.vertex_count() as i32,
+        );
+    }
+
+    fn draw_inner(
+        &self,
+        gl: &Context,
+        screen_size: [u32; 2],
+        data: Option<&[u8]>,
+        mode: u32,
+        count: i32,
+    ) {
         unsafe {
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.buffer));
 
-            gl.buffer_data_u8_slice(
-                glow::ARRAY_BUFFER,
-                Vertex::slice_to_bytes(vertexes),
-                glow::STREAM_DRAW,
-            );
+            if let Some(data) = data {
+                gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, data, glow::STREAM_DRAW);
+            }
 
             gl.bind_vertex_array(Some(self.vertex_array));
             gl.use_program(Some(self.program));
             gl.uniform_2_f32(
-                Some(&self.screen_size_location),
-                screen_size[0],
-                screen_size[1],
+                self.screen_size_location.as_ref(),
+                screen_size[0] as f32,
+                screen_size[1] as f32,
             );
 
-            gl.draw_arrays(B::DRAW_MODE, 0, vertexes.len() as i32);
+            gl.draw_arrays(mode, 0, count);
 
             gl.use_program(None);
             gl.bind_buffer(glow::ARRAY_BUFFER, None);
             gl.bind_vertex_array(None);
         }
     }
+    
+    pub fn gl_buffer(&self) -> <Context as HasContext>::Buffer {
+        self.buffer
+    }
+    
+    pub fn gl_vertex_array(&self) -> <Context as HasContext>::VertexArray {
+        self.vertex_array
+    }
+    
+    pub fn gl_program(&self) -> <Context as HasContext>::Program {
+        self.program
+    }
+}
+
+pub trait VertexBuffer<V: Vertex> {
+    const DRAW_MODE: u32;
+
+    fn get_vertex_slice(&self) -> &[V];
+    fn vertex_count(&self) -> usize;
+
+    fn before_draw(&self, gl: &glow::Context) {
+        let _ = gl;
+    }
+}
+
+pub trait Vertex: Sized + Copy + Default {
+    fn init_vertex_buffer(gl: &glow::Context);
+}
+
+pub trait PositionedVertex: Vertex {
+    type ExtraData: Copy;
+
+    fn new(pos: [f32; 2], extra: Self::ExtraData) -> Self;
+}
+
+pub trait Shaders<V: Vertex> {
+    const VERT_SHADER: &'static str;
+    const FRAG_SHADER: &'static str;
+}
+
+#[derive(Default)]
+pub struct TriangleBuffer<V: Vertex>(Vec<V>);
+
+impl<V: Vertex> TriangleBuffer<V> {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
+
+    pub fn push_quad(&mut self, quad: Quad<V>) {
+        let [a, b] = quad.into();
+        self.push_triangle(a);
+        self.push_triangle(b);
+    }
+
+    pub fn push_triangle(&mut self, tri: Triangle<V>) {
+        self.0.extend(tri.0);
+    }
+
+    pub fn add_new_triangle(
+        &mut self,
+        a: impl Into<[f32; 2]>,
+        b: impl Into<[f32; 2]>,
+        c: impl Into<[f32; 2]>,
+        extra: impl Into<V::ExtraData>,
+    ) where
+        V: PositionedVertex,
+    {
+        self.push_triangle(Triangle::new(a.into(), b.into(), c.into(), extra.into()));
+    }
+
+    pub fn add_new_quad(
+        &mut self,
+        tl: impl Into<[f32; 2]>,
+        tr: impl Into<[f32; 2]>,
+        bl: impl Into<[f32; 2]>,
+        br: impl Into<[f32; 2]>,
+        extra: impl Into<V::ExtraData>,
+    ) where
+        V: PositionedVertex,
+    {
+        self.push_quad(Quad::new(
+            tl.into(),
+            tr.into(),
+            bl.into(),
+            br.into(),
+            extra.into(),
+        ));
+    }
+
+    pub fn add_new_rect(
+        &mut self,
+        tl: impl Into<[f32; 2]>,
+        size: impl Into<[f32; 2]>,
+        extra: impl Into<V::ExtraData>,
+    ) where
+        V: PositionedVertex,
+    {
+        self.push_quad(Quad::new_rect(tl.into(), size.into(), extra.into()));
+    }
+
+    pub fn add_quad_line(&mut self, a: Vec2f, b: Vec2f, width: f32, extra: impl Into<V::ExtraData>)
+    where
+        V: PositionedVertex,
+    {
+        self.push_quad(Quad::new_line(a, b, width, extra.into()));
+    }
+}
+
+impl<V: Vertex> VertexBuffer<V> for TriangleBuffer<V> {
+    const DRAW_MODE: u32 = glow::TRIANGLES;
+
+    fn get_vertex_slice(&self) -> &[V] {
+        &self.0
+    }
+
+    fn vertex_count(&self) -> usize {
+        self.0.len()
+    }
+}
+
+#[derive(Default)]
+pub struct LineBuffer<V: Vertex>(Vec<V>, f32);
+
+impl<V: Vertex> LineBuffer<V> {
+    pub fn new(line_width: f32) -> Self {
+        Self(vec![], line_width)
+    }
+
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
+
+    pub fn push_line(&mut self, line: Line<V>) {
+        self.0.extend(line.0);
+    }
+
+    pub fn set_line_width(&mut self, width: f32) {
+        self.1 = width;
+    }
+
+    pub fn add_singlecolor_line(
+        &mut self,
+        a: impl Into<[f32; 2]>,
+        b: impl Into<[f32; 2]>,
+        extra: impl Into<V::ExtraData>,
+    ) where
+        V: PositionedVertex,
+    {
+        let extra = extra.into();
+        self.push_line(Line([V::new(a.into(), extra), V::new(b.into(), extra)]));
+    }
+}
+
+impl<V: Vertex> VertexBuffer<V> for LineBuffer<V> {
+    const DRAW_MODE: u32 = glow::LINES;
+
+    fn get_vertex_slice(&self) -> &[V] {
+        &self.0
+    }
+
+    fn before_draw(&self, gl: &glow::Context) {
+        unsafe { gl.line_width(self.1) };
+    }
+
+    fn vertex_count(&self) -> usize {
+        self.0.len()
+    }
 }
 
 #[derive(Clone, Copy)]
-pub struct Quad {
-    tl: Vertex,
-    tr: Vertex,
-    bl: Vertex,
-    br: Vertex,
+pub struct Quad<V: Vertex> {
+    pub tl: V,
+    pub tr: V,
+    pub bl: V,
+    pub br: V,
 }
 
-impl From<Quad> for [Triangle; 2] {
-    fn from(val: Quad) -> Self {
+impl<V: PositionedVertex> Quad<V> {
+    pub fn new(
+        tl: impl Into<[f32; 2]>,
+        tr: impl Into<[f32; 2]>,
+        bl: impl Into<[f32; 2]>,
+        br: impl Into<[f32; 2]>,
+        extra: impl Into<V::ExtraData>,
+    ) -> Self {
+        let extra = extra.into();
+        Self {
+            tl: V::new(tl.into(), extra),
+            tr: V::new(tr.into(), extra),
+            bl: V::new(bl.into(), extra),
+            br: V::new(br.into(), extra),
+        }
+    }
+
+    pub fn new_line(a: Vec2f, b: Vec2f, width: f32, extra: impl Into<V::ExtraData>) -> Self {
+        let diff = b - a;
+        let angle = diff.angle_to_xp();
+        let up = Vec2f::from_angle_length(angle - TAU / 4.0, width / 2.0);
+        let down = Vec2f::from_angle_length(angle + TAU / 4.0, width / 2.0);
+
+        Self::new(a + up, b + up, a + down, b + down, extra.into())
+    }
+
+    pub fn new_rect(
+        tl: impl Into<[f32; 2]>,
+        size: impl Into<[f32; 2]>,
+        extra: impl Into<V::ExtraData>,
+    ) -> Self {
+        let extra = extra.into();
+        let tl = tl.into();
+        let size = size.into();
+        Self {
+            tl: V::new([tl[0], tl[1]], extra),
+            tr: V::new([tl[0] + size[0], tl[1]], extra),
+            bl: V::new([tl[0], tl[1] + size[1]], extra),
+            br: V::new([tl[0] + size[0], tl[1] + size[1]], extra),
+        }
+    }
+}
+
+impl<V: Vertex> From<Quad<V>> for [Triangle<V>; 2] {
+    fn from(val: Quad<V>) -> Self {
         [
             Triangle([val.tl, val.tr, val.bl]),
             Triangle([val.tr, val.bl, val.br]),
@@ -333,43 +421,199 @@ impl From<Quad> for [Triangle; 2] {
 }
 
 #[repr(transparent)]
-pub struct Triangle(pub [Vertex; 3]);
+pub struct Triangle<V: Vertex>(pub [V; 3]);
 
-impl Triangle {
-    pub fn slice_to_bytes(s: &[Triangle]) -> &[u8] {
-        let ptr = s.as_ptr().cast();
-        let len = std::mem::size_of_val(s);
-        unsafe { std::slice::from_raw_parts(ptr, len) }
+impl<V: PositionedVertex> Triangle<V> {
+    pub fn new(
+        a: impl Into<[f32; 2]>,
+        b: impl Into<[f32; 2]>,
+        c: impl Into<[f32; 2]>,
+        extra: impl Into<V::ExtraData>,
+    ) -> Self {
+        let extra = extra.into();
+        Self([
+            V::new(a.into(), extra),
+            V::new(b.into(), extra),
+            V::new(c.into(), extra),
+        ])
     }
 }
 
 #[repr(transparent)]
-pub struct Line(pub [Vertex; 2]);
+pub struct Line<V: Vertex>(pub [V; 2]);
 
-impl Line {
-    pub fn slice_to_bytes(s: &[Line]) -> &[u8] {
-        let ptr = s.as_ptr().cast();
-        let len = std::mem::size_of_val(s);
-        unsafe { std::slice::from_raw_parts(ptr, len) }
+impl<V: PositionedVertex> Line<V> {
+    pub fn new(
+        a: impl Into<[f32; 2]>,
+        b: impl Into<[f32; 2]>,
+        extra: impl Into<V::ExtraData>,
+    ) -> Self {
+        let extra = extra.into();
+        Self([V::new(a.into(), extra), V::new(b.into(), extra)])
     }
 }
+
+pub type Rgba = [f32; 4];
+pub type Uv = [f32; 2];
 
 // [ x, y, r, g, b, a ]
 #[repr(transparent)]
-#[derive(Clone, Copy)]
-pub struct Vertex([f32; 6]);
+#[derive(Clone, Copy, Default)]
+pub struct ColoredVertex([f32; 6]);
 
-impl Vertex {
+impl ColoredVertex {
     pub fn new(xy: impl Into<[f32; 2]>, rgba: impl Into<[f32; 4]>) -> Self {
         let mut slice = [0f32; 6];
         slice[0..2].copy_from_slice(&xy.into());
         slice[2..6].copy_from_slice(&rgba.into());
         Self(slice)
     }
+}
 
-    pub fn slice_to_bytes(s: &[Vertex]) -> &[u8] {
-        let ptr = s.as_ptr().cast();
-        let len = std::mem::size_of_val(s);
-        unsafe { std::slice::from_raw_parts(ptr, len) }
+impl Vertex for ColoredVertex {
+    fn init_vertex_buffer(gl: &glow::Context) {
+        unsafe {
+            let stride = std::mem::size_of::<Self>() as i32;
+
+            gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, stride, 0);
+            gl.vertex_attrib_pointer_f32(1, 4, glow::FLOAT, false, stride, 8);
+            gl.enable_vertex_attrib_array(0);
+            gl.enable_vertex_attrib_array(1);
+        }
     }
+}
+impl PositionedVertex for ColoredVertex {
+    type ExtraData = Rgba;
+
+    fn new(pos: [f32; 2], extra: Self::ExtraData) -> Self {
+        Self::new(pos, extra)
+    }
+}
+
+pub struct ColoredVertexDefaultShader;
+
+impl Shaders<ColoredVertex> for ColoredVertexDefaultShader {
+    const VERT_SHADER: &'static str = r#"#version 330 core
+        layout (location = 0) in vec2 pos;
+        layout (location = 1) in vec4 color_in;
+
+        uniform vec2 screenSize;
+
+        out vec4 color;
+        void main() {
+
+            vec2 norm = pos / screenSize;
+            vec2 clip = norm * 2 - 1;
+
+            gl_Position = vec4(clip.x, -clip.y, 0.0, 1.0);
+            color = color_in;
+        }
+    "#;
+
+    const FRAG_SHADER: &'static str = r#"#version 330 core
+        in vec4 color;
+
+        void main() {
+            gl_FragColor = color;
+        }
+    "#;
+}
+
+// [ x, y ]
+#[repr(transparent)]
+#[derive(Clone, Copy, Default)]
+pub struct SimpleVertex([f32; 2]);
+
+impl SimpleVertex {
+    pub fn new(xy: impl Into<[f32; 2]>) -> Self {
+        Self(xy.into())
+    }
+}
+
+impl Vertex for SimpleVertex {
+    fn init_vertex_buffer(gl: &glow::Context) {
+        unsafe {
+            let stride = std::mem::size_of::<Self>() as i32;
+
+            gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, stride, 0);
+            gl.enable_vertex_attrib_array(0);
+        }
+    }
+}
+
+impl PositionedVertex for SimpleVertex {
+    type ExtraData = ();
+
+    fn new(pos: [f32; 2], _extra: Self::ExtraData) -> Self {
+        Self::new(pos)
+    }
+}
+
+// [ x, y, u, v ]
+#[repr(transparent)]
+#[derive(Clone, Copy, Default)]
+pub struct UvVertex([f32; 4]);
+
+impl UvVertex {
+    pub fn new(xy: impl Into<[f32; 2]>, uv: impl Into<[f32; 2]>) -> Self {
+        let mut slice = [0f32; 4];
+        slice[0..2].copy_from_slice(&xy.into());
+        slice[2..4].copy_from_slice(&uv.into());
+        Self(slice)
+    }
+
+    pub fn new_const(xy: [f32; 2], uv: [f32; 2]) -> Self {
+        let mut slice = [0f32; 4];
+        slice[0] = xy[0];
+        slice[1] = xy[1];
+        slice[2] = uv[0];
+        slice[3] = uv[1];
+        Self(slice)
+    }
+}
+
+impl Vertex for UvVertex {
+    fn init_vertex_buffer(gl: &glow::Context) {
+        unsafe {
+            let stride = std::mem::size_of::<Self>() as i32;
+
+            gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, stride, 0);
+            gl.vertex_attrib_pointer_f32(1, 2, glow::FLOAT, false, stride, 8);
+            gl.enable_vertex_attrib_array(0);
+            gl.enable_vertex_attrib_array(1);
+        }
+    }
+}
+
+impl PositionedVertex for UvVertex {
+    type ExtraData = Uv;
+
+    fn new(pos: [f32; 2], extra: Self::ExtraData) -> Self {
+        Self::new(pos, extra)
+    }
+}
+
+pub struct FullscreenQuadVertexBuffer;
+
+impl VertexBuffer<UvVertex> for FullscreenQuadVertexBuffer {
+    const DRAW_MODE: u32 = glow::TRIANGLE_STRIP;
+
+    fn get_vertex_slice(&self) -> &[UvVertex] {
+        &[
+            UvVertex([-1.0, 1.0, 0.0, 1.0]),
+            UvVertex([1.0, 1.0, 1.0, 1.0]),
+            UvVertex([-1.0, -1.0, 0.0, 0.0]),
+            UvVertex([1.0, -1.0, 1.0, 0.0]),
+        ]
+    }
+
+    fn vertex_count(&self) -> usize {
+        4
+    }
+}
+
+pub fn vertex_slice_to_bytes<V: Vertex>(s: &[V]) -> &[u8] {
+    let ptr = s.as_ptr().cast();
+    let len = std::mem::size_of_val(s);
+    unsafe { std::slice::from_raw_parts(ptr, len) }
 }

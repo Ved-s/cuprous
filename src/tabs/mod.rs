@@ -5,11 +5,7 @@ use std::{error::Error, sync::Arc};
 use eframe::egui::{Ui, WidgetText};
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    app::App,
-    define_tab_type,
-    str::ArcStaticStr,
-};
+use crate::{app::App, define_tab_type, str::ArcStaticStr};
 
 define_tab_type! {
     #[derive(Clone, Copy)]
@@ -41,18 +37,23 @@ pub struct Tab {
 }
 
 impl Tab {
-    pub fn new(ty: TabType) -> Self {
+    pub fn new(ty: TabType, app: &App) -> Self {
         Self {
             ty: SafeTabType::Loaded(ty),
-            imp: ty.create_impl(),
+            imp: ty.create_impl(app),
         }
     }
 
-    pub fn load(d: &TabSerde) -> Self {
-        let imp = TabType::from_id(&d.id).map(|ty| (ty, match &d.data {
-            Some(d) => ty.load_impl(d),
-            None => Ok(ty.create_impl()),
-        }));
+    pub fn load(d: &TabSerde, app: &App) -> Self {
+        let imp = TabType::from_id(&d.id).map(|ty| {
+            (
+                ty,
+                match &d.data {
+                    Some(d) => ty.load_impl(d, app),
+                    None => Ok(ty.create_impl(app)),
+                },
+            )
+        });
 
         let ty = match &imp {
             None => SafeTabType::Unloaded(d.id.clone().into()),
@@ -71,10 +72,7 @@ impl Tab {
             }),
         };
 
-        Self {
-            ty,
-            imp,
-        }
+        Self { ty, imp }
     }
 
     pub fn save(&self) -> TabSerde {
@@ -97,10 +95,11 @@ pub trait TabCreation
 where
     Self: Sized,
 {
-    fn new() -> Self;
+    fn new(app: &App) -> Self;
 
-    fn load(_data: &str) -> Result<Self, Box<dyn Error>> {
-        Ok(Self::new())
+    fn load(data: &str, app: &App) -> Result<Self, Box<dyn Error>> {
+        let _ = data;
+        Ok(Self::new(app))
     }
 }
 
@@ -122,7 +121,7 @@ pub trait TabImpl {
 
 struct ErrorTab {
     error: String,
-    data: Option<String>
+    data: Option<String>,
 }
 
 impl TabImpl for ErrorTab {
@@ -131,11 +130,11 @@ impl TabImpl for ErrorTab {
             ui.label(&self.error);
         });
     }
-    
+
     fn save_data(&self) -> Option<String> {
         self.data.clone()
     }
-    
+
     fn show_reset_button(&self) -> bool {
         true
     }
@@ -147,16 +146,13 @@ impl<'a> egui_dock::TabViewer for TabViewer<'a> {
     type Tab = Tab;
 
     fn title(&mut self, tab: &mut Self::Tab) -> WidgetText {
-        tab.imp.title().unwrap_or_else(|| {
-            match &tab.ty {
-                SafeTabType::Loaded(ty) => ty.title().into(),
-                SafeTabType::Unloaded(_) => "Unloaded tab".into(),
-            }
+        tab.imp.title().unwrap_or_else(|| match &tab.ty {
+            SafeTabType::Loaded(ty) => ty.title().into(),
+            SafeTabType::Unloaded(_) => "Unloaded tab".into(),
         })
     }
 
     fn ui(&mut self, ui: &mut Ui, tab: &mut Self::Tab) {
-
         let reset_button_ty = match tab.ty {
             SafeTabType::Loaded(ty) => tab.imp.show_reset_button().then_some(ty),
             SafeTabType::Unloaded(_) => None,
@@ -165,7 +161,7 @@ impl<'a> egui_dock::TabViewer for TabViewer<'a> {
         if let Some(ty) = reset_button_ty {
             ui.vertical_centered(|ui| {
                 if ui.button("Reset tab").clicked() {
-                    tab.imp = ty.create_impl();
+                    tab.imp = ty.create_impl(self.0);
                 }
             });
         }

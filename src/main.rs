@@ -1,18 +1,18 @@
-use std::{ops::Deref, sync::Arc};
+use std::sync::Arc;
 
 use app::DockedApp;
 use eframe::{
-    egui::{Align2, PaintCallback, PaintCallbackInfo, Painter, Rect, Ui},
+    egui::{Align2, Color32, PaintCallback, PaintCallbackInfo, Painter, Rect, Ui},
     egui_glow,
 };
 use vector::{Vec2f, Vec2isize, Vec2usize};
-use vertex_renderer::VertexRenderer;
 
 pub mod app;
 pub mod board;
 pub mod containers;
 pub mod ext;
 pub mod macros;
+pub mod selection;
 pub mod str;
 pub mod tabs;
 pub mod vector;
@@ -32,6 +32,20 @@ fn main() -> Result<(), eframe::Error> {
         options,
         Box::new(|cc| Box::new(DockedApp::create(cc))),
     )
+}
+
+pub struct Style {
+    selection_fill: Color32,
+    selection_border: Color32,
+}
+
+impl Default for Style {
+    fn default() -> Self {
+        Self {
+            selection_fill: Color32::from_rgba_unmultiplied(150, 150, 210, 1),
+            selection_border: Color32::from_rgb(180, 180, 220),
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -95,11 +109,10 @@ pub struct PaintContext<'a> {
     pub chunk_bounds_size: Vec2usize,
 
     pub screen: Screen,
+    pub style: Arc<Style>,
 }
 
-pub struct VertexPaintContext<'a> {
-    pub vertexes: Arc<VertexRenderer>,
-
+pub struct CustomPaintContext<'a> {
     pub tile_bounds_tl: Vec2isize,
     pub tile_bounds_br: Vec2isize,
     pub tile_bounds_size: Vec2usize,
@@ -107,14 +120,16 @@ pub struct VertexPaintContext<'a> {
     pub chunk_bounds_tl: Vec2isize,
     pub chunk_bounds_br: Vec2isize,
     pub chunk_bounds_size: Vec2usize,
-    pub full_screen_size: Vec2f,
-    pub gl: &'a glow::Context,
 
     pub screen: Screen,
+    pub style: Arc<Style>,
+
+    pub paint_info: PaintCallbackInfo,
+    pub painter: &'a egui_glow::Painter,
 }
 
 impl<'a> PaintContext<'a> {
-    pub fn new(ui: &'a Ui, screen: Screen) -> Self {
+    pub fn new(ui: &'a Ui, screen: Screen, style: Arc<Style>) -> Self {
         let tl = screen.screen_to_world(screen.screen_rect.left_top());
         let br = screen.screen_to_world(screen.screen_rect.right_bottom());
 
@@ -140,14 +155,11 @@ impl<'a> PaintContext<'a> {
             chunk_bounds_size: chunks_size,
 
             screen,
+            style
         }
     }
 
-    pub fn draw_vertexes(
-        &self,
-        vertexes: Arc<VertexRenderer>,
-        draw: impl Fn(VertexPaintContext) + Sync + Send + 'static,
-    ) {
+    pub fn custom_draw(&self, draw: impl Fn(CustomPaintContext) + Sync + Send + 'static) {
         let tile_bounds_tl = self.tile_bounds_tl;
         let tile_bounds_br = self.tile_bounds_br;
         let tile_bounds_size = self.tile_bounds_size;
@@ -155,6 +167,7 @@ impl<'a> PaintContext<'a> {
         let chunk_bounds_br = self.chunk_bounds_br;
         let chunk_bounds_size = self.chunk_bounds_size;
         let screen = self.screen;
+        let style = self.style.clone();
 
         let callback = move |pi: PaintCallbackInfo, p: &egui_glow::Painter| {
             use glow::HasContext;
@@ -168,10 +181,7 @@ impl<'a> PaintContext<'a> {
                 );
             };
 
-            let screen_size = [pi.screen_size_px[0] as f32, pi.screen_size_px[1] as f32];
-
-            let ctx = VertexPaintContext {
-                vertexes: vertexes.clone(),
+            let ctx = CustomPaintContext {
                 tile_bounds_tl,
                 tile_bounds_br,
                 tile_bounds_size,
@@ -179,8 +189,10 @@ impl<'a> PaintContext<'a> {
                 chunk_bounds_br,
                 chunk_bounds_size,
                 screen,
-                gl: p.gl().deref(),
-                full_screen_size: screen_size.into(),
+                style: style.clone(),
+
+                painter: p,
+                paint_info: pi,
             };
 
             draw(ctx);
