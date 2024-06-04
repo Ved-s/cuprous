@@ -146,7 +146,12 @@ impl<V: Vertex, S: Shaders<V>> VertexRenderer<V, S> {
 
     /// Drawing with existing vertex data, without copying it from the `buffer`<br>
     /// Data is initialized with `Self::new_with_data`
-    pub fn draw_no_copy<B: VertexBuffer<V>>(&self, gl: &Context, screen_size: [u32; 2], buffer: &B) {
+    pub fn draw_no_copy<B: VertexBuffer<V>>(
+        &self,
+        gl: &Context,
+        screen_size: [u32; 2],
+        buffer: &B,
+    ) {
         buffer.before_draw(gl);
         self.draw_inner(
             gl,
@@ -187,15 +192,15 @@ impl<V: Vertex, S: Shaders<V>> VertexRenderer<V, S> {
             gl.bind_vertex_array(None);
         }
     }
-    
+
     pub fn gl_buffer(&self) -> <Context as HasContext>::Buffer {
         self.buffer
     }
-    
+
     pub fn gl_vertex_array(&self) -> <Context as HasContext>::VertexArray {
         self.vertex_array
     }
-    
+
     pub fn gl_program(&self) -> <Context as HasContext>::Program {
         self.program
     }
@@ -219,7 +224,8 @@ pub trait Vertex: Sized + Copy + Default {
 pub trait PositionedVertex: Vertex {
     type ExtraData: Copy;
 
-    fn new(pos: [f32; 2], extra: Self::ExtraData) -> Self;
+    fn new(pos: Vec2f, extra: Self::ExtraData) -> Self;
+    fn into_parts(self) -> (Vec2f, Self::ExtraData);
 }
 
 pub trait Shaders<V: Vertex> {
@@ -251,9 +257,9 @@ impl<V: Vertex> TriangleBuffer<V> {
 
     pub fn add_new_triangle(
         &mut self,
-        a: impl Into<[f32; 2]>,
-        b: impl Into<[f32; 2]>,
-        c: impl Into<[f32; 2]>,
+        a: impl Into<Vec2f>,
+        b: impl Into<Vec2f>,
+        c: impl Into<Vec2f>,
         extra: impl Into<V::ExtraData>,
     ) where
         V: PositionedVertex,
@@ -263,10 +269,10 @@ impl<V: Vertex> TriangleBuffer<V> {
 
     pub fn add_new_quad(
         &mut self,
-        tl: impl Into<[f32; 2]>,
-        tr: impl Into<[f32; 2]>,
-        bl: impl Into<[f32; 2]>,
-        br: impl Into<[f32; 2]>,
+        tl: impl Into<Vec2f>,
+        tr: impl Into<Vec2f>,
+        bl: impl Into<Vec2f>,
+        br: impl Into<Vec2f>,
         extra: impl Into<V::ExtraData>,
     ) where
         V: PositionedVertex,
@@ -282,8 +288,8 @@ impl<V: Vertex> TriangleBuffer<V> {
 
     pub fn add_new_rect(
         &mut self,
-        tl: impl Into<[f32; 2]>,
-        size: impl Into<[f32; 2]>,
+        tl: impl Into<Vec2f>,
+        size: impl Into<Vec2f>,
         extra: impl Into<V::ExtraData>,
     ) where
         V: PositionedVertex,
@@ -291,11 +297,34 @@ impl<V: Vertex> TriangleBuffer<V> {
         self.push_quad(Quad::new_rect(tl.into(), size.into(), extra.into()));
     }
 
-    pub fn add_quad_line(&mut self, a: Vec2f, b: Vec2f, width: f32, extra: impl Into<V::ExtraData>)
+    pub fn add_quad_line(&mut self, a: impl Into<Vec2f>, b: impl Into<Vec2f>, width: f32, extra: impl Into<V::ExtraData>)
     where
         V: PositionedVertex,
     {
-        self.push_quad(Quad::new_line(a, b, width, extra.into()));
+        self.push_quad(Quad::new_line(a.into(), b.into(), width, extra.into()));
+    }
+
+    pub fn add_centered_rect(&mut self, pos: impl Into<Vec2f>, size: impl Into<Vec2f>, extra: impl Into<V::ExtraData>)
+    where
+        V: PositionedVertex,
+    {
+        let size = size.into();
+        self.add_new_rect(pos.into() - size / 2.0, size, extra.into());
+    }
+
+    pub fn add_centered_rotated_rect(
+        &mut self,
+        pos: impl Into<Vec2f>,
+        size: impl Into<Vec2f>,
+        angle: f32,
+        extra: impl Into<V::ExtraData>,
+    ) where
+        V: PositionedVertex,
+    {
+        let pos = pos.into();
+        let size = size.into();
+        let quad = Quad::new_rect(pos - size / 2.0, size, extra.into());
+        self.push_quad(quad.rotated(angle, pos))
     }
 }
 
@@ -333,8 +362,8 @@ impl<V: Vertex> LineBuffer<V> {
 
     pub fn add_singlecolor_line(
         &mut self,
-        a: impl Into<[f32; 2]>,
-        b: impl Into<[f32; 2]>,
+        a: impl Into<Vec2f>,
+        b: impl Into<Vec2f>,
         extra: impl Into<V::ExtraData>,
     ) where
         V: PositionedVertex,
@@ -370,10 +399,10 @@ pub struct Quad<V: Vertex> {
 
 impl<V: PositionedVertex> Quad<V> {
     pub fn new(
-        tl: impl Into<[f32; 2]>,
-        tr: impl Into<[f32; 2]>,
-        bl: impl Into<[f32; 2]>,
-        br: impl Into<[f32; 2]>,
+        tl: impl Into<Vec2f>,
+        tr: impl Into<Vec2f>,
+        bl: impl Into<Vec2f>,
+        br: impl Into<Vec2f>,
         extra: impl Into<V::ExtraData>,
     ) -> Self {
         let extra = extra.into();
@@ -395,18 +424,32 @@ impl<V: PositionedVertex> Quad<V> {
     }
 
     pub fn new_rect(
-        tl: impl Into<[f32; 2]>,
-        size: impl Into<[f32; 2]>,
+        tl: impl Into<Vec2f>,
+        size: impl Into<Vec2f>,
         extra: impl Into<V::ExtraData>,
     ) -> Self {
         let extra = extra.into();
         let tl = tl.into();
         let size = size.into();
         Self {
-            tl: V::new([tl[0], tl[1]], extra),
-            tr: V::new([tl[0] + size[0], tl[1]], extra),
-            bl: V::new([tl[0], tl[1] + size[1]], extra),
-            br: V::new([tl[0] + size[0], tl[1] + size[1]], extra),
+            tl: V::new([tl.x, tl.y].into(), extra),
+            tr: V::new([tl.x + size.x, tl.y].into(), extra),
+            bl: V::new([tl.x, tl.y + size.y].into(), extra),
+            br: V::new([tl.x + size.x, tl.y + size.y].into(), extra),
+        }
+    }
+
+    fn rotated(&self, angle: f32, origin: Vec2f) -> Self {
+        let tl = self.tl.into_parts();
+        let tr = self.tr.into_parts();
+        let bl = self.bl.into_parts();
+        let br = self.br.into_parts();
+
+        Self {
+            tl: V::new(tl.0.rotated(angle, origin), tl.1),
+            tr: V::new(tr.0.rotated(angle, origin), tr.1),
+            bl: V::new(bl.0.rotated(angle, origin), bl.1),
+            br: V::new(br.0.rotated(angle, origin), br.1),
         }
     }
 }
@@ -425,9 +468,9 @@ pub struct Triangle<V: Vertex>(pub [V; 3]);
 
 impl<V: PositionedVertex> Triangle<V> {
     pub fn new(
-        a: impl Into<[f32; 2]>,
-        b: impl Into<[f32; 2]>,
-        c: impl Into<[f32; 2]>,
+        a: impl Into<Vec2f>,
+        b: impl Into<Vec2f>,
+        c: impl Into<Vec2f>,
         extra: impl Into<V::ExtraData>,
     ) -> Self {
         let extra = extra.into();
@@ -443,11 +486,7 @@ impl<V: PositionedVertex> Triangle<V> {
 pub struct Line<V: Vertex>(pub [V; 2]);
 
 impl<V: PositionedVertex> Line<V> {
-    pub fn new(
-        a: impl Into<[f32; 2]>,
-        b: impl Into<[f32; 2]>,
-        extra: impl Into<V::ExtraData>,
-    ) -> Self {
+    pub fn new(a: impl Into<Vec2f>, b: impl Into<Vec2f>, extra: impl Into<V::ExtraData>) -> Self {
         let extra = extra.into();
         Self([V::new(a.into(), extra), V::new(b.into(), extra)])
     }
@@ -462,9 +501,9 @@ pub type Uv = [f32; 2];
 pub struct ColoredVertex([f32; 6]);
 
 impl ColoredVertex {
-    pub fn new(xy: impl Into<[f32; 2]>, rgba: impl Into<[f32; 4]>) -> Self {
+    pub fn new(xy: impl Into<Vec2f>, rgba: impl Into<[f32; 4]>) -> Self {
         let mut slice = [0f32; 6];
-        slice[0..2].copy_from_slice(&xy.into());
+        slice[0..2].copy_from_slice(&<[f32; 2]>::from(xy.into()));
         slice[2..6].copy_from_slice(&rgba.into());
         Self(slice)
     }
@@ -485,8 +524,18 @@ impl Vertex for ColoredVertex {
 impl PositionedVertex for ColoredVertex {
     type ExtraData = Rgba;
 
-    fn new(pos: [f32; 2], extra: Self::ExtraData) -> Self {
+    fn new(pos: Vec2f, extra: Self::ExtraData) -> Self {
         Self::new(pos, extra)
+    }
+
+    fn into_parts(self) -> (Vec2f, Self::ExtraData) {
+        let mut xy = [0f32; 2];
+        let mut rgba = [0f32; 4];
+
+        xy.copy_from_slice(&self.0[0..2]);
+        rgba.copy_from_slice(&self.0[2..6]);
+
+        (xy.into(), rgba)
     }
 }
 
@@ -544,8 +593,12 @@ impl Vertex for SimpleVertex {
 impl PositionedVertex for SimpleVertex {
     type ExtraData = ();
 
-    fn new(pos: [f32; 2], _extra: Self::ExtraData) -> Self {
+    fn new(pos: Vec2f, _extra: Self::ExtraData) -> Self {
         Self::new(pos)
+    }
+
+    fn into_parts(self) -> (Vec2f, Self::ExtraData) {
+        (self.0.into(), ())
     }
 }
 
@@ -555,14 +608,14 @@ impl PositionedVertex for SimpleVertex {
 pub struct UvVertex([f32; 4]);
 
 impl UvVertex {
-    pub fn new(xy: impl Into<[f32; 2]>, uv: impl Into<[f32; 2]>) -> Self {
+    pub fn new(xy: impl Into<Vec2f>, uv: impl Into<Vec2f>) -> Self {
         let mut slice = [0f32; 4];
-        slice[0..2].copy_from_slice(&xy.into());
-        slice[2..4].copy_from_slice(&uv.into());
+        slice[0..2].copy_from_slice(&<[f32; 2]>::from(xy.into()));
+        slice[2..4].copy_from_slice(&<[f32; 2]>::from(uv.into()));
         Self(slice)
     }
 
-    pub fn new_const(xy: [f32; 2], uv: [f32; 2]) -> Self {
+    pub fn new_const(xy: Vec2f, uv: Vec2f) -> Self {
         let mut slice = [0f32; 4];
         slice[0] = xy[0];
         slice[1] = xy[1];
@@ -588,8 +641,18 @@ impl Vertex for UvVertex {
 impl PositionedVertex for UvVertex {
     type ExtraData = Uv;
 
-    fn new(pos: [f32; 2], extra: Self::ExtraData) -> Self {
+    fn new(pos: Vec2f, extra: Self::ExtraData) -> Self {
         Self::new(pos, extra)
+    }
+
+    fn into_parts(self) -> (Vec2f, Self::ExtraData) {
+        let mut xy = [0f32; 2];
+        let mut uv = [0f32; 2];
+
+        xy.copy_from_slice(&self.0[0..2]);
+        uv.copy_from_slice(&self.0[2..4]);
+
+        (xy.into(), uv)
     }
 }
 

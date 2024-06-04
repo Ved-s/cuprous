@@ -17,9 +17,12 @@ pub mod str;
 pub mod tabs;
 pub mod vector;
 pub mod vertex_renderer;
+pub mod circuits;
 
 pub const CHUNK_SIZE: usize = 16;
 pub const WIRE_WIDTH: f32 = 0.2;
+pub const WIRE_POINT_WIDTH: f32 = 0.35;
+pub const BIG_WIRE_POINT_WIDTH: f32 = 0.65;
 
 fn main() -> Result<(), eframe::Error> {
     let options = eframe::NativeOptions {

@@ -8,8 +8,8 @@ use std::{
 
 use eframe::{
     egui::{
-        remap_clamp, Align, Color32, Key, PointerButton, Rect, Response, Rounding, Sense, Stroke,
-        TextStyle, Ui, WidgetText,
+        remap_clamp, Align, Color32, Key, PointerButton, Rect, Response, Rounding, Sense,
+        Stroke, TextStyle, Ui, WidgetText,
     },
     epaint::TextShape,
 };
@@ -17,12 +17,12 @@ use parking_lot::{Mutex, RwLock};
 
 use crate::{
     app::{App, SelectedItem},
-    board::{BoardEditor, BoardSelectionImpl, SelectedBoardItem},
+    board::editor::{BoardEditor, BoardSelectionImpl, SelectedBoardItem},
     selection::{Selection, SelectionRenderer},
     vector::{Vec2f, Vec2isize, Vector2},
     vertex_renderer::{ColoredLineBuffer, ColoredTriangleBuffer, ColoredVertexRenderer},
     CustomPaintContext, Direction4Half, Direction8, Direction8Array, PaintContext, Screen,
-    CHUNK_SIZE, WIRE_WIDTH,
+    BIG_WIRE_POINT_WIDTH, CHUNK_SIZE, WIRE_POINT_WIDTH, WIRE_WIDTH,
 };
 
 use super::{TabCreation, TabImpl};
@@ -141,6 +141,30 @@ impl TabImpl for BoardView {
             matches!(app.selected_item, Some(SelectedItem::Selection)),
         );
 
+        if ui.input(|input| input.key_pressed(Key::Delete))
+            && self.selection.iter().next().is_some()
+        {
+            let mut editor = self.editor.write();
+            for item in self.selection.iter() {
+                match item {
+                    SelectedBoardItem::WirePart { pos, dir } => {
+                        let dir = Direction8::from(*dir);
+                        let dist = editor.wires.get(*pos).and_then(|n| {
+                            n.wire.is_some().then(|| *n.directions.get(dir)).flatten()
+                        });
+                        if let Some(dist) = dist {
+                            editor.remove_wire(*pos, dir, dist);
+                        }
+
+                    }
+                    SelectedBoardItem::WirePoint { pos } => {
+                        editor.remove_wire_point_with_parts(*pos);
+                    },
+                }
+            }
+            self.selection.clear();
+        }
+
         if ui.input(|input| input.key_pressed(Key::F9)) {
             self.wire_debug = !self.wire_debug;
         }
@@ -168,7 +192,11 @@ impl TabImpl for BoardView {
 
         self.selection.draw_overlay(&ctx);
 
-        self.handle_wire_interactions(&ctx, &interaction, matches!(app.selected_item, Some(SelectedItem::Wires)));
+        self.handle_wire_interactions(
+            &ctx,
+            &interaction,
+            matches!(app.selected_item, Some(SelectedItem::Wires)),
+        );
     }
 
     fn tab_style_override(&self, global: &egui_dock::TabStyle) -> Option<egui_dock::TabStyle> {
@@ -370,6 +398,18 @@ impl BoardView {
             }
         }
 
+        fn tmp_wire_color(id: usize) -> Color32 {
+            let mut hasher = DefaultHasher::new();
+            hasher.write_usize(178543947551947561);
+            hasher.write_usize(id);
+            let v = hasher.finish();
+            let r = ((v >> 16) & 0xff) as u8;
+            let g = ((v >> 8) & 0xff) as u8;
+            let b = (v & 0xff) as u8;
+
+            Color32::from_rgb(r, g, b)
+        }
+
         let mut part_buffer = self.wire_part_buffer.lock();
         let mut selecion_renderer = self.selection_renderer.lock();
         let editor = self.editor.read();
@@ -378,6 +418,8 @@ impl BoardView {
 
         let tl = [ctx.tile_bounds_tl.x - 1, ctx.tile_bounds_tl.y].into();
         let size = [ctx.tile_bounds_size.x + 2, ctx.tile_bounds_size.y + 1].into();
+
+        let force_draw_points = ctx.ui.input(|input| input.modifiers.shift);
 
         for (pos, lookaround, node) in editor.wires.iter_area_with_lookaround(tl, size) {
             for dir in Direction4Half::ALL {
@@ -452,7 +494,9 @@ impl BoardView {
 
                     let line_width = (wire_width * ctx.screen.scale).max(3.0);
 
-                    selecion_renderer.add_selection_line(pos1, pos2, line_width, true);
+                    selecion_renderer
+                        .border_buffer
+                        .add_quad_line(pos1, pos2, line_width, ());
                 }
 
                 let pos1 = posf
@@ -468,18 +512,119 @@ impl BoardView {
                     );
 
                 let line_width = (WIRE_WIDTH * ctx.screen.scale).max(1.0);
-
-                let mut hasher = DefaultHasher::new();
-                hasher.write_usize(178543947551947561);
-                hasher.write_usize(wire.id);
-                let v = hasher.finish();
-                let r = ((v >> 16) & 0xff) as u8;
-                let g = ((v >> 8) & 0xff) as u8;
-                let b = (v & 0xff) as u8;
-
-                let color = Color32::from_rgb(r, g, b);
+                let color = tmp_wire_color(wire.id);
 
                 part_buffer.add_quad_line(pos1, pos2, line_width, color.to_normalized_gamma_f32());
+            }
+
+            'draw_point: {
+                let Some(wire) = &node.wire else {
+                    break 'draw_point;
+                };
+                'draw_check: {
+                    if force_draw_points {
+                        break 'draw_check;
+                    }
+
+                    let mut dirs = 0;
+
+                    for dist in node.directions.values() {
+                        if dist.is_some() {
+                            dirs += 1;
+                            if dirs > 3 {
+                                break 'draw_check;
+                            }
+                        }
+                    }
+
+                    if self
+                        .selection
+                        .contains(&SelectedBoardItem::WirePoint { pos })
+                    {
+                        for (dir, dist) in node.directions.iter() {
+                            let Some(dist) = dist.as_ref() else {
+                                continue;
+                            };
+
+                            let (part_dir, part_rev) = dir.into_half();
+                            let target = if part_rev {
+                                dir.into_dir_isize() * dist.get() as isize + pos
+                            } else {
+                                pos
+                            };
+
+                            if !self.selection.contains(&SelectedBoardItem::WirePart {
+                                pos: target,
+                                dir: part_dir,
+                            }) {
+                                break 'draw_check;
+                            }
+                        }
+                    }
+
+                    break 'draw_point;
+                }
+
+                let mut straight = 0;
+                let mut diagonal = 0;
+
+                for (dir, dist) in node.directions.iter() {
+                    if dist.is_none() {
+                        continue;
+                    }
+
+                    if dir.is_diagonal() {
+                        diagonal += 1;
+                    } else {
+                        straight += 1;
+                    }
+                }
+
+                let all = straight + diagonal;
+                let straight = straight >= diagonal;
+
+                let center_pos = ctx.screen.world_to_screen(pos.convert(|v| v as f32 + 0.5));
+                let color = tmp_wire_color(wire.id);
+                let point_size = remap_clamp(
+                    all as f32,
+                    4.0..=8.0,
+                    WIRE_POINT_WIDTH..=BIG_WIRE_POINT_WIDTH,
+                ) * ctx.screen.scale;
+                if straight {
+                    part_buffer.add_centered_rect(
+                        center_pos,
+                        point_size,
+                        color.to_normalized_gamma_f32(),
+                    );
+                } else {
+                    part_buffer.add_centered_rotated_rect(
+                        center_pos,
+                        point_size,
+                        TAU / 8.0,
+                        color.to_normalized_gamma_f32(),
+                    );
+                }
+
+                if self
+                    .selection
+                    .contains(&SelectedBoardItem::WirePoint { pos })
+                {
+                    let point_size = point_size + 0.1 * ctx.screen.scale;
+                    if straight {
+                        selecion_renderer.border_buffer.add_centered_rect(
+                            center_pos,
+                            point_size,
+                            (),
+                        );
+                    } else {
+                        selecion_renderer.border_buffer.add_centered_rotated_rect(
+                            center_pos,
+                            point_size,
+                            TAU / 8.0,
+                            (),
+                        );
+                    }
+                }
             }
         }
     }

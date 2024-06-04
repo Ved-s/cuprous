@@ -116,7 +116,7 @@ impl<T> Vector2<T> {
         (a / b).acos()
     }
 
-    pub fn rotated_xy(self, angle: T, origin: impl Into<Self>) -> Self
+    pub fn rotated(self, angle: T, origin: impl Into<Self>) -> Self
     where
         T: Float,
     {

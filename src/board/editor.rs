@@ -4,56 +4,23 @@ use std::{
     sync::Arc,
 };
 
-use eframe::egui::{vec2, Rect};
-use parking_lot::RwLock;
+use eframe::egui::{remap_clamp, vec2, Rect};
 
 use crate::{
-    containers::{Chunks2D, FixedVec},
+    circuits::Circuit,
+    containers::Chunks2D,
     selection::SelectionImpl,
-    vector::{Vec2f, Vec2isize},
-    Direction4Half, Direction4HalfArray, Direction8, Direction8Array, CHUNK_SIZE, WIRE_WIDTH,
+    vector::{Vec2f, Vec2isize, Vec2usize},
+    Direction4Half, Direction4HalfArray, Direction8, Direction8Array, BIG_WIRE_POINT_WIDTH,
+    CHUNK_SIZE, WIRE_POINT_WIDTH, WIRE_WIDTH,
 };
 
-pub struct Board {
-    pub wires: RwLock<FixedVec<Arc<Wire>>>,
-}
-
-impl Default for Board {
-    fn default() -> Self {
-        Self {
-            wires: RwLock::new(vec![].into()),
-        }
-    }
-}
-
-impl Board {
-    pub fn create_wire(&self) -> Arc<Wire> {
-        let mut wires = self.wires.write();
-        let id = wires.first_free_pos();
-        let wire = Wire {
-            id,
-            points: Default::default(),
-        };
-        let arc = Arc::new(wire);
-        wires.set(id, arc.clone());
-        arc
-    }
-
-    pub fn free_wire(&self, wire: &Arc<Wire>) {
-        let mut wires = self.wires.write();
-        let Some(ewire) = wires.inner.get(wire.id) else {
-            return;
-        };
-
-        if ewire.as_ref().is_some_and(|w| Arc::ptr_eq(w, wire)) {
-            wires.remove(wire.id);
-        }
-    }
-}
+use super::{Board, Wire, WirePoint};
 
 #[derive(Default)]
 pub struct BoardEditor {
     pub wires: Chunks2D<CHUNK_SIZE, WireNode>,
+    pub circuits: Chunks2D<CHUNK_SIZE, CircuitNode>,
 
     pub board: Arc<Board>,
 }
@@ -71,7 +38,7 @@ impl BoardEditor {
         let other_pos = pos + dir.into_dir_isize() * length.get() as isize;
 
         for pos in [pos, other_pos] {
-            let Some(dirs) = self.examine_directions(pos) else {
+            let Some(dirs) = self.examine_wire_directions(pos) else {
                 continue;
             };
 
@@ -92,10 +59,10 @@ impl BoardEditor {
         wire_map.insert(wire.id, wire);
         wire_map.insert(other_wire.id, other_wire);
 
-        self.set_distances(pos, dir, length.get() as usize, true, true);
+        self.set_wire_distances(pos, dir, length.get() as usize, true, true);
 
         for pos in dir.iter_along(pos, length.get() as usize + 1) {
-            self.remove_needless_point(pos);
+            self.remove_needless_wire_point(pos);
         }
 
         if wire_map.len() > 1 {
@@ -143,7 +110,7 @@ impl BoardEditor {
             }
         }
 
-        self.set_distances(pos, dir, length.get() as usize, false, true);
+        self.set_wire_distances(pos, dir, length.get() as usize, false, true);
 
         if let Some(start) = start_wire {
             wire_map.insert(start.id, start);
@@ -153,7 +120,7 @@ impl BoardEditor {
         }
 
         for pos in dir.iter_along(pos, length.get() as usize + 1) {
-            self.remove_needless_point(pos);
+            self.remove_needless_wire_point(pos);
         }
 
         for wire in wire_map.values() {
@@ -178,7 +145,7 @@ impl BoardEditor {
                 }
             }
 
-            self.remove_wire_point(pos, true);
+            self.remove_wire_point(pos, true, false);
         } else {
             if node.directions.values().all(|d| d.is_none()) {
                 return;
@@ -188,7 +155,11 @@ impl BoardEditor {
         }
     }
 
-    fn set_distances(
+    pub fn remove_wire_point_with_parts(&mut self, pos: Vec2isize) {
+        self.remove_wire_point(pos, true, true);
+    }
+
+    fn set_wire_distances(
         &mut self,
         pos: Vec2isize,
         dir: Direction8,
@@ -197,8 +168,8 @@ impl BoardEditor {
         bidirectional: bool,
     ) {
         if bidirectional {
-            self.set_distances(pos, dir, length, set, false);
-            self.set_distances(
+            self.set_wire_distances(pos, dir, length, set, false);
+            self.set_wire_distances(
                 pos + dir.into_dir_isize() * length as isize,
                 dir.inverted(),
                 length,
@@ -260,7 +231,7 @@ impl BoardEditor {
 
         let mut merge_wires = HashMap::new();
 
-        let directions = self.examine_directions(pos);
+        let directions = self.examine_wire_directions(pos);
 
         let wire = match &directions {
             None => new_wire.unwrap_or_else(|| self.board.create_wire()),
@@ -294,7 +265,7 @@ impl BoardEditor {
 
         wire.points.write().insert(pos, WirePoint::default());
 
-        self.fix_directions_at_intersection(pos);
+        self.set_wire_distances_at_intersection(pos, true);
 
         if merge_wires.len() > 1 {
             self.merge_many_wires(merge_wires.values().cloned());
@@ -303,7 +274,7 @@ impl BoardEditor {
         wire
     }
 
-    fn remove_wire_point(&mut self, pos: Vec2isize, unmerge: bool) -> Option<Arc<Wire>> {
+    fn remove_wire_point(&mut self, pos: Vec2isize, unmerge: bool, remove_connected_parts: bool) -> Option<Arc<Wire>> {
         let node = self.wires.get(pos);
 
         if let Some(node) = node {
@@ -326,7 +297,20 @@ impl BoardEditor {
             }
         }
 
-        self.fix_directions_at_intersection(pos);
+        let directions = node.directions;
+
+        self.set_wire_distances_at_intersection(pos, !remove_connected_parts);
+
+        if remove_connected_parts {
+            for (dir, dist) in directions.iter() {
+                let Some(dist) = dist else {
+                    continue;
+                };
+
+                let target = pos + dir.into_dir_isize() * dist.get() as isize;
+                self.remove_needless_wire_point(target);
+            }
+        }
 
         if unmerge {
             if let Some(wire) = wire.clone() {
@@ -337,17 +321,18 @@ impl BoardEditor {
         wire
     }
 
-    fn fix_directions_at_intersection(&mut self, pos: Vec2isize) {
-        let Some(directions) = self.examine_directions(pos) else {
+    fn set_wire_distances_at_intersection(&mut self, pos: Vec2isize, set: bool) {
+        let Some(node) = self.wires.get(pos) else {
             return;
         };
+        let directions = node.directions;
 
         for dir in Direction8::ALL {
-            let forward_len = directions.get(dir).as_ref().map(|d| d.0.get()).unwrap_or(0);
+            let forward_len = directions.get(dir).as_ref().map(|d| d.get()).unwrap_or(0);
             let backward_len = directions
                 .get(dir.inverted())
                 .as_ref()
-                .map(|d| d.0.get())
+                .map(|d| d.get())
                 .unwrap_or(0);
 
             let total_len = forward_len + backward_len;
@@ -356,12 +341,12 @@ impl BoardEditor {
             }
 
             let start = pos + dir.inverted().into_dir_isize() * backward_len as isize;
-            self.set_distances(start, dir, total_len as usize, true, false);
+            self.set_wire_distances(start, dir, total_len as usize, set, false);
         }
     }
 
     #[allow(clippy::type_complexity)]
-    fn examine_directions(
+    fn examine_wire_directions(
         &self,
         pos: Vec2isize,
     ) -> Option<Direction8Array<Option<(NonZeroU32, Arc<Wire>)>>> {
@@ -498,7 +483,7 @@ impl BoardEditor {
         }
     }
 
-    fn remove_needless_point(&mut self, pos: Vec2isize) {
+    fn remove_needless_wire_point(&mut self, pos: Vec2isize) {
         let Some(node) = self.wires.get(pos) else {
             return;
         };
@@ -528,19 +513,8 @@ impl BoardEditor {
             }
         }
 
-        self.remove_wire_point(pos, false);
+        self.remove_wire_point(pos, false, false);
     }
-}
-
-pub struct Wire {
-    pub id: usize,
-
-    pub points: Arc<RwLock<HashMap<Vec2isize, WirePoint>>>,
-}
-
-#[derive(Default)]
-pub struct WirePoint {
-    pub directions: Direction4HalfArray<bool>,
 }
 
 #[derive(Default, Clone)]
@@ -549,9 +523,16 @@ pub struct WireNode {
     pub directions: Direction8Array<Option<NonZeroU32>>,
 }
 
+#[derive(Default, Clone)]
+pub struct CircuitNode {
+    pub circuit: Option<Arc<Circuit>>,
+    pub offset: Vec2usize,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SelectedBoardItem {
     WirePart { pos: Vec2isize, dir: Direction4Half },
+    WirePoint { pos: Vec2isize },
 }
 
 pub struct BoardSelectionImpl;
@@ -577,7 +558,7 @@ impl SelectionImpl for BoardSelectionImpl {
                 let Some(dist) = dist else {
                     continue;
                 };
-                
+
                 let cell_edge = center_pos + dir.into_dir_f32() * 0.5;
                 let rect = Rect::from_two_pos(center_pos.into(), cell_edge.into())
                     .expand(WIRE_WIDTH / 2.0);
@@ -585,7 +566,11 @@ impl SelectionImpl for BoardSelectionImpl {
                     let (half_dir, rev) = dir.into_half();
                     let target_rel = if !rev {
                         let di = dir.inverted();
-                        let dist = node.directions.get(di).map(|d| d.get() as isize).unwrap_or(0);
+                        let dist = node
+                            .directions
+                            .get(di)
+                            .map(|d| d.get() as isize)
+                            .unwrap_or(0);
                         di.into_dir_isize() * dist
                     } else {
                         dir.into_dir_isize() * dist.get() as isize
@@ -599,6 +584,26 @@ impl SelectionImpl for BoardSelectionImpl {
                             pos: pos + target_rel,
                             dir: half_dir,
                         });
+                    }
+                }
+            }
+
+            if node.wire.is_some() {
+                if center_intersects {
+                    items.insert(SelectedBoardItem::WirePoint { pos });
+                } else {
+                    let dirs = node.directions.values().filter(|d| d.is_some()).count();
+                    let point_size = remap_clamp(
+                        dirs as f32,
+                        4.0..=8.0,
+                        WIRE_POINT_WIDTH..=BIG_WIRE_POINT_WIDTH,
+                    );
+
+                    let rect =
+                        Rect::from_center_size(center_pos.into(), vec2(point_size, point_size));
+
+                    if rect.intersects(area) {
+                        items.insert(SelectedBoardItem::WirePoint { pos });
                     }
                 }
             }

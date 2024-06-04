@@ -141,6 +141,11 @@ impl<I: SelectionImpl> Selection<I> {
             Stroke::new(2.0, ctx.style.selection_border),
         );
     }
+    
+    pub fn clear(&mut self) {
+        self.selection.clear();
+        self.change.clear();
+    }
 }
 
 impl<I: SelectionImpl> Default for Selection<I> {
@@ -210,8 +215,8 @@ impl<'a, T: Hash + Eq> Iterator for SelectionIterator<'a, T> {
 }
 
 pub struct SelectionRenderer {
-    border_buffer: TriangleBuffer<SimpleVertex>,
-    fill_buffer: TriangleBuffer<SimpleVertex>,
+    pub border_buffer: TriangleBuffer<SimpleVertex>,
+    pub fill_buffer: TriangleBuffer<SimpleVertex>,
 
     renderer_borderfill: VertexRenderer<SimpleVertex, SelectionBorderFillShader>,
     renderer_fullscreen: VertexRenderer<UvVertex, SelectionFullscreenShader>,
@@ -247,14 +252,6 @@ impl SelectionRenderer {
     pub fn clear_draw(&mut self) {
         self.border_buffer.clear();
         self.fill_buffer.clear();
-    }
-
-    pub fn add_selection_line(&mut self, a: Vec2f, b: Vec2f, width: f32, border: bool) {
-        if border {
-            self.border_buffer.add_quad_line(a, b, width, ());
-        } else {
-            self.fill_buffer.add_quad_line(a, b, width, ());
-        }
     }
 
     pub fn draw(&mut self, ctx: &CustomPaintContext) {
