@@ -1303,7 +1303,17 @@ fn generate_new(c: &ParsedContainer, parsed: &ParsedMacroInput) -> TokenStream {
 
     quote! {
         pub fn new<T: #all_value_bounds>(value: T) -> Self {
-            let ptr = std::ptr::NonNull::from(Box::leak(Box::new(value))).cast();
+
+            let layout = std::alloc::Layout::new::<T>();
+            let ptr = if layout.size() == 0 {
+                std::ptr::NonNull::dangling()
+            } else {
+                let ptr = unsafe { std::alloc::alloc(layout) };
+                let Some(ptr) = std::ptr::NonNull::new(ptr.cast()) else {
+                    std::alloc::handle_alloc_error(layout);
+                };
+                ptr
+            };
 
             fn drop<Tinner>(p: std::ptr::NonNull<()>) {
                 unsafe { p.cast::<Tinner>().drop_in_place() }
@@ -1390,6 +1400,9 @@ fn generate_impl(c: &ParsedContainer, parsed: &ParsedMacroInput) -> TokenStream 
             fn drop_value(&mut self) {
                 (self.vtable.drop)(self.data);
                 let size = self.vtable.size;
+                if size == 0 {
+                    return;
+                }
                 let align = self.vtable.align;
                 unsafe {
                     let layout = std::alloc::Layout::from_size_align_unchecked(size, align);

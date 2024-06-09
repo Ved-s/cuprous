@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     f32::consts::{PI, SQRT_2, TAU},
     hash::{DefaultHasher, Hasher},
     num::NonZeroU32,
@@ -8,7 +9,7 @@ use std::{
 
 use eframe::{
     egui::{
-        remap_clamp, Align, Color32, Key, PointerButton, Rect, Response, Rounding, Sense,
+        remap_clamp, vec2, Align, Color32, Key, PointerButton, Rect, Response, Rounding, Sense,
         Stroke, TextStyle, Ui, WidgetText,
     },
     epaint::TextShape,
@@ -17,7 +18,8 @@ use parking_lot::{Mutex, RwLock};
 
 use crate::{
     app::{App, SelectedItem},
-    board::editor::{BoardEditor, BoardSelectionImpl, SelectedBoardItem},
+    circuits::{CircuitImplBox, CircuitRenderingContext, TestCircuit},
+    editor::{BoardEditor, BoardSelectionImpl, QuarterPos, SelectedBoardItem},
     selection::{Selection, SelectionRenderer},
     vector::{Vec2f, Vec2isize, Vector2},
     vertex_renderer::{ColoredLineBuffer, ColoredTriangleBuffer, ColoredVertexRenderer},
@@ -37,6 +39,7 @@ pub struct BoardView {
     editor: Arc<RwLock<BoardEditor>>,
     fixed_screen_pos: Option<(Rect, PanAndZoom)>,
     wire_debug: bool,
+    circuit_debug: bool,
 
     grid_buffer: Arc<Mutex<ColoredLineBuffer>>,
     wire_part_buffer: Arc<Mutex<ColoredTriangleBuffer>>,
@@ -44,6 +47,7 @@ pub struct BoardView {
     selection: Selection<BoardSelectionImpl>,
     selection_renderer: Arc<Mutex<SelectionRenderer>>,
 
+    circuits_drawn: HashSet<usize>,
     debug_not_render_wires: bool,
 }
 
@@ -57,6 +61,7 @@ impl TabCreation for BoardView {
             editor: Default::default(),
             fixed_screen_pos: None,
             wire_debug: false,
+            circuit_debug: false,
 
             grid_buffer: Arc::new(Mutex::new(ColoredLineBuffer::new(1.0))),
             wire_part_buffer: Default::default(),
@@ -64,6 +69,7 @@ impl TabCreation for BoardView {
             selection: Selection::new(),
             selection_renderer: Arc::new(Mutex::new(SelectionRenderer::new(&app.gl))),
 
+            circuits_drawn: HashSet::new(),
             debug_not_render_wires: false,
         }
     }
@@ -141,36 +147,8 @@ impl TabImpl for BoardView {
             matches!(app.selected_item, Some(SelectedItem::Selection)),
         );
 
-        if ui.input(|input| input.key_pressed(Key::Delete))
-            && self.selection.iter().next().is_some()
-        {
-            let mut editor = self.editor.write();
-            for item in self.selection.iter() {
-                match item {
-                    SelectedBoardItem::WirePart { pos, dir } => {
-                        let dir = Direction8::from(*dir);
-                        let dist = editor.wires.get(*pos).and_then(|n| {
-                            n.wire.is_some().then(|| *n.directions.get(dir)).flatten()
-                        });
-                        if let Some(dist) = dist {
-                            editor.remove_wire(*pos, dir, dist);
-                        }
-
-                    }
-                    SelectedBoardItem::WirePoint { pos } => {
-                        editor.remove_wire_point_with_parts(*pos);
-                    },
-                }
-            }
-            self.selection.clear();
-        }
-
-        if ui.input(|input| input.key_pressed(Key::F9)) {
-            self.wire_debug = !self.wire_debug;
-        }
-
-        if ui.input(|input| input.key_pressed(Key::F10)) {
-            self.debug_not_render_wires = !self.debug_not_render_wires;
+        if !ui.ctx().wants_keyboard_input() {
+            self.handle_keyboard(ui, app);
         }
 
         let ctx = PaintContext::new(ui, screen, app.style.clone());
@@ -186,8 +164,14 @@ impl TabImpl for BoardView {
             self.draw_wires(&ctx);
         }
 
+        self.draw_circuits(&ctx);
+
         if self.wire_debug {
             self.draw_wire_debug(&ctx);
+        }
+
+        if self.circuit_debug {
+            self.draw_circuit_debug(&ctx);
         }
 
         self.selection.draw_overlay(&ctx);
@@ -197,6 +181,10 @@ impl TabImpl for BoardView {
             &interaction,
             matches!(app.selected_item, Some(SelectedItem::Wires)),
         );
+
+        if matches!(app.selected_item, Some(SelectedItem::TestCircuit)) {
+            self.handle_circuit_placement(&interaction, &ctx);
+        }
     }
 
     fn tab_style_override(&self, global: &egui_dock::TabStyle) -> Option<egui_dock::TabStyle> {
@@ -642,6 +630,88 @@ impl BoardView {
         });
     }
 
+    fn draw_circuits(&mut self, ctx: &PaintContext) {
+        self.circuits_drawn.clear();
+
+        let editor = self.editor.read();
+
+        for (_, node) in editor
+            .circuits
+            .iter_area(ctx.tile_bounds_tl, ctx.tile_bounds_size)
+        {
+            for quarter in QuarterPos::ALL {
+                let quarter = node.quarters.get(quarter);
+                let Some(circuit) = quarter.circuit.as_ref() else {
+                    continue;
+                };
+
+                if self.circuits_drawn.contains(&circuit.id) {
+                    continue;
+                }
+
+                let selected = self.selection.contains(&SelectedBoardItem::Circuit {
+                    id: circuit.id,
+                    pos: circuit.info.read().pos,
+                });
+
+                let selection_renderer = selected.then(|| self.selection_renderer.clone());
+                let mut custom_selection = false;
+
+                let info = circuit.info.read();
+                let size = info.size;
+                let pos = info.pos;
+                drop(info);
+
+                let circuit_ctx = CircuitRenderingContext::new(
+                    ctx,
+                    pos,
+                    size,
+                    selection_renderer,
+                    &mut custom_selection,
+                );
+                circuit.imp.read().draw(&circuit_ctx);
+
+                if selected && !custom_selection {
+                    let mut renderer = self.selection_renderer.lock();
+
+                    for (pos, node) in editor.circuits.iter_area(pos, size) {
+                        for qpos in QuarterPos::ALL {
+                            if !node
+                                .quarters
+                                .get(qpos)
+                                .circuit
+                                .as_ref()
+                                .is_some_and(|c| c.id == circuit.id)
+                            {
+                                continue;
+                            }
+
+                            let pos = pos.convert(|v| v as f32) + qpos.into_quarter_position_f32();
+                            let rect = ctx.screen.world_to_screen_rect(Rect::from_min_size(
+                                pos.into(),
+                                vec2(0.5, 0.5),
+                            ));
+
+                            renderer
+                                .fill_buffer
+                                .add_new_rect(rect.left_top(), rect.size(), ());
+
+                            let border_rect = rect.expand(ctx.screen.scale * 0.1);
+
+                            renderer.border_buffer.add_new_rect(
+                                border_rect.left_top(),
+                                border_rect.size(),
+                                (),
+                            );
+                        }
+                    }
+                }
+
+                self.circuits_drawn.insert(circuit.id);
+            }
+        }
+    }
+
     fn draw_selection(&self, ctx: &PaintContext) {
         let renderer = self.selection_renderer.clone();
 
@@ -770,6 +840,80 @@ impl BoardView {
         }
     }
 
+    fn draw_circuit_debug(&self, ctx: &PaintContext) {
+        let editor = self.editor.read();
+        for (pos, node) in editor
+            .circuits
+            .iter_area(ctx.tile_bounds_tl, ctx.tile_bounds_size)
+        {
+            for qpos in QuarterPos::ALL {
+                let quarter = node.quarters.get(qpos);
+                let Some(circuit) = quarter.circuit.as_ref() else {
+                    continue;
+                };
+
+                let quarter_center = pos.convert(|v| v as f32)
+                    + qpos.into_position().convert(|v| v as f32 / 2.0)
+                    + 0.25;
+
+                let text = WidgetText::from(format!("{}", circuit.id));
+                let galley =
+                    text.into_galley(ctx.ui, Some(false), f32::INFINITY, TextStyle::Monospace);
+
+                let correct_circuit = editor
+                    .board
+                    .circuits
+                    .read()
+                    .get(circuit.id)
+                    .is_some_and(|ec| Arc::ptr_eq(ec, circuit));
+
+                let info = circuit.info.read();
+
+                let correct_offset_x = quarter.offset.x < info.size.x
+                    && quarter.offset.x as isize == (pos.x - info.pos.x);
+
+                let correct_offset_y = quarter.offset.y < info.size.y
+                    && quarter.offset.y as isize == (pos.y - info.pos.y);
+
+                drop(info);
+
+                let mut rgb = [60u8; 3];
+
+                if correct_offset_x {
+                    rgb[0] = 255;
+                }
+
+                if correct_offset_y {
+                    rgb[1] = 255;
+                }
+
+                if correct_circuit {
+                    rgb[2] = 255;
+                }
+
+                let color = Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
+
+                let pos = ctx.screen.world_to_screen(quarter_center) - galley.size() / 2.0;
+
+                ctx.painter.rect_filled(
+                    Rect::from_min_size(pos.into(), galley.size()).expand(1.0),
+                    Rounding::ZERO,
+                    Color32::BLACK.gamma_multiply(0.4),
+                );
+
+                ctx.painter.add(TextShape {
+                    pos: pos.into(),
+                    galley,
+                    underline: Stroke::NONE,
+                    fallback_color: color,
+                    override_text_color: None,
+                    opacity_factor: 0.9,
+                    angle: 0.0,
+                });
+            }
+        }
+    }
+
     fn handle_wire_interactions(
         &mut self,
         ctx: &PaintContext,
@@ -873,6 +1017,98 @@ impl BoardView {
             if active && interaction.clicked_by(PointerButton::Primary) {
                 self.editor.write().toggle_wire_point(world_mouse_tile);
             }
+        }
+    }
+
+    fn handle_circuit_placement(&self, interaction: &Response, ctx: &PaintContext) {
+        let world_mouse = ctx
+            .ui
+            .input(|input| input.pointer.latest_pos())
+            .map(|p| ctx.screen.screen_to_world(p));
+
+        let Some(world_mouse) = world_mouse else {
+            return;
+        };
+
+        let imp = &CircuitImplBox::new(TestCircuit);
+        let circuit_size = imp.size();
+
+        let world_place_pos = world_mouse - circuit_size.convert(|v| v as f32 / 2.0);
+        let world_place_tile = world_place_pos.convert(|v| v.round() as isize);
+
+        let mut custom_selection = false;
+
+        let ctx = CircuitRenderingContext::new(
+            ctx,
+            world_place_tile,
+            circuit_size,
+            None,
+            &mut custom_selection,
+        );
+        imp.draw(&ctx);
+
+        if interaction.clicked() {
+            self.editor
+                .write()
+                .place_circuit(world_place_tile, imp.clone())
+                .expect("TODO");
+        }
+    }
+
+    fn handle_keyboard(&mut self, ui: &mut Ui, app: &mut App) {
+        if ui.input(|input| input.key_pressed(Key::Delete))
+            && self.selection.iter().next().is_some()
+        {
+            let mut editor = self.editor.write();
+            for item in self.selection.iter() {
+                match item {
+                    SelectedBoardItem::WirePart { pos, dir } => {
+                        let dir = Direction8::from(*dir);
+                        let dist = editor.wires.get(*pos).and_then(|n| {
+                            n.wire.is_some().then(|| *n.directions.get(dir)).flatten()
+                        });
+                        if let Some(dist) = dist {
+                            editor.remove_wire(*pos, dir, dist);
+                        }
+                    }
+                    SelectedBoardItem::WirePoint { pos } => {
+                        editor.remove_wire_point_with_parts(*pos);
+                    }
+                    SelectedBoardItem::Circuit { id, pos } => {
+                        let Some(circuit) = editor.board.circuits.read().get(*id).cloned() else {
+                            continue;
+                        };
+
+                        if circuit.info.read().pos == *pos {
+                            editor.remove_circuit(&circuit);
+                        }
+                    }
+                }
+            }
+            self.selection.clear();
+        }
+
+        if ui.input(|input| input.key_pressed(Key::F9)) {
+            match (self.wire_debug, self.circuit_debug) {
+                (false, false) => self.wire_debug = true,
+                (true, false) => {
+                    self.wire_debug = false;
+                    self.circuit_debug = true;
+                }
+                (false, true) => self.circuit_debug = false,
+                (true, true) => {
+                    self.wire_debug = false;
+                    self.circuit_debug = false;
+                }
+            }
+        }
+
+        if ui.input(|input| input.key_pressed(Key::F10)) {
+            self.debug_not_render_wires = !self.debug_not_render_wires;
+        }
+
+        if ui.input(|input| input.key_pressed(Key::Escape)) {
+            app.selected_item = None;
         }
     }
 }

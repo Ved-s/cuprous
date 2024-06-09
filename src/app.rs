@@ -96,4 +96,5 @@ impl eframe::App for DockedApp {
 pub enum SelectedItem {
     Wires,
     Selection,
+    TestCircuit,
 }

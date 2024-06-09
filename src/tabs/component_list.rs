@@ -49,6 +49,15 @@ impl TabImpl for ComponentList {
                         app.selected_item = Some(SelectedItem::Selection);
                     }
                 }
+
+                let test_circuit = matches!(app.selected_item, Some(SelectedItem::TestCircuit));
+                if selectable_icon_label(ui, 0.0, test_circuit, "Test circuit".into(), &mut |_, _| {}).clicked() {
+                    if test_circuit {
+                        app.selected_item = None;
+                    } else {
+                        app.selected_item = Some(SelectedItem::TestCircuit);
+                    }
+                };
             });
     }
 }

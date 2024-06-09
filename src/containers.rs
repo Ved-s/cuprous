@@ -395,6 +395,16 @@ impl<'a, const CHUNK_SIZE: usize, T: Default> ChunksLookaround<'a, CHUNK_SIZE, T
             Some(&self.chunk[target.x as usize][target.y as usize])
         }
     }
+
+    pub fn get(&self, pos: impl Into<Vec2isize>) -> Option<&T> {
+        let pos = pos.into();
+        let (chunk, ipos) = global_to_chunk_pos(pos, CHUNK_SIZE);
+        if chunk != self.chunk_pos {
+            return self.chunks.get(pos);
+        }
+
+        Some(&self.chunk[ipos.x][ipos.y])
+    }
 }
 
 #[allow(dead_code)]

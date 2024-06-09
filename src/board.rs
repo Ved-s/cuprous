@@ -1,5 +1,3 @@
-pub mod editor;
-
 use std::{
     collections::HashMap,
     sync::Arc,
@@ -8,7 +6,7 @@ use std::{
 use parking_lot::RwLock;
 
 use crate::{
-    circuits::Circuit, containers::FixedVec, vector::Vec2isize, Direction4HalfArray
+    circuits::{Circuit, CircuitImplBox, CircuitInfo}, containers::FixedVec, vector::Vec2isize, Direction4HalfArray
 };
 
 pub struct Board {
@@ -46,6 +44,35 @@ impl Board {
 
         if ewire.as_ref().is_some_and(|w| Arc::ptr_eq(w, wire)) {
             wires.remove(wire.id);
+        }
+    }
+
+    pub fn create_circuit(&self, pos: Vec2isize, imp: CircuitImplBox) -> Arc<Circuit> {
+        let mut circuits = self.circuits.write();
+
+        let id = circuits.first_free_pos();
+        let circuit = Circuit {
+            id,
+            info: RwLock::new(CircuitInfo {
+                pos,
+                size: imp.size(),
+            }),
+            imp: RwLock::new(imp),
+        };
+
+        let arc = Arc::new(circuit);
+        circuits.set(id, arc.clone());
+        arc
+    }
+
+    pub fn free_circuit(&self, circuit: &Arc<Circuit>) {
+        let mut circuits = self.circuits.write();
+        let Some(ecircuit) = circuits.inner.get(circuit.id) else {
+            return;
+        };
+
+        if ecircuit.as_ref().is_some_and(|c| Arc::ptr_eq(c, circuit)) {
+            circuits.remove(circuit.id);
         }
     }
 }

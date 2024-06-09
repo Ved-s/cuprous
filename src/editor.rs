@@ -7,15 +7,14 @@ use std::{
 use eframe::egui::{remap_clamp, vec2, Rect};
 
 use crate::{
-    circuits::Circuit,
+    board::{Board, Wire, WirePoint},
+    circuits::{Circuit, CircuitImplBox},
     containers::Chunks2D,
     selection::SelectionImpl,
     vector::{Vec2f, Vec2isize, Vec2usize},
     Direction4Half, Direction4HalfArray, Direction8, Direction8Array, BIG_WIRE_POINT_WIDTH,
     CHUNK_SIZE, WIRE_POINT_WIDTH, WIRE_WIDTH,
 };
-
-use super::{Board, Wire, WirePoint};
 
 #[derive(Default)]
 pub struct BoardEditor {
@@ -159,6 +158,88 @@ impl BoardEditor {
         self.remove_wire_point(pos, true, true);
     }
 
+    pub fn place_circuit(
+        &mut self,
+        pos: Vec2isize,
+        imp: CircuitImplBox,
+    ) -> Result<(), CircuitPlaceError> {
+        let size = imp.size();
+        if size.x == 0 || size.y == 0 {
+            return Err(CircuitPlaceError::ZeroSizeCircuit);
+        }
+
+        let circuit = self.board.create_circuit(pos, imp);
+
+        let imp = circuit.imp.read();
+        let mut occupied = HashMap::new();
+        let mut occupies_any = false;
+        for y in 0..size.y {
+            for x in 0..size.x {
+                let world_pos = pos + [x as isize, y as isize];
+
+                let node = self.circuits.get_or_create_mut(world_pos);
+
+                let mut occupied_quarters = QuarterArray::default();
+
+                for quarter in QuarterPos::ALL {
+                    let pos = quarter.into_position() + [x * 2, y * 2];
+                    if !imp.occupies_quarter(pos) {
+                        continue;
+                    }
+                    occupies_any = true;
+                    let circuit_quarter = node.quarters.get_mut(quarter);
+
+                    if circuit_quarter.circuit.is_some() {
+                        *occupied_quarters.get_mut(quarter) = true;
+                    } else {
+                        circuit_quarter.circuit = Some(circuit.clone());
+                        circuit_quarter.offset = [x, y].into();
+                    }
+                }
+
+                if occupied_quarters.values().any(|v| *v) {
+                    occupied.insert(world_pos, occupied_quarters);
+                }
+            }
+        }
+
+        if !occupied.is_empty() || !occupies_any {
+            self.remove_circuit(&circuit);
+
+            if occupies_any {
+                return Err(CircuitPlaceError::PlaceOccupied(occupied));
+            } else {
+                return Err(CircuitPlaceError::OccupiesNoTiles);
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn remove_circuit(&mut self, circuit: &Arc<Circuit>) {
+        let info = circuit.info.read();
+        let size = info.size;
+        let pos = info.pos;
+        drop(info);
+        for y in 0..size.y {
+            for x in 0..size.x {
+                let world_pos = pos + [x as isize, y as isize];
+
+                let node = self.circuits.get_or_create_mut(world_pos);
+
+                for quarter in QuarterPos::ALL {
+                    let quarter = node.quarters.get_mut(quarter);
+
+                    if quarter.circuit.as_ref().is_some_and(|c| c.id == circuit.id) {
+                        quarter.circuit = None;
+                    }
+                }
+            }
+        }
+
+        self.board.free_circuit(circuit);
+    }
+
     fn set_wire_distances(
         &mut self,
         pos: Vec2isize,
@@ -274,7 +355,12 @@ impl BoardEditor {
         wire
     }
 
-    fn remove_wire_point(&mut self, pos: Vec2isize, unmerge: bool, remove_connected_parts: bool) -> Option<Arc<Wire>> {
+    fn remove_wire_point(
+        &mut self,
+        pos: Vec2isize,
+        unmerge: bool,
+        remove_connected_parts: bool,
+    ) -> Option<Arc<Wire>> {
         let node = self.wires.get(pos);
 
         if let Some(node) = node {
@@ -523,16 +609,131 @@ pub struct WireNode {
     pub directions: Direction8Array<Option<NonZeroU32>>,
 }
 
+#[derive(Clone, Copy)]
+pub enum QuarterPos {
+    TL,
+    TR,
+    BL,
+    BR,
+}
+
+impl QuarterPos {
+    pub const ALL: [Self; 4] = [Self::TL, Self::TR, Self::BL, Self::BR];
+
+    pub fn into_index(self) -> usize {
+        match self {
+            Self::TL => 0,
+            Self::TR => 1,
+            Self::BL => 2,
+            Self::BR => 3,
+        }
+    }
+
+    pub fn from_index(i: usize) -> Self {
+        match i % 4 {
+            0 => Self::TL,
+            1 => Self::TR,
+            2 => Self::BL,
+            3 => Self::BR,
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn into_position(self) -> Vec2usize {
+        match self {
+            Self::TL => [0, 0],
+            Self::TR => [1, 0],
+            Self::BL => [0, 1],
+            Self::BR => [1, 1],
+        }
+        .into()
+    }
+
+    pub fn into_quarter_position_f32(self) -> Vec2f {
+        match self {
+            Self::TL => [0.0, 0.0],
+            Self::TR => [0.5, 0.0],
+            Self::BL => [0.0, 0.5],
+            Self::BR => [0.5, 0.5],
+        }
+        .into()
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct QuarterArray<T>([T; 4]);
+
+impl<T> QuarterArray<T> {
+    pub fn get(&self, quarter: QuarterPos) -> &T {
+        &self.0[quarter.into_index()]
+    }
+
+    pub fn get_mut(&mut self, quarter: QuarterPos) -> &mut T {
+        &mut self.0[quarter.into_index()]
+    }
+
+    pub fn from_fn(mut f: impl FnMut(QuarterPos) -> T) -> Self {
+        Self(std::array::from_fn(|i| f(QuarterPos::from_index(i))))
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (QuarterPos, &T)> {
+        self.0
+            .iter()
+            .enumerate()
+            .map(|(i, v)| (QuarterPos::from_index(i), v))
+    }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (QuarterPos, &mut T)> {
+        self.0
+            .iter_mut()
+            .enumerate()
+            .map(|(i, v)| (QuarterPos::from_index(i), v))
+    }
+
+    pub fn values(&self) -> impl Iterator<Item = &T> {
+        self.0.iter()
+    }
+
+    pub fn values_mut(&mut self) -> impl Iterator<Item = &mut T> {
+        self.0.iter_mut()
+    }
+}
+
 #[derive(Default, Clone)]
 pub struct CircuitNode {
+    pub quarters: QuarterArray<CircuitNodeQuarter>,
+}
+
+impl CircuitNode {
+    pub fn is_empty(&self) -> bool {
+        for quarter in self.quarters.values() {
+            if quarter.circuit.is_some() {
+                return false;
+            }
+        }
+
+        true
+    }
+}
+
+#[derive(Default, Clone)]
+pub struct CircuitNodeQuarter {
     pub circuit: Option<Arc<Circuit>>,
     pub offset: Vec2usize,
+}
+
+#[derive(Debug)]
+pub enum CircuitPlaceError {
+    ZeroSizeCircuit,
+    OccupiesNoTiles,
+    PlaceOccupied(HashMap<Vec2isize, QuarterArray<bool>>),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SelectedBoardItem {
     WirePart { pos: Vec2isize, dir: Direction4Half },
     WirePoint { pos: Vec2isize },
+    Circuit { id: usize, pos: Vec2isize },
 }
 
 pub struct BoardSelectionImpl;
@@ -605,6 +806,24 @@ impl SelectionImpl for BoardSelectionImpl {
                     if rect.intersects(area) {
                         items.insert(SelectedBoardItem::WirePoint { pos });
                     }
+                }
+            }
+        }
+
+        for (pos, node) in pass.circuits.iter_area(tl, size) {
+            for qpos in QuarterPos::ALL {
+                let quarter = node.quarters.get(qpos);
+                let Some(circuit) = quarter.circuit.as_ref() else {
+                    continue;
+                };
+
+                let world_pos = pos.convert(|v| v as f32) + qpos.into_quarter_position_f32();
+                let rect = Rect::from_min_size(world_pos.into(), vec2(0.5, 0.5));
+                if area.intersects(rect) {
+                    items.insert(SelectedBoardItem::Circuit {
+                        id: circuit.id,
+                        pos: circuit.info.read().pos,
+                    });
                 }
             }
         }
