@@ -9,8 +9,8 @@ use std::{
 
 use eframe::{
     egui::{
-        remap_clamp, vec2, Align, Color32, Key, PointerButton, Rect, Response, Rounding, Sense,
-        Stroke, TextStyle, Ui, WidgetText,
+        remap_clamp, vec2, Align, Color32, FontId, Key, PointerButton, Rect, Response,
+        Rounding, Sense, Stroke, TextStyle, Ui, WidgetText,
     },
     epaint::TextShape,
 };
@@ -18,7 +18,8 @@ use parking_lot::{Mutex, RwLock};
 
 use crate::{
     app::{App, SelectedItem},
-    circuits::{CircuitImplBox, CircuitRenderingContext, TestCircuit},
+    circuits::{CircuitBlueprint, CircuitRenderingContext, CircuitSelectionRenderingContext},
+    drawing::rotated_rect,
     editor::{BoardEditor, BoardSelectionImpl, QuarterPos, SelectedBoardItem},
     selection::{Selection, SelectionRenderer},
     vector::{Vec2f, Vec2isize, Vector2},
@@ -182,8 +183,8 @@ impl TabImpl for BoardView {
             matches!(app.selected_item, Some(SelectedItem::Wires)),
         );
 
-        if matches!(app.selected_item, Some(SelectedItem::TestCircuit)) {
-            self.handle_circuit_placement(&interaction, &ctx);
+        if let Some(SelectedItem::Circuit(c)) = app.selected_item.as_ref() {
+            self.handle_circuit_placement(&interaction, &ctx, c.read().deref());
         }
     }
 
@@ -654,21 +655,18 @@ impl BoardView {
                     pos: circuit.info.read().pos,
                 });
 
-                let selection_renderer = selected.then(|| self.selection_renderer.clone());
-                let mut custom_selection = false;
-
                 let info = circuit.info.read();
                 let size = info.size;
                 let pos = info.pos;
                 drop(info);
 
-                let circuit_ctx = CircuitRenderingContext::new(
-                    ctx,
-                    pos,
-                    size,
-                    selection_renderer,
-                    &mut custom_selection,
-                );
+                let mut custom_selection = false;
+                let selection = selected.then(|| CircuitSelectionRenderingContext {
+                    renderer: self.selection_renderer.clone(),
+                    custom_selection: &mut custom_selection,
+                });
+
+                let circuit_ctx = CircuitRenderingContext::new(ctx, pos, size, selection);
                 circuit.imp.read().draw(&circuit_ctx);
 
                 if selected && !custom_selection {
@@ -1020,7 +1018,12 @@ impl BoardView {
         }
     }
 
-    fn handle_circuit_placement(&self, interaction: &Response, ctx: &PaintContext) {
+    fn handle_circuit_placement(
+        &self,
+        interaction: &Response,
+        ctx: &PaintContext,
+        blueprint: &CircuitBlueprint,
+    ) {
         let world_mouse = ctx
             .ui
             .input(|input| input.pointer.latest_pos())
@@ -1030,27 +1033,22 @@ impl BoardView {
             return;
         };
 
-        let imp = &CircuitImplBox::new(TestCircuit);
-        let circuit_size = imp.size();
-
-        let world_place_pos = world_mouse - circuit_size.convert(|v| v as f32 / 2.0);
+        let world_place_pos = world_mouse - blueprint.size.convert(|v| v as f32 / 2.0);
         let world_place_tile = world_place_pos.convert(|v| v.round() as isize);
 
-        let mut custom_selection = false;
+        let circuit_ctx = CircuitRenderingContext::new(ctx, world_place_tile, blueprint.size, None);
+        blueprint.imp.draw(&circuit_ctx);
 
-        let ctx = CircuitRenderingContext::new(
-            ctx,
-            world_place_tile,
-            circuit_size,
-            None,
-            &mut custom_selection,
-        );
-        imp.draw(&ctx);
+        let mut iter = blueprint.pins.iter().map(|pin| {
+            (pin.pos.convert(|v|v as isize) + world_place_tile, pin.display_name.deref(), pin.dir)
+        });
+
+        draw_pin_labels(ctx, true, &mut iter);
 
         if interaction.clicked() {
             self.editor
                 .write()
-                .place_circuit(world_place_tile, imp.clone())
+                .place_circuit(world_place_tile, blueprint)
                 .expect("TODO");
         }
     }
@@ -1110,6 +1108,113 @@ impl BoardView {
         if ui.input(|input| input.key_pressed(Key::Escape)) {
             app.selected_item = None;
         }
+    }
+}
+
+fn draw_pin_labels(
+    ctx: &PaintContext,
+    draw_dots: bool,
+    pins: &mut dyn Iterator<Item = (Vec2isize, &str, Option<Direction8>)>,
+) {
+    let font = TextStyle::Body.resolve(ctx.ui.style());
+    let margin = 3.0;
+
+    let font = FontId {
+        size: font.size * 1.2,
+        ..font
+    };
+
+    let full_height = font.size + margin * 2.0;
+    let min_scale = full_height / 0.8;
+
+    let text_scale = if ctx.screen.scale < min_scale {
+        ctx.screen.scale / min_scale
+    } else {
+        1.0
+    };
+
+    let font = FontId {
+        size: font.size * text_scale,
+        ..font
+    };
+    let margin = margin * text_scale;
+    let distance = 20.0 * text_scale;
+
+    for (pos, name, dir) in pins {
+        let pos = ctx.screen.world_to_screen(pos.convert(|v| v as f32 + 0.5));
+
+        if draw_dots {
+            ctx.painter.circle_filled(
+                pos.into(),
+                ctx.screen.scale * WIRE_WIDTH * 0.5,
+                Color32::DARK_GREEN,
+            );
+        }
+
+        let text = WidgetText::from(name);
+        let galley = text.into_galley(ctx.ui, Some(false), f32::INFINITY, font.clone());
+
+        let (text_pos, angle) = match dir {
+            None => (
+                [pos.x - galley.size().x / 2.0, pos.y + distance + margin].into(),
+                0.0,
+            ),
+            Some(dir) => {
+                let distant = matches!(
+                    dir,
+                    Direction8::DownLeft | Direction8::Left | Direction8::UpLeft
+                );
+
+                let text_distance = if distant {
+                    distance + galley.size().x + margin
+                } else {
+                    distance + margin
+                };
+
+                let angle = dir.into_angle_xp_cw();
+
+                let yoff_angle = if distant {
+                    angle + TAU / 4.0
+                } else {
+                    angle - TAU / 4.0
+                };
+
+                let text_yoff_length = galley.size().y / 2.0;
+
+                let text_offset = Vec2f::from_angle_length(angle, text_distance)
+                    + Vec2f::from_angle_length(yoff_angle, text_yoff_length);
+
+                let angle = if distant { angle + TAU / 2.0 } else { angle };
+
+                (pos + text_offset, angle)
+            }
+        };
+
+        let rect_pos_off_angle = angle - (TAU * 3.0 / 8.0);
+        let rect_pos_off_len = (margin * margin * 2.0).sqrt();
+        let rect_pos_off = Vec2f::from_angle_length(rect_pos_off_angle, rect_pos_off_len);
+
+        let rect_pos = text_pos + rect_pos_off;
+        let rect_size = Vec2f::from(galley.size()) + margin * 2.0;
+
+        let rect = Rect::from_min_size(rect_pos.into(), rect_size.into());
+
+        let rounding = Rounding::same(3.0 * text_scale);
+        let fill = Color32::from_gray(30);
+        let stroke = Stroke::new(1.0, Color32::from_gray(100));
+
+        let path = rotated_rect(rect, rect_pos, angle, rounding, fill, stroke);
+        ctx.painter.add(path);
+
+        ctx.painter.add(TextShape {
+            pos: text_pos.floor().into(),
+            galley,
+            underline: Stroke::NONE,
+            fallback_color: ctx.ui.style().visuals.text_color(),
+            override_text_color: None,
+            opacity_factor: 1.0,
+            angle,
+        });
     }
 }
 

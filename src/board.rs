@@ -6,7 +6,7 @@ use std::{
 use parking_lot::RwLock;
 
 use crate::{
-    circuits::{Circuit, CircuitImplBox, CircuitInfo}, containers::FixedVec, vector::Vec2isize, Direction4HalfArray
+    circuits::{Circuit, CircuitBlueprint, CircuitInfo}, containers::FixedVec, vector::Vec2isize, Direction4HalfArray
 };
 
 pub struct Board {
@@ -47,7 +47,7 @@ impl Board {
         }
     }
 
-    pub fn create_circuit(&self, pos: Vec2isize, imp: CircuitImplBox) -> Arc<Circuit> {
+    pub fn create_circuit(&self, pos: Vec2isize, blueprint: &CircuitBlueprint) -> Arc<Circuit> {
         let mut circuits = self.circuits.write();
 
         let id = circuits.first_free_pos();
@@ -55,9 +55,9 @@ impl Board {
             id,
             info: RwLock::new(CircuitInfo {
                 pos,
-                size: imp.size(),
+                size: blueprint.size,
             }),
-            imp: RwLock::new(imp),
+            imp: RwLock::new(blueprint.imp.clone()),
         };
 
         let arc = Arc::new(circuit);

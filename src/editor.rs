@@ -8,7 +8,7 @@ use eframe::egui::{remap_clamp, vec2, Rect};
 
 use crate::{
     board::{Board, Wire, WirePoint},
-    circuits::{Circuit, CircuitImplBox},
+    circuits::{Circuit, CircuitBlueprint},
     containers::Chunks2D,
     selection::SelectionImpl,
     vector::{Vec2f, Vec2isize, Vec2usize},
@@ -161,14 +161,14 @@ impl BoardEditor {
     pub fn place_circuit(
         &mut self,
         pos: Vec2isize,
-        imp: CircuitImplBox,
+        blueprint: &CircuitBlueprint,
     ) -> Result<(), CircuitPlaceError> {
-        let size = imp.size();
+        let size = blueprint.size;
         if size.x == 0 || size.y == 0 {
             return Err(CircuitPlaceError::ZeroSizeCircuit);
         }
 
-        let circuit = self.board.create_circuit(pos, imp);
+        let circuit = self.board.create_circuit(pos, blueprint);
 
         let imp = circuit.imp.read();
         let mut occupied = HashMap::new();

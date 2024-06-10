@@ -1526,6 +1526,8 @@ fn generate_container(c: &ParsedContainer, parsed: &ParsedMacroInput) -> TokenSt
         .filter(|&t| t.as_impl.not())
         .map(|t| generate_impl_fns(c, Some(t), &t.fns, &format!("trait_{}_", t.lowercase_name)));
 
+    let all_value_bounds = &parsed.all_value_bounds;
+
     quote! {
         mod #mod_name {
             #vtable
@@ -1542,6 +1544,12 @@ fn generate_container(c: &ParsedContainer, parsed: &ParsedMacroInput) -> TokenSt
                 self.drop_value();
             }
         }
+
+        impl<T: #all_value_bounds> From<T> for #name {
+            fn from(value: T) -> Self {
+                Self::new(value)
+            }
+        } 
 
         #(#trait_impls)*
     }

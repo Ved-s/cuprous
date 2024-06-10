@@ -1,4 +1,4 @@
-use std::f32::consts::PI;
+use std::{f32::consts::PI, ops::Deref, sync::Arc};
 
 use eframe::{
     egui::{
@@ -8,7 +8,7 @@ use eframe::{
     epaint::PathShape,
 };
 
-use crate::{app::SelectedItem, Style};
+use crate::{app::SelectedItem, circuits::CircuitRenderingContext, vector::Vec2f, Screen, Style};
 
 use super::{TabCreation, TabImpl};
 
@@ -39,7 +39,7 @@ impl TabImpl for ComponentList {
                     0.0,
                     selection,
                     "Selection".into(),
-                    &mut |rect, painter| selection_icon(rect, painter, &app.style),
+                    &mut |rect, ui| selection_icon(rect, ui.painter(), &app.style),
                 )
                 .clicked()
                 {
@@ -49,15 +49,61 @@ impl TabImpl for ComponentList {
                         app.selected_item = Some(SelectedItem::Selection);
                     }
                 }
+            });
 
-                let test_circuit = matches!(app.selected_item, Some(SelectedItem::TestCircuit));
-                if selectable_icon_label(ui, 0.0, test_circuit, "Test circuit".into(), &mut |_, _| {}).clicked() {
-                    if test_circuit {
-                        app.selected_item = None;
-                    } else {
-                        app.selected_item = Some(SelectedItem::TestCircuit);
+
+        CollapsingHeader::new("Circuits")
+            .default_open(true)
+            .show(ui, |ui| {
+                let selected = app.selected_item.as_ref().and_then(|i| match i {
+                    SelectedItem::Circuit(c) => Some(c),
+                    _ => None,
+                });
+                let mut new_selected = None;
+                for blueprint in &app.blueprints {
+                    let selected = selected.is_some_and(|s| Arc::ptr_eq(s, blueprint));
+
+                    let mut icon = |rect: Rect, ui: &mut Ui| {
+                        let blueprint = blueprint.read();
+
+                        let sizef = blueprint.size.convert(|v| v as f32);
+                        let scale = (rect.width() / sizef.x).min(rect.height() / sizef.y);
+                        let scaled_size = sizef * scale;
+                        let pos = (Vec2f::from(rect.size()) - scaled_size) / 2.0 + rect.left_top();
+                        let rect = Rect::from_min_size(pos.into(), scaled_size.into());
+
+                        let screen = Screen::new(rect, 0.0.into(), scale);
+                        let ctx = CircuitRenderingContext {
+                            screen,
+                            painter: ui.painter(),
+                            ui,
+                            rect,
+                            selection: None,
+                        };
+
+                        blueprint.imp.draw(&ctx);
+                    };
+
+                    let res = selectable_icon_label(
+                        ui,
+                        0.0,
+                        selected,
+                        blueprint.read().display_name.deref().into(),
+                        &mut icon,
+                    );
+
+                    if res.clicked() {
+                        if selected {
+                            new_selected = Some(None);
+                        } else {
+                            new_selected = Some(Some(SelectedItem::Circuit(blueprint.clone())));
+                        }
                     }
-                };
+                }
+
+                if let Some(new_selected) = new_selected {
+                    app.selected_item = new_selected;
+                }
             });
     }
 }
@@ -67,7 +113,7 @@ fn selectable_icon_label(
     min_width: f32,
     selected: bool,
     text: WidgetText,
-    icon: &mut dyn FnMut(Rect, &Painter),
+    icon: &mut dyn FnMut(Rect, &mut Ui),
 ) -> Response {
     let padding = Margin::same(2.0);
     let spacing = 3.0;
@@ -112,7 +158,7 @@ fn selectable_icon_label(
         vec2(icon_size, icon_size),
     );
 
-    icon(icon_rect, &ui.painter_at(icon_rect));
+    icon(icon_rect, ui);
 
     ui.painter().galley(
         pos2(rect.left() + padding.left + icon_size + spacing, text_y),
@@ -123,7 +169,7 @@ fn selectable_icon_label(
     resp
 }
 
-fn wire_icon(rect: Rect, painter: &Painter) {
+fn wire_icon(rect: Rect, ui: &mut Ui) {
     // let color = pass
     //     .false_color_override
     //     .unwrap_or_else(|| ctx.style.wire_colors.false_color());
@@ -132,6 +178,8 @@ fn wire_icon(rect: Rect, painter: &Painter) {
 
     let rect1 = Rect::from_center_size(rect.lerp_inside([0.2, 0.2].into()), rect.size() * 0.3);
     let rect2 = Rect::from_center_size(rect.lerp_inside([0.8, 0.8].into()), rect.size() * 0.3);
+
+    let painter = ui.painter();
 
     painter.line_segment([rect1.center(), rect2.center()], Stroke::new(2.5, color));
 
@@ -151,7 +199,6 @@ fn wire_icon(rect: Rect, painter: &Painter) {
 }
 
 fn selection_icon(rect: Rect, painter: &Painter, style: &Style) {
-
     // Why is rendering so wonky, just give me non-blurred pixels!!!
     let rect = Rect::from_min_max(rect.left_top().ceil(), rect.right_bottom().floor());
     let size = rect.width().min(rect.height()).floor();

@@ -2,22 +2,31 @@ use std::sync::Arc;
 
 use eframe::CreationContext;
 use egui_dock::{DockArea, DockState, NodeIndex};
+use parking_lot::RwLock;
 
-use crate::{tabs::{SafeTabType, Tab, TabSerde, TabType, TabViewer}, Style};
+use crate::{
+    circuits::{CircuitBlueprint, TestCircuit},
+    tabs::{SafeTabType, Tab, TabSerde, TabType, TabViewer},
+    Style,
+};
 
 pub struct App {
     pub gl: Arc<glow::Context>,
     pub selected_item: Option<SelectedItem>,
     pub selected_tab: Option<TabType>,
+    pub blueprints: Vec<Arc<RwLock<CircuitBlueprint>>>,
     pub style: Arc<Style>,
 }
 
 impl App {
     pub fn create(cc: &CreationContext, dock_load_error: Option<ron::error::SpannedError>) -> Self {
+        let blueprints = vec![Arc::new(RwLock::new(TestCircuit.into()))];
+
         Self {
             gl: cc.gl.clone().expect("started in OpenGL context"),
             selected_item: None,
             selected_tab: None,
+            blueprints,
             style: Arc::new(Style::default()),
         }
     }
@@ -78,10 +87,12 @@ impl eframe::App for DockedApp {
             surface.split_left(NodeIndex::root(), 0.2, vec![tab]);
         }
 
-        self.app.selected_tab = self.dock.find_active_focused().and_then(|(_, tab)| tab.loaded_ty());
+        self.app.selected_tab = self
+            .dock
+            .find_active_focused()
+            .and_then(|(_, tab)| tab.loaded_ty());
 
-        DockArea::new(&mut self.dock)
-            .show(ctx, &mut TabViewer(&mut self.app));
+        DockArea::new(&mut self.dock).show(ctx, &mut TabViewer(&mut self.app));
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
@@ -96,5 +107,5 @@ impl eframe::App for DockedApp {
 pub enum SelectedItem {
     Wires,
     Selection,
-    TestCircuit,
+    Circuit(Arc<RwLock<CircuitBlueprint>>),
 }

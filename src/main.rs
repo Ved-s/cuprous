@@ -19,6 +19,7 @@ pub mod vector;
 pub mod vertex_renderer;
 pub mod circuits;
 pub mod editor;
+pub mod drawing;
 
 pub const CHUNK_SIZE: usize = 16;
 pub const WIRE_WIDTH: f32 = 0.2;
