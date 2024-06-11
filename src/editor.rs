@@ -8,7 +8,7 @@ use eframe::egui::{remap_clamp, vec2, Rect};
 
 use crate::{
     board::{Board, Wire, WirePoint},
-    circuits::{Circuit, CircuitBlueprint},
+    circuits::{Circuit, CircuitBlueprint, CircuitPin},
     containers::Chunks2D,
     selection::SelectionImpl,
     vector::{Vec2f, Vec2isize, Vec2usize},
@@ -30,6 +30,14 @@ impl BoardEditor {
 
         for pos in dir.iter_along(pos, length.get() as usize + 1) {
             if let Some(wire) = self.wires.get(pos).and_then(|n| n.wire.clone()) {
+                wire_map.insert(wire.id, wire);
+            } else if self.circuits.get(pos).is_some_and(|n| {
+                n.quarters
+                    .values()
+                    .any(|q| q.as_ref().is_some_and(|q| q.pin.is_some()))
+            }) {
+                let start = wire_map.values().next().cloned();
+                let wire = self.set_wire_point(pos, start, false);
                 wire_map.insert(wire.id, wire);
             }
         }
@@ -155,6 +163,9 @@ impl BoardEditor {
     }
 
     pub fn remove_wire_point_with_parts(&mut self, pos: Vec2isize) {
+        if self.should_pin_wire_point_exist(pos) {
+            return;
+        }
         self.remove_wire_point(pos, true, true);
     }
 
@@ -171,15 +182,22 @@ impl BoardEditor {
         let circuit = self.board.create_circuit(pos, blueprint);
 
         let imp = circuit.imp.read();
-        let mut occupied = HashMap::new();
+        let pins = circuit.pins.read();
+
+        let mut already_occupied = HashMap::new();
         let mut occupies_any = false;
+        let mut disconnected_pins = vec![];
         for y in 0..size.y {
             for x in 0..size.x {
-                let world_pos = pos + [x as isize, y as isize];
+                let xy = Vec2usize::new(x, y);
+                let world_pos = pos + xy.convert(|v| v as isize);
 
                 let node = self.circuits.get_or_create_mut(world_pos);
 
                 let mut occupied_quarters = QuarterArray::default();
+
+                let pin = pins.iter().find(|p| p.desc.pos == xy).map(|p| &p.pin);
+                let mut occupies_any_quarter = false;
 
                 for quarter in QuarterPos::ALL {
                     let pos = quarter.into_position() + [x * 2, y * 2];
@@ -187,29 +205,84 @@ impl BoardEditor {
                         continue;
                     }
                     occupies_any = true;
+                    occupies_any_quarter = true;
                     let circuit_quarter = node.quarters.get_mut(quarter);
 
-                    if circuit_quarter.circuit.is_some() {
+                    if circuit_quarter.is_some() {
                         *occupied_quarters.get_mut(quarter) = true;
                     } else {
-                        circuit_quarter.circuit = Some(circuit.clone());
-                        circuit_quarter.offset = [x, y].into();
+                        *circuit_quarter = Some(CircuitNodeQuarter {
+                            circuit: circuit.clone(),
+                            offset: [x, y].into(),
+                            pin: pin.cloned(),
+                        });
                     }
                 }
 
+                if !occupies_any_quarter && pin.is_some() {
+                    disconnected_pins.push(xy);
+                }
+
                 if occupied_quarters.values().any(|v| *v) {
-                    occupied.insert(world_pos, occupied_quarters);
+                    already_occupied.insert(xy, occupied_quarters);
                 }
             }
         }
 
-        if !occupied.is_empty() || !occupies_any {
+        drop(imp);
+
+        if !disconnected_pins.is_empty() && occupies_any {
+            drop(pins);
+            let mut occupied = HashMap::new();
+            for y in 0..size.y {
+                for x in 0..size.x {
+                    let xy = Vec2usize::new(x, y);
+                    let world_pos = pos + xy.convert(|v| v as isize);
+
+                    let node = self.circuits.get_or_create_mut(world_pos);
+                    let mut occupied_quarters = QuarterArray::default();
+
+                    for quarter in QuarterPos::ALL {
+                        if node
+                            .quarters
+                            .get(quarter)
+                            .as_ref()
+                            .is_some_and(|q| Arc::ptr_eq(&q.circuit, &circuit))
+                        {
+                            *occupied_quarters.get_mut(quarter) = true;
+                        }
+                    }
+
+                    if occupied_quarters.values().any(|v| *v) {
+                        occupied.insert(xy, occupied_quarters);
+                    }
+                }
+            }
+
+            self.remove_circuit(&circuit);
+
+            return Err(CircuitPlaceError::DisconnectedPins {
+                pin_positions: disconnected_pins,
+                occupied_quarters: occupied,
+            });
+        }
+
+        if !already_occupied.is_empty() || !occupies_any {
+            drop(pins);
             self.remove_circuit(&circuit);
 
             if occupies_any {
-                return Err(CircuitPlaceError::PlaceOccupied(occupied));
+                return Err(CircuitPlaceError::PlaceOccupied(already_occupied));
             } else {
                 return Err(CircuitPlaceError::OccupiesNoTiles);
+            }
+        }
+
+        for pin in pins.iter() {
+            let world_pos = pos + pin.desc.pos.convert(|v| v as isize);
+            if self.should_pin_wire_point_exist(world_pos) {
+                // set_wire_point connects wire to pins
+                self.set_wire_point(world_pos, None, true);
             }
         }
 
@@ -230,14 +303,61 @@ impl BoardEditor {
                 for quarter in QuarterPos::ALL {
                     let quarter = node.quarters.get_mut(quarter);
 
-                    if quarter.circuit.as_ref().is_some_and(|c| c.id == circuit.id) {
-                        quarter.circuit = None;
+                    if quarter.as_ref().is_some_and(|q| q.circuit.id == circuit.id) {
+                        *quarter = None;
                     }
                 }
             }
         }
 
+        for pin in circuit.pins.read().iter() {
+            let world_pos = pos + pin.desc.pos.convert(|v| v as isize);
+            self.remove_needless_wire_point(world_pos);
+        }
+
         self.board.free_circuit(circuit);
+    }
+
+    fn should_pin_wire_point_exist(&mut self, pos: Vec2isize) -> bool {
+        let circuit_node = self.circuits.get(pos);
+
+        if let Some(circuit_node) = circuit_node {
+            let mut one_circuit = None;
+            for quarter in QuarterPos::ALL {
+                let Some(quarter) = circuit_node.quarters.get(quarter) else {
+                    continue;
+                };
+
+                if quarter.pin.is_none() {
+                    continue;
+                }
+
+                match one_circuit {
+                    Some(id) => {
+                        // There are more than 1 qnique circuit quarters with pins
+                        if id != quarter.circuit.id {
+                            return true;
+                        }
+                    }
+                    None => one_circuit = Some(quarter.circuit.id),
+                }
+            }
+
+            if one_circuit.is_none() {
+                return false;
+            }
+        } else {
+            return false;
+        }
+
+        let wire_node = self.wires.get(pos);
+        if let Some(wire_node) = wire_node {
+            if wire_node.directions.values().any(|v| v.is_some()) {
+                return true;
+            }
+        }
+
+        false
     }
 
     fn set_wire_distances(
@@ -305,48 +425,74 @@ impl BoardEditor {
         merge: bool,
     ) -> Arc<Wire> {
         let node = self.wires.get(pos);
-
-        if let Some(wire) = node.and_then(|n| n.wire.clone()) {
-            return wire;
-        }
-
         let mut merge_wires = HashMap::new();
 
-        let directions = self.examine_wire_directions(pos);
+        let (wire, new_wire) = if let Some(wire) = node.and_then(|n| n.wire.clone()) {
+            (wire, false)
+        } else {
+            let directions = self.examine_wire_directions(pos);
 
-        let wire = match &directions {
-            None => new_wire.unwrap_or_else(|| self.board.create_wire()),
-            Some(array) => {
-                let mut biggest_wire = None;
-                let mut max_points = None;
+            let wire = match &directions {
+                None => new_wire.unwrap_or_else(|| self.board.create_wire()),
+                Some(array) => {
+                    let mut biggest_wire = None;
+                    let mut max_points = None;
 
-                for wire in array.values() {
-                    let Some((_, wire)) = wire else {
-                        continue;
-                    };
-                    let points = wire.points.read().len();
-                    if !max_points.is_some_and(|mp| points <= mp) {
-                        max_points = Some(points);
-                        biggest_wire = Some(wire.clone());
+                    for wire in array.values() {
+                        let Some((_, wire)) = wire else {
+                            continue;
+                        };
+                        let points = wire.points.read().len();
+                        if !max_points.is_some_and(|mp| points <= mp) {
+                            max_points = Some(points);
+                            biggest_wire = Some(wire.clone());
+                        }
+
+                        if merge {
+                            merge_wires.insert(wire.id, wire.clone());
+                        }
                     }
 
-                    if merge {
-                        merge_wires.insert(wire.id, wire.clone());
-                    }
+                    biggest_wire
+                        .or(new_wire)
+                        .unwrap_or_else(|| self.board.create_wire())
                 }
+            };
 
-                biggest_wire
-                    .or(new_wire)
-                    .unwrap_or_else(|| self.board.create_wire())
-            }
+            let node = self.wires.get_or_create_mut(pos);
+            node.wire = Some(wire.clone());
+
+            wire.points.write().insert(pos, WirePoint::default());
+
+            (wire, true)
         };
 
-        let node = self.wires.get_or_create_mut(pos);
-        node.wire = Some(wire.clone());
+        if let Some(circuit_node) = self.circuits.get(pos) {
+            for quarter in QuarterPos::ALL {
+                let Some(quarter) = circuit_node.quarters.get(quarter) else {
+                    continue;
+                };
 
-        wire.points.write().insert(pos, WirePoint::default());
+                let Some(pin) = &quarter.pin else {
+                    continue;
+                };
 
-        self.set_wire_distances_at_intersection(pos, true);
+                wire.add_pin(quarter.circuit.clone(), pin.clone());
+
+                let mut pin_wire = pin.wire.write();
+                if pin_wire.as_ref().is_some_and(|w| Arc::ptr_eq(w, &wire)) {
+                    continue;
+                }
+
+                *pin_wire = Some(wire.clone());
+
+                // TODO: update state
+            }
+        }
+
+        if new_wire {
+            self.set_wire_distances_at_intersection(pos, true);
+        }
 
         if merge_wires.len() > 1 {
             self.merge_many_wires(merge_wires.values().cloned());
@@ -377,6 +523,26 @@ impl BoardEditor {
         if let Some(wire) = &wire {
             let mut points = wire.points.write();
             points.remove(&pos);
+
+            if let Some(circuit_node) = self.circuits.get(pos) {
+                for quarter in QuarterPos::ALL {
+                    let Some(quarter) = circuit_node.quarters.get(quarter) else {
+                        continue;
+                    };
+
+                    let Some(pin) = &quarter.pin else { continue };
+
+                    wire.remove_pin(quarter.circuit.id, pin.id);
+                    let mut pin_wire = pin.wire.write();
+                    if pin_wire.as_ref().is_none() {
+                        continue;
+                    }
+
+                    *pin_wire = None;
+
+                    // TODO: update state
+                }
+            }
 
             if points.is_empty() {
                 self.board.free_wire(wire);
@@ -599,6 +765,10 @@ impl BoardEditor {
             }
         }
 
+        if self.should_pin_wire_point_exist(pos) {
+            return;
+        }
+
         self.remove_wire_point(pos, false, false);
     }
 }
@@ -701,13 +871,13 @@ impl<T> QuarterArray<T> {
 
 #[derive(Default, Clone)]
 pub struct CircuitNode {
-    pub quarters: QuarterArray<CircuitNodeQuarter>,
+    pub quarters: QuarterArray<Option<CircuitNodeQuarter>>,
 }
 
 impl CircuitNode {
     pub fn is_empty(&self) -> bool {
         for quarter in self.quarters.values() {
-            if quarter.circuit.is_some() {
+            if quarter.is_some() {
                 return false;
             }
         }
@@ -716,17 +886,22 @@ impl CircuitNode {
     }
 }
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct CircuitNodeQuarter {
-    pub circuit: Option<Arc<Circuit>>,
+    pub circuit: Arc<Circuit>,
     pub offset: Vec2usize,
+    pub pin: Option<Arc<CircuitPin>>,
 }
 
 #[derive(Debug)]
 pub enum CircuitPlaceError {
     ZeroSizeCircuit,
     OccupiesNoTiles,
-    PlaceOccupied(HashMap<Vec2isize, QuarterArray<bool>>),
+    PlaceOccupied(HashMap<Vec2usize, QuarterArray<bool>>),
+    DisconnectedPins {
+        pin_positions: Vec<Vec2usize>,
+        occupied_quarters: HashMap<Vec2usize, QuarterArray<bool>>,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -812,8 +987,7 @@ impl SelectionImpl for BoardSelectionImpl {
 
         for (pos, node) in pass.circuits.iter_area(tl, size) {
             for qpos in QuarterPos::ALL {
-                let quarter = node.quarters.get(qpos);
-                let Some(circuit) = quarter.circuit.as_ref() else {
+                let Some(quarter) = node.quarters.get(qpos) else {
                     continue;
                 };
 
@@ -821,8 +995,8 @@ impl SelectionImpl for BoardSelectionImpl {
                 let rect = Rect::from_min_size(world_pos.into(), vec2(0.5, 0.5));
                 if area.intersects(rect) {
                     items.insert(SelectedBoardItem::Circuit {
-                        id: circuit.id,
-                        pos: circuit.info.read().pos,
+                        id: quarter.circuit.id,
+                        pos: quarter.circuit.info.read().pos,
                     });
                 }
             }

@@ -1,16 +1,34 @@
-use std::sync::Arc;
+use std::{hash::{DefaultHasher, Hasher}, sync::Arc};
 
 use eframe::egui::{self, Color32, Rounding, Stroke};
 use parking_lot::{Mutex, RwLock};
 
 use crate::{
-    selection::SelectionRenderer, str::ArcStaticStr, vector::{Vec2isize, Vec2usize}, Direction8, PaintContext, Screen
+    board::Wire, selection::SelectionRenderer, str::ArcStaticStr, vector::{Vec2isize, Vec2usize}, Direction8, PaintContext, Screen
 };
 
 pub struct Circuit {
     pub id: usize,
     pub info: RwLock<CircuitInfo>,
     pub imp: RwLock<CircuitImplBox>,
+    pub pins: RwLock<Box<[RealizedPin]>>,
+}
+
+impl Circuit {
+    pub fn pin_color(&self, pin: &CircuitPin) -> Color32 {
+        
+        // TODO: actual pin color
+        let mut hasher = DefaultHasher::new();
+        hasher.write_usize(75402938460);
+        hasher.write_usize(self.id);
+        hasher.write_usize(pin.id);
+        let v = hasher.finish();
+        let r = ((v >> 16) & 0xff) as u8;
+        let g = ((v >> 8) & 0xff) as u8;
+        let b = (v & 0xff) as u8;
+
+        Color32::from_rgb(r, g, b)
+    }
 }
 
 pub struct CircuitInfo {
@@ -32,6 +50,16 @@ pub struct PinDescription {
     pub display_name: ArcStaticStr,
     pub dir: Option<Direction8>,
     pub ty: PinType,
+}
+
+pub struct CircuitPin {
+    pub id: usize,
+    pub wire: RwLock<Option<Arc<Wire>>>,
+}
+
+pub struct RealizedPin {
+    pub desc: PinDescription,
+    pub pin: Arc<CircuitPin>,
 }
 
 pub struct CircuitSelectionRenderingContext<'a> {
