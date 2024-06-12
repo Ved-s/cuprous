@@ -297,15 +297,24 @@ impl<V: Vertex> TriangleBuffer<V> {
         self.push_quad(Quad::new_rect(tl.into(), size.into(), extra.into()));
     }
 
-    pub fn add_quad_line(&mut self, a: impl Into<Vec2f>, b: impl Into<Vec2f>, width: f32, extra: impl Into<V::ExtraData>)
-    where
+    pub fn add_quad_line(
+        &mut self,
+        a: impl Into<Vec2f>,
+        b: impl Into<Vec2f>,
+        width: f32,
+        extra: impl Into<V::ExtraData>,
+    ) where
         V: PositionedVertex,
     {
         self.push_quad(Quad::new_line(a.into(), b.into(), width, extra.into()));
     }
 
-    pub fn add_centered_rect(&mut self, pos: impl Into<Vec2f>, size: impl Into<Vec2f>, extra: impl Into<V::ExtraData>)
-    where
+    pub fn add_centered_rect(
+        &mut self,
+        pos: impl Into<Vec2f>,
+        size: impl Into<Vec2f>,
+        extra: impl Into<V::ExtraData>,
+    ) where
         V: PositionedVertex,
     {
         let size = size.into();
@@ -325,6 +334,53 @@ impl<V: Vertex> TriangleBuffer<V> {
         let size = size.into();
         let quad = Quad::new_rect(pos - size / 2.0, size, extra.into());
         self.push_quad(quad.rotated(angle, pos))
+    }
+
+    pub fn add_circle(
+        &mut self,
+        center: impl Into<Vec2f>,
+        radius: f32,
+        extra: impl Into<V::ExtraData>,
+    ) where
+        V: PositionedVertex,
+    {
+        // Mostly copied from epaint tesselator
+        use crate::precomputed::circles::*;
+
+        let points = if radius <= 2.0 {
+            &CIRCLE_8[..]
+        } else if radius <= 5.0 {
+            &CIRCLE_16[..]
+        } else if radius < 18.0 {
+            &CIRCLE_32[..]
+        } else if radius < 50.0 {
+            &CIRCLE_64[..]
+        } else {
+            &CIRCLE_128[..]
+        };
+
+        let extra = extra.into();
+        let center = center.into();
+        self.add_filled_path(points.iter().map(|p| {
+            V::new(center + *p * radius, extra)
+        }))
+    }
+    
+    pub fn add_filled_path(&mut self, mut verts: impl Iterator<Item = V>) {
+        let Some(first) = verts.next() else {
+            return;
+        };
+
+        let Some(mut prev) = verts.next() else {
+            return;
+        };
+
+        for vertex in verts {
+            let tri = Triangle([first, prev, vertex]);
+            prev = vertex;
+
+            self.push_triangle(tri);
+        }
     }
 }
 

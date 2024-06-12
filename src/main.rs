@@ -9,17 +9,18 @@ use vector::{Vec2f, Vec2isize, Vec2usize};
 
 pub mod app;
 pub mod board;
+pub mod circuits;
 pub mod containers;
+pub mod drawing;
+pub mod editor;
 pub mod ext;
 pub mod macros;
+pub mod precomputed;
 pub mod selection;
 pub mod str;
 pub mod tabs;
 pub mod vector;
 pub mod vertex_renderer;
-pub mod circuits;
-pub mod editor;
-pub mod drawing;
 
 pub const CHUNK_SIZE: usize = 16;
 pub const WIRE_WIDTH: f32 = 0.2;
@@ -39,9 +40,20 @@ fn main() -> Result<(), eframe::Error> {
     )
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum PinStyle {
+    Circle,
+    NGon {
+        n: usize,
+        angle: f32,
+        directional: bool,
+    },
+}
+
 pub struct Style {
     selection_fill: Color32,
     selection_border: Color32,
+    pins: PinStyle,
 }
 
 impl Default for Style {
@@ -49,6 +61,11 @@ impl Default for Style {
         Self {
             selection_fill: Color32::from_rgba_unmultiplied(150, 150, 210, 1),
             selection_border: Color32::from_rgb(180, 180, 220),
+            pins: PinStyle::NGon {
+                n: 6,
+                angle: 0.0,
+                directional: true,
+            },
         }
     }
 }
@@ -160,7 +177,7 @@ impl<'a> PaintContext<'a> {
             chunk_bounds_size: chunks_size,
 
             screen,
-            style
+            style,
         }
     }
 

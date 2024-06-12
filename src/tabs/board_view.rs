@@ -2,7 +2,7 @@ use std::{
     collections::{BTreeMap, HashSet},
     f32::consts::{PI, SQRT_2, TAU},
     num::NonZeroU32,
-    ops::{Deref, Not},
+    ops::{Deref, DerefMut, Not},
     sync::Arc,
 };
 
@@ -18,7 +18,7 @@ use parking_lot::{Mutex, RwLock};
 use crate::{
     app::{App, SelectedItem},
     circuits::{CircuitBlueprint, CircuitRenderingContext, CircuitSelectionRenderingContext},
-    drawing::rotated_rect,
+    drawing::{self, rotated_rect},
     editor::{BoardEditor, BoardSelectionImpl, QuarterPos, SelectedBoardItem},
     selection::{Selection, SelectionRenderer},
     vector::{Vec2f, Vec2isize, Vector2},
@@ -44,6 +44,7 @@ pub struct BoardView {
     grid_buffer: Arc<Mutex<ColoredLineBuffer>>,
     wire_part_buffer: Arc<Mutex<ColoredTriangleBuffer>>,
     pin_buffer: Arc<Mutex<ColoredTriangleBuffer>>,
+    blueprint_pin_buffer: Arc<Mutex<ColoredTriangleBuffer>>,
 
     selection: Selection<BoardSelectionImpl>,
     selection_renderer: Arc<Mutex<SelectionRenderer>>,
@@ -68,6 +69,7 @@ impl TabCreation for BoardView {
             grid_buffer: Arc::new(Mutex::new(ColoredLineBuffer::new(1.0))),
             wire_part_buffer: Default::default(),
             pin_buffer: Default::default(),
+            blueprint_pin_buffer: Default::default(),
 
             selection: Selection::new(),
             selection_renderer: Arc::new(Mutex::new(SelectionRenderer::new(&app.gl))),
@@ -655,15 +657,6 @@ impl BoardView {
             .iter_area(ctx.tile_bounds_tl, ctx.tile_bounds_size)
         {
             let draw_pins = node.quarters.values().any(|q| q.is_none());
-            let mut draw_pin_color = draw_pins
-                .then(|| {
-                    node.quarters
-                        .values()
-                        .filter_map(|q| q.as_ref())
-                        .filter_map(|q| q.pin.as_ref())
-                        .find_map(|p| p.wire.read().as_ref().map(|w| w.color()))
-                })
-                .flatten();
 
             for quarter in QuarterPos::ALL {
                 let Some(quarter) = node.quarters.get(quarter) else {
@@ -672,10 +665,19 @@ impl BoardView {
 
                 let circuit = &quarter.circuit;
 
-                if draw_pins && draw_pin_color.is_none() {
-                    if let Some(pin) = &quarter.pin {
-                        draw_pin_color = Some(circuit.pin_color(pin));
-                    }
+                if let Some(pin) = quarter.pin.as_ref().filter(|_| draw_pins) {
+                    let center = pos.convert(|v| v as f32 + 0.5);
+
+                    let dir = circuit.pins.read().get(pin.id).and_then(|p| p.desc.dir);
+
+                    drawing::pin(
+                        ctx.screen.world_to_screen(center),
+                        (WIRE_WIDTH / 2.0) * ctx.screen.scale,
+                        &ctx.style.pins,
+                        dir,
+                        circuit.pin_color(pin),
+                        pin_buffer.deref_mut(),
+                    );
                 }
 
                 if self.circuits_drawn.contains(&circuit.id) {
@@ -737,15 +739,6 @@ impl BoardView {
                 }
 
                 self.circuits_drawn.insert(circuit.id);
-            }
-
-            if let Some(color) = draw_pin_color {
-                let center = pos.convert(|v| v as f32 + 0.5);
-                pin_buffer.add_centered_rect(
-                    ctx.screen.world_to_screen(center),
-                    WIRE_WIDTH * ctx.screen.scale,
-                    color.to_normalized_gamma_f32(),
-                );
             }
         }
     }
@@ -1147,6 +1140,34 @@ impl BoardView {
         let circuit_ctx = CircuitRenderingContext::new(ctx, world_place_tile, blueprint.size, None);
         blueprint.imp.draw(&circuit_ctx);
 
+        let mut blueprint_pins = self.blueprint_pin_buffer.lock();
+        blueprint_pins.clear();
+
+        for pin in blueprint.pins.iter() {
+            let pos = pin.pos.convert(|v| v as isize) + world_place_tile;
+            let pos = ctx.screen.world_to_screen(pos.convert(|v| v as f32 + 0.5));
+            drawing::pin(
+                pos,
+                (WIRE_WIDTH / 2.0) * ctx.screen.scale,
+                &ctx.style.pins,
+                pin.dir,
+                Color32::DARK_GREEN, // TODO: style.wires.false_color
+                blueprint_pins.deref_mut(),
+            );
+        }
+        drop(blueprint_pins);
+
+        let buffer = self.blueprint_pin_buffer.clone();
+        let vertexes = self.vertexes.clone();
+
+        ctx.custom_draw(move |ctx| {
+            vertexes.draw(
+                ctx.painter.gl(),
+                ctx.paint_info.screen_size_px,
+                buffer.lock().deref(),
+            );
+        });
+
         let mut iter = blueprint.pins.iter().map(|pin| {
             (
                 pin.pos.convert(|v| v as isize) + world_place_tile,
@@ -1155,7 +1176,7 @@ impl BoardView {
             )
         });
 
-        draw_pin_labels(ctx, true, &mut iter);
+        draw_pin_labels(ctx, &mut iter);
 
         if interaction.clicked() {
             self.editor
@@ -1225,7 +1246,6 @@ impl BoardView {
 
 fn draw_pin_labels(
     ctx: &PaintContext,
-    draw_dots: bool,
     pins: &mut dyn Iterator<Item = (Vec2isize, &str, Option<Direction8>)>,
 ) {
     let font = TextStyle::Body.resolve(ctx.ui.style());
@@ -1254,14 +1274,6 @@ fn draw_pin_labels(
 
     for (pos, name, dir) in pins {
         let pos = ctx.screen.world_to_screen(pos.convert(|v| v as f32 + 0.5));
-
-        if draw_dots {
-            ctx.painter.circle_filled(
-                pos.into(),
-                ctx.screen.scale * WIRE_WIDTH * 0.5,
-                Color32::DARK_GREEN,
-            );
-        }
 
         let text = WidgetText::from(name);
         let galley = text.into_galley(ctx.ui, Some(false), f32::INFINITY, font.clone());
