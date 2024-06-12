@@ -1,6 +1,11 @@
-use std::{f32::consts::TAU, marker::PhantomData};
+use std::{
+    f32::consts::TAU,
+    marker::PhantomData,
+    sync::OnceLock,
+};
 
 use glow::{Buffer, Context, HasContext, Program, UniformLocation, VertexArray};
+use parking_lot::{Mutex, MutexGuard};
 
 use crate::vector::Vec2f;
 
@@ -128,7 +133,7 @@ impl<V: Vertex, S: Shaders<V>> VertexRenderer<V, S> {
         }
     }
 
-    pub fn draw<B: VertexBuffer<V>>(&self, gl: &Context, screen_size: [u32; 2], buffer: &B) {
+    pub fn draw<B: VertexBuffer<V>>(&mut self, gl: &Context, screen_size: [u32; 2], buffer: &B) {
         let vertexes = buffer.get_vertex_slice();
         if vertexes.is_empty() {
             return;
@@ -147,7 +152,7 @@ impl<V: Vertex, S: Shaders<V>> VertexRenderer<V, S> {
     /// Drawing with existing vertex data, without copying it from the `buffer`<br>
     /// Data is initialized with `Self::new_with_data`
     pub fn draw_no_copy<B: VertexBuffer<V>>(
-        &self,
+        &mut self,
         gl: &Context,
         screen_size: [u32; 2],
         buffer: &B,
@@ -163,7 +168,7 @@ impl<V: Vertex, S: Shaders<V>> VertexRenderer<V, S> {
     }
 
     fn draw_inner(
-        &self,
+        &mut self,
         gl: &Context,
         screen_size: [u32; 2],
         data: Option<&[u8]>,
@@ -193,16 +198,30 @@ impl<V: Vertex, S: Shaders<V>> VertexRenderer<V, S> {
         }
     }
 
-    pub fn gl_buffer(&self) -> <Context as HasContext>::Buffer {
+    pub fn gl_buffer(&mut self) -> <Context as HasContext>::Buffer {
         self.buffer
     }
 
-    pub fn gl_vertex_array(&self) -> <Context as HasContext>::VertexArray {
+    pub fn gl_vertex_array(&mut self) -> <Context as HasContext>::VertexArray {
         self.vertex_array
     }
 
-    pub fn gl_program(&self) -> <Context as HasContext>::Program {
+    pub fn gl_program(&mut self) -> <Context as HasContext>::Program {
         self.program
+    }
+}
+
+static GLOBAL_COLORED_VERTEX_RENDERER: OnceLock<Mutex<ColoredVertexRenderer>> = OnceLock::new();
+
+impl ColoredVertexRenderer {
+    pub fn global(gl: &glow::Context) -> MutexGuard<'static, ColoredVertexRenderer> {
+        let mutex = GLOBAL_COLORED_VERTEX_RENDERER.get_or_init(|| {
+            Mutex::new(ColoredVertexRenderer::new(gl).expect("ColoredVertexRenderer init"))
+        });
+        match mutex.try_lock() {
+            Some(g) => g,
+            None => panic!("requested global ColoredVertexRenderer multiple times"),
+        }
     }
 }
 
@@ -361,11 +380,9 @@ impl<V: Vertex> TriangleBuffer<V> {
 
         let extra = extra.into();
         let center = center.into();
-        self.add_filled_path(points.iter().map(|p| {
-            V::new(center + *p * radius, extra)
-        }))
+        self.add_filled_path(points.iter().map(|p| V::new(center + *p * radius, extra)))
     }
-    
+
     pub fn add_filled_path(&mut self, mut verts: impl Iterator<Item = V>) {
         let Some(first) = verts.next() else {
             return;

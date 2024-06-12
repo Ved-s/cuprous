@@ -12,3 +12,15 @@ impl<T: Ord + Copy> Intersect for Range<T> {
         }
     }
 }
+
+pub trait IteratorProduct: Iterator + Sized {
+    fn product_clone<I>(self, other: I) -> impl Iterator<Item = (Self::Item, I::Item)>
+    where
+        I: Iterator + Clone,
+        Self::Item: Clone,
+    {
+        self.flat_map(move |v| other.clone().map(move |o| (v.clone(), o)))
+    }
+}
+
+impl<T: Iterator> IteratorProduct for T {} 

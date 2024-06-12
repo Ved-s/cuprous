@@ -184,9 +184,9 @@ impl BoardEditor {
         let imp = circuit.imp.read();
         let pins = circuit.pins.read();
 
-        let mut already_occupied = HashMap::new();
+        let mut intersects = false;
         let mut occupies_any = false;
-        let mut disconnected_pins = vec![];
+        let mut any_disconnected_pins = false;
         for y in 0..size.y {
             for x in 0..size.x {
                 let xy = Vec2usize::new(x, y);
@@ -220,59 +220,26 @@ impl BoardEditor {
                 }
 
                 if !occupies_any_quarter && pin.is_some() {
-                    disconnected_pins.push(xy);
+                    any_disconnected_pins = true;
                 }
 
                 if occupied_quarters.values().any(|v| *v) {
-                    already_occupied.insert(xy, occupied_quarters);
+                    intersects = true;
                 }
             }
         }
 
         drop(imp);
 
-        if !disconnected_pins.is_empty() && occupies_any {
+        if intersects || !occupies_any || any_disconnected_pins {
             drop(pins);
-            let mut occupied = HashMap::new();
-            for y in 0..size.y {
-                for x in 0..size.x {
-                    let xy = Vec2usize::new(x, y);
-                    let world_pos = pos + xy.convert(|v| v as isize);
+            self.remove_circuit(&circuit);
 
-                    let node = self.circuits.get_or_create_mut(world_pos);
-                    let mut occupied_quarters = QuarterArray::default();
-
-                    for quarter in QuarterPos::ALL {
-                        if node
-                            .quarters
-                            .get(quarter)
-                            .as_ref()
-                            .is_some_and(|q| Arc::ptr_eq(&q.circuit, &circuit))
-                        {
-                            *occupied_quarters.get_mut(quarter) = true;
-                        }
-                    }
-
-                    if occupied_quarters.values().any(|v| *v) {
-                        occupied.insert(xy, occupied_quarters);
-                    }
-                }
+            if any_disconnected_pins && occupies_any {
+                return Err(CircuitPlaceError::DisconnectedPins);
             }
-
-            self.remove_circuit(&circuit);
-
-            return Err(CircuitPlaceError::DisconnectedPins {
-                pin_positions: disconnected_pins,
-                occupied_quarters: occupied,
-            });
-        }
-
-        if !already_occupied.is_empty() || !occupies_any {
-            drop(pins);
-            self.remove_circuit(&circuit);
-
-            if occupies_any {
-                return Err(CircuitPlaceError::PlaceOccupied(already_occupied));
+            else if intersects {
+                return Err(CircuitPlaceError::PlaceOccupied);
             } else {
                 return Err(CircuitPlaceError::OccupiesNoTiles);
             }
@@ -893,15 +860,19 @@ pub struct CircuitNodeQuarter {
     pub pin: Option<Arc<CircuitPin>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum CircuitPlaceError {
+    #[error("Circuit size is 0")]
     ZeroSizeCircuit,
+
+    #[error("Circuit occupies no space")]
     OccupiesNoTiles,
-    PlaceOccupied(HashMap<Vec2usize, QuarterArray<bool>>),
-    DisconnectedPins {
-        pin_positions: Vec<Vec2usize>,
-        occupied_quarters: HashMap<Vec2usize, QuarterArray<bool>>,
-    },
+
+    #[error("Circuit overlaps with existing circuits")]
+    PlaceOccupied,
+
+    #[error("Some circuit pins are disconnected from the circuit")]
+    DisconnectedPins,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]

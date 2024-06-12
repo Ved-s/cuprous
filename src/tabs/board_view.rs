@@ -4,12 +4,13 @@ use std::{
     num::NonZeroU32,
     ops::{Deref, DerefMut, Not},
     sync::Arc,
+    time::{Duration, Instant},
 };
 
 use eframe::{
     egui::{
-        remap_clamp, vec2, Align, Color32, FontId, Key, PointerButton, Rect, Response, Rounding,
-        Sense, Stroke, TextStyle, Ui, WidgetText,
+        remap_clamp, vec2, Align, Align2, Color32, FontId, Key, PointerButton, Rect, Response,
+        Rounding, Sense, Stroke, TextStyle, Ui, WidgetText,
     },
     epaint::TextShape,
 };
@@ -20,8 +21,10 @@ use crate::{
     circuits::{CircuitBlueprint, CircuitRenderingContext, CircuitSelectionRenderingContext},
     drawing::{self, rotated_rect},
     editor::{BoardEditor, BoardSelectionImpl, QuarterPos, SelectedBoardItem},
+    ext::IteratorProduct,
+    pool::get_pooled,
     selection::{Selection, SelectionRenderer},
-    vector::{Vec2f, Vec2isize, Vector2},
+    vector::{Vec2f, Vec2isize, Vec2usize, Vector2},
     vertex_renderer::{ColoredLineBuffer, ColoredTriangleBuffer, ColoredVertexRenderer},
     CustomPaintContext, Direction4Half, Direction8, Direction8Array, PaintContext, Screen,
     BIG_WIRE_POINT_WIDTH, CHUNK_SIZE, WIRE_POINT_WIDTH, WIRE_WIDTH,
@@ -29,10 +32,10 @@ use crate::{
 
 use super::{TabCreation, TabImpl};
 
+const PLACEMENT_ERROR_TIME: Duration = Duration::from_secs(1);
+
 pub struct BoardView {
     pan_zoom: PanAndZoom,
-
-    vertexes: Arc<ColoredVertexRenderer>,
 
     wire_draw_start: Option<Vec2isize>,
 
@@ -44,21 +47,20 @@ pub struct BoardView {
     grid_buffer: Arc<Mutex<ColoredLineBuffer>>,
     wire_part_buffer: Arc<Mutex<ColoredTriangleBuffer>>,
     pin_buffer: Arc<Mutex<ColoredTriangleBuffer>>,
-    blueprint_pin_buffer: Arc<Mutex<ColoredTriangleBuffer>>,
 
     selection: Selection<BoardSelectionImpl>,
     selection_renderer: Arc<Mutex<SelectionRenderer>>,
 
     circuits_drawn: HashSet<usize>,
     wire_colors: BTreeMap<usize, Color32>,
-    debug_not_render_wires: bool,
+
+    last_placement_error: Option<(Instant, String)>,
 }
 
 impl TabCreation for BoardView {
     fn new(app: &App) -> Self {
         Self {
             pan_zoom: Default::default(),
-            vertexes: Arc::new(ColoredVertexRenderer::new(&app.gl).expect("initialized renderer")),
             wire_draw_start: None,
 
             editor: Default::default(),
@@ -69,14 +71,13 @@ impl TabCreation for BoardView {
             grid_buffer: Arc::new(Mutex::new(ColoredLineBuffer::new(1.0))),
             wire_part_buffer: Default::default(),
             pin_buffer: Default::default(),
-            blueprint_pin_buffer: Default::default(),
 
             selection: Selection::new(),
             selection_renderer: Arc::new(Mutex::new(SelectionRenderer::new(&app.gl))),
 
             circuits_drawn: HashSet::new(),
             wire_colors: BTreeMap::new(),
-            debug_not_render_wires: false,
+            last_placement_error: None,
         }
     }
 }
@@ -157,7 +158,7 @@ impl TabImpl for BoardView {
             self.handle_keyboard(ui, app);
         }
 
-        let ctx = PaintContext::new(ui, screen, app.style.clone());
+        let ctx = PaintContext::new(ui, screen, app.gl.clone(), app.style.clone());
 
         self.draw_grid(&ctx);
 
@@ -166,9 +167,8 @@ impl TabImpl for BoardView {
         self.prepare_wire_draw(&ctx);
         self.draw_selection(&ctx);
 
-        if !self.debug_not_render_wires {
-            self.draw_wires(&ctx);
-        }
+        self.draw_wires(&ctx);
+
         self.draw_pins(&ctx);
 
         self.draw_circuits(&ctx);
@@ -295,7 +295,6 @@ impl BoardView {
 
     fn draw_grid(&self, ctx: &PaintContext) {
         let buffer = self.grid_buffer.clone();
-        let vertexes = self.vertexes.clone();
 
         ctx.custom_draw(move |ctx| {
             let mut buffer = buffer.lock();
@@ -304,7 +303,7 @@ impl BoardView {
             Self::draw_grid_layer(&ctx, &mut buffer, false);
             Self::draw_grid_layer(&ctx, &mut buffer, true);
             Self::draw_grid_cross(&ctx, &mut buffer);
-
+            let mut vertexes = ColoredVertexRenderer::global(ctx.painter.gl());
             vertexes.draw(
                 ctx.painter.gl(),
                 ctx.paint_info.screen_size_px,
@@ -621,9 +620,9 @@ impl BoardView {
 
     fn draw_wires(&self, ctx: &PaintContext) {
         let part_buffer = self.wire_part_buffer.clone();
-        let vertexes = self.vertexes.clone();
 
         ctx.custom_draw(move |ctx| {
+            let mut vertexes = ColoredVertexRenderer::global(ctx.painter.gl());
             vertexes.draw(
                 ctx.painter.gl(),
                 ctx.paint_info.screen_size_px,
@@ -634,9 +633,9 @@ impl BoardView {
 
     fn draw_pins(&self, ctx: &PaintContext) {
         let buffer = self.pin_buffer.clone();
-        let vertexes = self.vertexes.clone();
 
         ctx.custom_draw(move |ctx| {
+            let mut vertexes = ColoredVertexRenderer::global(ctx.painter.gl());
             vertexes.draw(
                 ctx.painter.gl(),
                 ctx.paint_info.screen_size_px,
@@ -1120,7 +1119,7 @@ impl BoardView {
     }
 
     fn handle_circuit_placement(
-        &self,
+        &mut self,
         interaction: &Response,
         ctx: &PaintContext,
         blueprint: &CircuitBlueprint,
@@ -1140,33 +1139,89 @@ impl BoardView {
         let circuit_ctx = CircuitRenderingContext::new(ctx, world_place_tile, blueprint.size, None);
         blueprint.imp.draw(&circuit_ctx);
 
-        let mut blueprint_pins = self.blueprint_pin_buffer.lock();
+        let mut blueprint_pins = get_pooled::<ColoredTriangleBuffer>();
         blueprint_pins.clear();
 
         for pin in blueprint.pins.iter() {
             let pos = pin.pos.convert(|v| v as isize) + world_place_tile;
             let pos = ctx.screen.world_to_screen(pos.convert(|v| v as f32 + 0.5));
+
+            let has_quarters = QuarterPos::ALL.iter().copied().any(|q| {
+                let quarter_pos = pin.pos * 2 + q.into_position();
+                blueprint.imp.occupies_quarter(quarter_pos)
+            });
+
+            let color = if has_quarters {
+                Color32::DARK_GREEN // TODO: style.wires.false_color
+            } else {
+                Color32::RED // TODO: style.wires.error_color
+            };
+
             drawing::pin(
                 pos,
                 (WIRE_WIDTH / 2.0) * ctx.screen.scale,
                 &ctx.style.pins,
                 pin.dir,
-                Color32::DARK_GREEN, // TODO: style.wires.false_color
+                color,
                 blueprint_pins.deref_mut(),
             );
         }
-        drop(blueprint_pins);
-
-        let buffer = self.blueprint_pin_buffer.clone();
-        let vertexes = self.vertexes.clone();
 
         ctx.custom_draw(move |ctx| {
+            let mut vertexes = ColoredVertexRenderer::global(ctx.painter.gl());
+
             vertexes.draw(
                 ctx.painter.gl(),
                 ctx.paint_info.screen_size_px,
-                buffer.lock().deref(),
+                blueprint_pins.deref(),
             );
         });
+
+        let mut overlap_buffer = None;
+        let editor = self.editor.read();
+
+        for ((y, x), q) in (0..blueprint.size.y)
+            .product_clone(0..blueprint.size.x)
+            .product_clone(QuarterPos::ALL.iter().copied())
+        {
+            let pos = Vec2usize::new(x, y);
+            let quarter_pos = pos * 2 + q.into_position();
+            if !blueprint.imp.occupies_quarter(quarter_pos) {
+                continue;
+            }
+
+            let world_pos = pos.convert(|v| v as isize) + world_place_tile;
+
+            let Some(node) = editor.circuits.get(world_pos) else {
+                continue;
+            };
+
+            if node.quarters.get(q).is_none() {
+                continue;
+            }
+
+            let buffer = overlap_buffer.get_or_insert_with(get_pooled::<ColoredTriangleBuffer>);
+
+            let world_pos = world_pos.convert(|v| v as f32) + q.into_quarter_position_f32();
+            let screen_pos = ctx.screen.world_to_screen(world_pos);
+            buffer.add_new_rect(
+                screen_pos,
+                ctx.screen.scale * 0.5,
+                Color32::RED.gamma_multiply(0.6).to_normalized_gamma_f32(),
+            )
+        }
+        drop(editor);
+
+        if let Some(buffer) = overlap_buffer {
+            ctx.custom_draw(move |ctx| {
+                let mut vertexes = ColoredVertexRenderer::global(ctx.painter.gl());
+                vertexes.draw(
+                    ctx.painter.gl(),
+                    ctx.paint_info.screen_size_px,
+                    buffer.deref(),
+                );
+            });
+        }
 
         let mut iter = blueprint.pins.iter().map(|pin| {
             (
@@ -1178,11 +1233,56 @@ impl BoardView {
 
         draw_pin_labels(ctx, &mut iter);
 
+        let clear_placement_error = if let Some((time, error)) = &self.last_placement_error {
+            let since = Instant::now() - *time;
+
+            let ended = since.checked_sub(PLACEMENT_ERROR_TIME);
+
+            let (opacity, clear) = match ended {
+                None => {
+                    ctx.ui.ctx().request_repaint_after(PLACEMENT_ERROR_TIME - since);
+                    (1.0, false)
+                },
+                Some(ended) => {
+                    let animation = ctx.ui.style().animation_time;
+                    let time = animation - ended.as_secs_f32();
+                    if time < 0.0 {
+                        (0.0, true)
+                    } else {
+                        ctx.ui.ctx().request_repaint();
+                        (time / animation, false)
+                    }
+                }
+            };
+
+            if !clear {
+                let world_off = [blueprint.size.x as f32 / 2.0, blueprint.size.y as f32];
+                let world_pos = world_place_tile.convert(|v| v as f32) + world_off;
+                let screen_pos = ctx.screen.world_to_screen(world_pos);
+
+                let font = TextStyle::Body.resolve(ctx.ui.style());
+
+                ctx.painter
+                    .text(screen_pos.into(), Align2::CENTER_TOP, error, font, Color32::RED.gamma_multiply(opacity));
+            }
+
+            clear
+        } else {
+            false
+        };
+
+        if clear_placement_error {
+            self.last_placement_error = None;
+        }
+
         if interaction.clicked() {
-            self.editor
+            let res = self.editor
                 .write()
-                .place_circuit(world_place_tile, blueprint)
-                .expect("TODO");
+                .place_circuit(world_place_tile, blueprint);
+
+            if let Err(e) = res {
+                self.last_placement_error = Some((Instant::now(), e.to_string()));
+            }
         }
     }
 
@@ -1232,10 +1332,6 @@ impl BoardView {
                     self.circuit_debug = false;
                 }
             }
-        }
-
-        if ui.input(|input| input.key_pressed(Key::F10)) {
-            self.debug_not_render_wires = !self.debug_not_render_wires;
         }
 
         if ui.input(|input| input.key_pressed(Key::Escape)) {

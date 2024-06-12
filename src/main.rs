@@ -21,6 +21,7 @@ pub mod str;
 pub mod tabs;
 pub mod vector;
 pub mod vertex_renderer;
+pub mod pool;
 
 pub const CHUNK_SIZE: usize = 16;
 pub const WIRE_WIDTH: f32 = 0.2;
@@ -130,6 +131,7 @@ pub struct PaintContext<'a> {
     pub chunk_bounds_br: Vec2isize,
     pub chunk_bounds_size: Vec2usize,
 
+    pub gl: Arc<glow::Context>,
     pub screen: Screen,
     pub style: Arc<Style>,
 }
@@ -151,7 +153,7 @@ pub struct CustomPaintContext<'a> {
 }
 
 impl<'a> PaintContext<'a> {
-    pub fn new(ui: &'a Ui, screen: Screen, style: Arc<Style>) -> Self {
+    pub fn new(ui: &'a Ui, screen: Screen, gl: Arc<glow::Context>, style: Arc<Style>) -> Self {
         let tl = screen.screen_to_world(screen.screen_rect.left_top());
         let br = screen.screen_to_world(screen.screen_rect.right_bottom());
 
@@ -176,6 +178,7 @@ impl<'a> PaintContext<'a> {
             chunk_bounds_br: chunks_br,
             chunk_bounds_size: chunks_size,
 
+            gl,
             screen,
             style,
         }
