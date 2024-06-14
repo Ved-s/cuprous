@@ -116,6 +116,17 @@ impl Screen {
             r.size() * self.scale,
         )
     }
+
+    pub fn world_to_screen_tile_rect(&self, pos: impl Into<Vec2isize>, size: impl Into<Vec2usize>) -> Rect {
+
+        let screen_pos = self.world_to_screen_tile(pos.into());
+        let screen_size = size.into().convert(|v| v as f32) * self.scale;
+
+        Rect::from_min_size(
+            screen_pos.into(),
+            screen_size.into(),
+        )
+    }
 }
 
 #[derive(Clone)]
@@ -417,6 +428,125 @@ impl Direction8 {
     }
 }
 
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction4 {
+    Up,
+    Right,
+    Down,
+    Left,
+}
+
+#[allow(dead_code)]
+impl Direction4 {
+    pub const ALL: [Self; 4] = [
+        Self::Up,
+        Self::Right,
+        Self::Down,
+        Self::Left,
+    ];
+
+    pub const fn into_dir_isize(self) -> Vec2isize {
+        let [x, y] = match self {
+            Self::Up => [0, -1],
+            Self::Right => [1, 0],
+            Self::Down => [0, 1],
+            Self::Left => [-1, 0],
+        };
+        Vec2isize::new(x, y)
+    }
+
+    pub const fn into_dir_f32(self) -> Vec2f {
+        let [x, y] = match self {
+            Self::Up => [0.0, -1.0],
+            Self::Right => [1.0, 0.0],
+            Self::Down => [0.0, 1.0],
+            Self::Left => [-1.0, 0.0],
+        };
+        Vec2f::new(x, y)
+    }
+
+    pub const fn into_index(self) -> usize {
+        match self {
+            Self::Up => 0,
+            Self::Right => 1,
+            Self::Down => 2,
+            Self::Left => 3,
+        }
+    }
+
+    pub const fn from_index(i: usize) -> Self {
+        match i % 4 {
+            0 => Self::Up,
+            1 => Self::Right,
+            2 => Self::Down,
+            3 => Self::Left,
+            _ => unreachable!(),
+        }
+    }
+
+    pub const fn rotated_clockwise(self) -> Self {
+        Self::from_index(self.into_index() + 1)
+    }
+
+    pub const fn rotated_clockwise_by(self, other: Self) -> Self {
+        Self::from_index(self.into_index() + other.into_index())
+    }
+
+    pub const fn rotated_counterclockwise(self) -> Self {
+        Self::from_index(self.into_index() + 3)
+    }
+
+    pub const fn rotated_counterclockwise_by(self, other: Self) -> Self {
+        Self::from_index(self.into_index() + 4 - other.into_index())
+    }
+
+    pub const fn inverted(self) -> Self {
+        Self::from_index(self.into_index() + 4)
+    }
+
+    // UpRight (1), Up (0) / Down (4) -> UpLeft (7)
+    // Up (0), Left (6) / Right (2) -> Down(4)
+    pub const fn flip_by(self, other: Self) -> Self {
+        let angle = self.rotated_counterclockwise_by(other);
+        other.rotated_counterclockwise_by(angle)
+    }
+
+    pub fn iter_along(self, start: Vec2isize, length: usize) -> impl Iterator<Item = Vec2isize> {
+        (0..length).map(move |i| start + self.into_dir_isize() * i as isize)
+    }
+
+    /// Returns angle in radians, 0 being at +X (Right), clockwise
+    pub const fn into_angle_xp_cw(self) -> f32 {
+        use std::f32::consts::*;
+
+        match self {
+            Self::Up => 4.712389,
+            Self::Right => 0.0,
+            Self::Down => FRAC_PI_2,
+            Self::Left => PI,
+        }
+    }
+    
+    fn is_vertical(self) -> bool {
+        match self {
+            Direction4::Up => true,
+            Direction4::Right => false,
+            Direction4::Down => true,
+            Direction4::Left => false,
+        }
+    }
+
+    fn is_horizontal(self) -> bool {
+        match self {
+            Direction4::Up => false,
+            Direction4::Right => true,
+            Direction4::Down => false,
+            Direction4::Left => true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Direction4Half {
     Left,
@@ -460,6 +590,17 @@ impl Direction4Half {
 impl From<Direction4Half> for Direction8 {
     fn from(value: Direction4Half) -> Self {
         Self::from_half(value, false)
+    }
+}
+
+impl From<Direction4> for Direction8 {
+    fn from(value: Direction4) -> Self {
+        match value {
+            Direction4::Up => Self::Up,
+            Direction4::Right => Self::Right,
+            Direction4::Down => Self::Down,
+            Direction4::Left => Self::Left,
+        }
     }
 }
 

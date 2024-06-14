@@ -57,7 +57,10 @@ impl Board {
             id,
             info: RwLock::new(CircuitInfo {
                 pos,
-                size: blueprint.size,
+                render_size: blueprint.inner_size,
+                size: blueprint.transformed_size,
+                transform: blueprint.transform,
+                transform_support: blueprint.trans_support,
             }),
             imp: RwLock::new(blueprint.imp.clone()),
             pins: RwLock::new(

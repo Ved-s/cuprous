@@ -8,7 +8,10 @@ use eframe::{
     epaint::PathShape,
 };
 
-use crate::{app::SelectedItem, circuits::CircuitRenderingContext, vector::Vec2f, Screen, Style};
+use crate::{
+    app::SelectedItem, circuits::CircuitRenderingContext, vector::Vec2f, PaintContext, Screen,
+    Style,
+};
 
 use super::{TabCreation, TabImpl};
 
@@ -34,13 +37,9 @@ impl TabImpl for ComponentList {
                     }
                 };
                 let selection = matches!(app.selected_item, Some(SelectedItem::Selection));
-                if selectable_icon_label(
-                    ui,
-                    0.0,
-                    selection,
-                    "Selection".into(),
-                    &mut |rect, ui| selection_icon(rect, ui.painter(), &app.style),
-                )
+                if selectable_icon_label(ui, 0.0, selection, "Selection".into(), &mut |rect, ui| {
+                    selection_icon(rect, ui.painter(), &app.style)
+                })
                 .clicked()
                 {
                     if selection {
@@ -50,7 +49,6 @@ impl TabImpl for ComponentList {
                     }
                 }
             });
-
 
         CollapsingHeader::new("Circuits")
             .default_open(true)
@@ -66,20 +64,22 @@ impl TabImpl for ComponentList {
                     let mut icon = |rect: Rect, ui: &mut Ui| {
                         let blueprint = blueprint.read();
 
-                        let sizef = blueprint.size.convert(|v| v as f32);
+                        let sizef = blueprint.transformed_size.convert(|v| v as f32);
                         let scale = (rect.width() / sizef.x).min(rect.height() / sizef.y);
                         let scaled_size = sizef * scale;
                         let pos = (Vec2f::from(rect.size()) - scaled_size) / 2.0 + rect.left_top();
                         let rect = Rect::from_min_size(pos.into(), scaled_size.into());
 
                         let screen = Screen::new(rect, 0.0.into(), scale);
-                        let ctx = CircuitRenderingContext {
-                            screen,
-                            painter: ui.painter(),
-                            ui,
+                        let ctx = PaintContext::new(ui, screen, app.gl.clone(), app.style.clone());
+                        let ctx = CircuitRenderingContext::new(
+                            &ctx,
                             rect,
-                            selection: None,
-                        };
+                            blueprint.inner_size,
+                            None,
+                            blueprint.transform,
+                            &blueprint.trans_support,
+                        );
 
                         blueprint.imp.draw(&ctx);
                     };

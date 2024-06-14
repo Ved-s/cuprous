@@ -18,7 +18,10 @@ use parking_lot::{Mutex, RwLock};
 
 use crate::{
     app::{App, SelectedItem},
-    circuits::{CircuitBlueprint, CircuitRenderingContext, CircuitSelectionRenderingContext},
+    circuits::{
+        handle_automatic_quarter_backtransform, CircuitBlueprint, CircuitRenderingContext,
+        CircuitSelectionRenderingContext,
+    },
     drawing::{self, rotated_rect},
     editor::{BoardEditor, BoardSelectionImpl, QuarterPos, SelectedBoardItem},
     ext::IteratorProduct,
@@ -683,15 +686,14 @@ impl BoardView {
                     continue;
                 }
 
+                let circuit_pos = circuit.info.read().pos;
+
                 let selected = self.selection.contains(&SelectedBoardItem::Circuit {
                     id: circuit.id,
-                    pos: circuit.info.read().pos,
+                    pos: circuit_pos,
                 });
 
-                let info = circuit.info.read();
-                let size = info.size;
-                let pos = info.pos;
-                drop(info);
+                let info = circuit.info.read().deref().clone();
 
                 let mut custom_selection = false;
                 let selection = selected.then(|| CircuitSelectionRenderingContext {
@@ -699,13 +701,26 @@ impl BoardView {
                     custom_selection: &mut custom_selection,
                 });
 
-                let circuit_ctx = CircuitRenderingContext::new(ctx, pos, size, selection);
-                circuit.imp.read().draw(&circuit_ctx);
+                let imp = circuit.imp.read();
+
+                let rect = ctx.screen.world_to_screen_tile_rect(circuit_pos, info.size);
+
+                let circuit_ctx = CircuitRenderingContext::new(
+                    ctx,
+                    rect,
+                    info.render_size,
+                    selection,
+                    info.transform,
+                    &imp.transform_support(),
+                );
+                imp.draw(&circuit_ctx);
+
+                drop(imp);
 
                 if selected && !custom_selection {
                     let mut renderer = self.selection_renderer.lock();
 
-                    for (pos, node) in editor.circuits.iter_area(pos, size) {
+                    for (pos, node) in editor.circuits.iter_area(circuit_pos, info.size) {
                         for qpos in QuarterPos::ALL {
                             if !node
                                 .quarters
@@ -1133,10 +1148,18 @@ impl BoardView {
             return;
         };
 
-        let world_place_pos = world_mouse - blueprint.size.convert(|v| v as f32 / 2.0);
+        let world_place_pos = world_mouse - blueprint.transformed_size.convert(|v| v as f32 / 2.0);
         let world_place_tile = world_place_pos.convert(|v| v.round() as isize);
 
-        let circuit_ctx = CircuitRenderingContext::new(ctx, world_place_tile, blueprint.size, None);
+        let rect = ctx.screen.world_to_screen_tile_rect(world_place_tile, blueprint.transformed_size);
+        let circuit_ctx = CircuitRenderingContext::new(
+            ctx,
+            rect,
+            blueprint.inner_size,
+            None,
+            blueprint.transform,
+            &blueprint.trans_support,
+        );
         blueprint.imp.draw(&circuit_ctx);
 
         let mut blueprint_pins = get_pooled::<ColoredTriangleBuffer>();
@@ -1148,7 +1171,15 @@ impl BoardView {
 
             let has_quarters = QuarterPos::ALL.iter().copied().any(|q| {
                 let quarter_pos = pin.pos * 2 + q.into_position();
-                blueprint.imp.occupies_quarter(quarter_pos)
+                let quarter_pos = handle_automatic_quarter_backtransform(
+                    &blueprint.trans_support,
+                    &blueprint.transform,
+                    blueprint.inner_size,
+                    quarter_pos,
+                );
+                blueprint
+                    .imp
+                    .occupies_quarter(blueprint.transform, quarter_pos)
             });
 
             let color = if has_quarters {
@@ -1180,13 +1211,19 @@ impl BoardView {
         let mut overlap_buffer = None;
         let editor = self.editor.read();
 
-        for ((y, x), q) in (0..blueprint.size.y)
-            .product_clone(0..blueprint.size.x)
+        for ((y, x), q) in (0..blueprint.transformed_size.y)
+            .product_clone(0..blueprint.transformed_size.x)
             .product_clone(QuarterPos::ALL.iter().copied())
         {
             let pos = Vec2usize::new(x, y);
             let quarter_pos = pos * 2 + q.into_position();
-            if !blueprint.imp.occupies_quarter(quarter_pos) {
+            let quarter_pos = handle_automatic_quarter_backtransform(
+                &blueprint.trans_support,
+                &blueprint.transform,
+                blueprint.inner_size,
+                quarter_pos,
+            );
+            if !blueprint.imp.occupies_quarter(blueprint.transform, quarter_pos) {
                 continue;
             }
 
@@ -1240,9 +1277,11 @@ impl BoardView {
 
             let (opacity, clear) = match ended {
                 None => {
-                    ctx.ui.ctx().request_repaint_after(PLACEMENT_ERROR_TIME - since);
+                    ctx.ui
+                        .ctx()
+                        .request_repaint_after(PLACEMENT_ERROR_TIME - since);
                     (1.0, false)
-                },
+                }
                 Some(ended) => {
                     let animation = ctx.ui.style().animation_time;
                     let time = animation - ended.as_secs_f32();
@@ -1256,14 +1295,19 @@ impl BoardView {
             };
 
             if !clear {
-                let world_off = [blueprint.size.x as f32 / 2.0, blueprint.size.y as f32];
+                let world_off = [blueprint.transformed_size.x as f32 / 2.0, blueprint.transformed_size.y as f32];
                 let world_pos = world_place_tile.convert(|v| v as f32) + world_off;
                 let screen_pos = ctx.screen.world_to_screen(world_pos);
 
                 let font = TextStyle::Body.resolve(ctx.ui.style());
 
-                ctx.painter
-                    .text(screen_pos.into(), Align2::CENTER_TOP, error, font, Color32::RED.gamma_multiply(opacity));
+                ctx.painter.text(
+                    screen_pos.into(),
+                    Align2::CENTER_TOP,
+                    error,
+                    font,
+                    Color32::RED.gamma_multiply(opacity),
+                );
             }
 
             clear
@@ -1276,7 +1320,8 @@ impl BoardView {
         }
 
         if interaction.clicked() {
-            let res = self.editor
+            let res = self
+                .editor
                 .write()
                 .place_circuit(world_place_tile, blueprint);
 
@@ -1336,6 +1381,26 @@ impl BoardView {
 
         if ui.input(|input| input.key_pressed(Key::Escape)) {
             app.selected_item = None;
+        }
+
+        if ui.input(|input| input.key_pressed(Key::R)) {
+            if let Some(SelectedItem::Circuit(blueprint)) = &app.selected_item {
+                let mut blueprint = blueprint.write();
+                if blueprint.trans_support.rotation.is_some() {
+                    blueprint.transform.dir = blueprint.transform.dir.rotated_clockwise();
+                    blueprint.recalculate();
+                }
+            }
+        }
+
+        if ui.input(|input| input.key_pressed(Key::F)) {
+            if let Some(SelectedItem::Circuit(blueprint)) = &app.selected_item {
+                let mut blueprint = blueprint.write();
+                if blueprint.trans_support.flip.is_some() {
+                    blueprint.transform.flip = !blueprint.transform.flip;
+                    blueprint.recalculate();
+                }
+            }
         }
     }
 }

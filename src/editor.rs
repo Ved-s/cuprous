@@ -8,7 +8,7 @@ use eframe::egui::{remap_clamp, vec2, Rect};
 
 use crate::{
     board::{Board, Wire, WirePoint},
-    circuits::{Circuit, CircuitBlueprint, CircuitPin},
+    circuits::{handle_automatic_quarter_backtransform, Circuit, CircuitBlueprint, CircuitPin},
     containers::Chunks2D,
     selection::SelectionImpl,
     vector::{Vec2f, Vec2isize, Vec2usize},
@@ -174,11 +174,14 @@ impl BoardEditor {
         pos: Vec2isize,
         blueprint: &CircuitBlueprint,
     ) -> Result<(), CircuitPlaceError> {
-        let size = blueprint.size;
-        if size.x == 0 || size.y == 0 {
+        let size = blueprint.inner_size;
+        let transformed_size = blueprint.transformed_size;
+        let trans_support = &blueprint.trans_support;
+        if transformed_size.x == 0 || transformed_size.y == 0 {
             return Err(CircuitPlaceError::ZeroSizeCircuit);
         }
 
+        let transform = blueprint.transform;
         let circuit = self.board.create_circuit(pos, blueprint);
 
         let imp = circuit.imp.read();
@@ -187,8 +190,8 @@ impl BoardEditor {
         let mut intersects = false;
         let mut occupies_any = false;
         let mut any_disconnected_pins = false;
-        for y in 0..size.y {
-            for x in 0..size.x {
+        for y in 0..transformed_size.y {
+            for x in 0..transformed_size.x {
                 let xy = Vec2usize::new(x, y);
                 let world_pos = pos + xy.convert(|v| v as isize);
 
@@ -201,7 +204,8 @@ impl BoardEditor {
 
                 for quarter in QuarterPos::ALL {
                     let pos = quarter.into_position() + [x * 2, y * 2];
-                    if !imp.occupies_quarter(pos) {
+                    let qpos = handle_automatic_quarter_backtransform(trans_support, &transform, size, pos);
+                    if !imp.occupies_quarter(transform, qpos) {
                         continue;
                     }
                     occupies_any = true;
@@ -258,11 +262,11 @@ impl BoardEditor {
 
     pub fn remove_circuit(&mut self, circuit: &Arc<Circuit>) {
         let info = circuit.info.read();
-        let size = info.size;
+        let transformed_size = info.size;
         let pos = info.pos;
         drop(info);
-        for y in 0..size.y {
-            for x in 0..size.x {
+        for y in 0..transformed_size.y {
+            for x in 0..transformed_size.x {
                 let world_pos = pos + [x as isize, y as isize];
 
                 let node = self.circuits.get_or_create_mut(world_pos);

@@ -988,7 +988,7 @@ fn generate_vtable(c: &ParsedContainer, parsed: &ParsedMacroInput) -> TokenStrea
                 .map(|ret| match ret {
                     ParsedFnRet::SelfType => {
                         let ident = &c.name_ident;
-                        quote! { super::#ident }
+                        quote! { #ident }
                     }
                     ParsedFnRet::Type(ty) => ty.to_token_stream(),
                     ParsedFnRet::TraitType(_) => quote! { Box<dyn std::any::Any> },
@@ -1024,6 +1024,7 @@ fn generate_vtable(c: &ParsedContainer, parsed: &ParsedMacroInput) -> TokenStrea
         .then(|| quote! { pub type_id: fn() -> std::any::TypeId, });
 
     quote! {
+        #[doc(hidden)]
         pub struct #name {
             pub size: usize,
             pub align: usize,
@@ -1272,7 +1273,6 @@ fn generate_new(c: &ParsedContainer, parsed: &ParsedMacroInput) -> TokenStream {
         }
     });
 
-    let mod_name = syn::Ident::new(&format!("_{}_impl", c.lowercase_name), c.name_ident.span());
     let type_id_construct = c.downcast.then(|| {
         quote! {
             type_id: type_id::<T>,
@@ -1324,7 +1324,7 @@ fn generate_new(c: &ParsedContainer, parsed: &ParsedMacroInput) -> TokenStream {
 
             Self {
                 data: ptr,
-                vtable: &#mod_name::#sized_vtable_name {
+                vtable: &#sized_vtable_name {
                     size: std::mem::size_of::<T>(),
                     align: std::mem::align_of::<T>(),
                     drop: drop::<T>,
@@ -1512,7 +1512,7 @@ fn generate_impl_fns<F: ParsedFn>(
 }
 
 fn generate_container(c: &ParsedContainer, parsed: &ParsedMacroInput) -> TokenStream {
-    let mod_name = syn::Ident::new(&format!("_{}_impl", c.lowercase_name), c.name_ident.span());
+
     let vtable = generate_vtable(c, parsed);
     let imp = generate_impl(c, parsed);
 
@@ -1529,12 +1529,11 @@ fn generate_container(c: &ParsedContainer, parsed: &ParsedMacroInput) -> TokenSt
     let all_value_bounds = &parsed.all_value_bounds;
 
     quote! {
-        mod #mod_name {
-            #vtable
-        }
+        #vtable
+        
         #vis struct #name {
             data: std::ptr::NonNull<()>,
-            vtable: &'static #mod_name::#vtable_name,
+            vtable: &'static #vtable_name,
         }
 
         #imp

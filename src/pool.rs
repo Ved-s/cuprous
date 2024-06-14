@@ -46,7 +46,8 @@ impl<T: Poolable> Deref for Pooled<T> {
 
 impl<T: Poolable> Drop for Pooled<T> {
     fn drop(&mut self) {
-        if let Some(inner) = self.0.take() {
+        if let Some(mut inner) = self.0.take() {
+            inner.clear();
             T::pool().0.lock().push(inner);
         }
     }
