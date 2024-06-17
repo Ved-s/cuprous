@@ -78,7 +78,6 @@ impl TabImpl for ComponentList {
                             blueprint.inner_size,
                             None,
                             blueprint.transform,
-                            &blueprint.trans_support,
                         );
 
                         blueprint.imp.draw(&ctx);

@@ -49,7 +49,6 @@ pub struct CircuitInfo {
     pub render_size: Vec2usize,
     pub size: Vec2usize,
     pub transform: CircuitTransform,
-    pub transform_support: CircuitTransformSupport,
 }
 
 #[derive(Clone, Copy)]
@@ -110,13 +109,12 @@ impl<'a> CircuitRenderingContext<'a> {
         render_size: Vec2usize,
         selection: Option<CircuitSelectionRenderingContext<'a>>,
         transform: CircuitTransform,
-        trans_support: &CircuitTransformSupport,
     ) -> Self {
         let flip = transform
             .flip
-            .then(|| trans_support.flip.map(|f| f.ty))
+            .then(|| transform.support.flip_type(None))
             .flatten();
-        let angle = trans_support.rotation.and_then(|r| {
+        let angle = transform.support.rotation.and_then(|r| {
             if transform.dir == r.default_dir {
                 None
             } else {
@@ -161,7 +159,7 @@ impl<'a> CircuitRenderingContext<'a> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransformSupport {
     Automatic,
     Manual,
@@ -192,10 +190,136 @@ pub struct CircuitTransformSupport {
     pub flip: Option<CircuitFlipSupport>,
 }
 
+impl CircuitTransformSupport {
+    pub fn rotation_default_dir(&self, support: Option<TransformSupport>) -> Option<Direction4> {
+        let rot = self.rotation?;
+        if support.is_some_and(|s| rot.support != s) {
+            return None;
+        }
+        Some(rot.default_dir)
+    }
+
+    pub fn flip_type(&self, support: Option<TransformSupport>) -> Option<FlipType> {
+        let flip = self.flip?;
+        if support.is_some_and(|s| flip.support != s) {
+            return None;
+        }
+        Some(flip.ty)
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct CircuitTransform {
+    pub support: CircuitTransformSupport,
     pub dir: Direction4,
     pub flip: bool,
+}
+impl CircuitTransform {
+    pub fn transform_size(&self, size: Vec2usize, support: Option<TransformSupport>) -> Vec2usize {
+        let Some(default_dir) = self.support.rotation_default_dir(support) else {
+            return size;
+        };
+
+        if default_dir.is_vertical() == self.dir.is_vertical() {
+            size
+        } else {
+            size.swapped()
+        }
+    }
+
+    pub fn transform_pos(
+        &self,
+        size: Vec2usize,
+        pos: Vec2usize,
+        support: Option<TransformSupport>,
+    ) -> Vec2usize {
+        let flip = self.flip.then(|| self.support.flip_type(support)).flatten();
+
+        let flipped_pos = match flip {
+            None => pos,
+            Some(FlipType::Vertical) => [pos.x, size.y - pos.y - 1].into(),
+            Some(FlipType::Horizontal) => [size.x - pos.x - 1, pos.y].into(),
+            Some(FlipType::Both) => [size.x - pos.x - 1, size.y - pos.y - 1].into(),
+        };
+
+        let default_dir = self.support.rotation_default_dir(support);
+
+        match default_dir {
+            None => flipped_pos,
+            Some(default_dir) => {
+                let dir = self.dir.rotated_counterclockwise_by(default_dir);
+                let transformed_size = if default_dir.is_vertical() == self.dir.is_vertical() {
+                    size
+                } else {
+                    size.swapped()
+                };
+
+                rotate_pos(flipped_pos, transformed_size, dir)
+            }
+        }
+    }
+
+    pub fn backtransform_pos(
+        &self,
+        size: Vec2usize,
+        pos: Vec2usize,
+        support: Option<TransformSupport>,
+    ) -> Vec2usize {
+        let default_dir = self.support.rotation_default_dir(support);
+
+        let rotated_pos = match default_dir {
+            None => pos,
+            Some(default_dir) => {
+                let dir = default_dir.rotated_counterclockwise_by(self.dir);
+                rotate_pos(pos, size, dir)
+            }
+        };
+
+        let flip = self.flip.then(|| self.support.flip_type(support)).flatten();
+
+        match flip {
+            None => rotated_pos,
+            Some(FlipType::Vertical) => [rotated_pos.x, size.y - rotated_pos.y - 1].into(),
+            Some(FlipType::Horizontal) => [size.x - rotated_pos.x - 1, rotated_pos.y].into(),
+            Some(FlipType::Both) => [size.x - rotated_pos.x - 1, size.y - pos.y - 1].into(),
+        }
+    }
+
+    pub fn transform_dir(&self, dir: Direction8, support: Option<TransformSupport>) -> Direction8 {
+        let flip = self.flip.then(|| self.support.flip_type(support)).flatten();
+
+        let flipped = match flip {
+            None => dir,
+            Some(FlipType::Vertical) => dir.flip_by(Direction8::Left),
+            Some(FlipType::Horizontal) => dir.flip_by(Direction8::Up),
+            Some(FlipType::Both) => dir.inverted(),
+        };
+
+        let default_dir = self.support.rotation_default_dir(support);
+
+        match default_dir {
+            None => flipped,
+            Some(default_dir) => {
+                let dir = self.dir.rotated_counterclockwise_by(default_dir);
+                flipped.rotated_clockwise_by(dir.into())
+            }
+        }
+    }
+
+    fn transform_pins(
+        &self,
+        size: Vec2usize,
+        pins: &mut dyn Iterator<Item = PosDirMut>,
+        support: Option<TransformSupport>,
+    ) {
+        for pin in pins {
+            *pin.pos = self.transform_pos(size, *pin.pos, support);
+
+            if let Some(dir) = pin.dir {
+                *dir = self.transform_dir(*dir, support);
+            }
+        }
+    }
 }
 
 pub trait CircuitImpl: Clone + Send + Sync {
@@ -257,7 +381,6 @@ pub struct CircuitBlueprint {
     pub transformed_size: Vec2usize,
     pub pins: Box<[PinDescription]>,
     pub transform: CircuitTransform,
-    pub trans_support: CircuitTransformSupport,
 }
 
 impl CircuitBlueprint {
@@ -267,7 +390,11 @@ impl CircuitBlueprint {
             .rotation
             .map(|r| r.default_dir)
             .unwrap_or(Direction4::Up);
-        let transform = CircuitTransform { dir, flip: false };
+        let transform = CircuitTransform {
+            support: trans_support,
+            dir,
+            flip: false,
+        };
 
         let size = imp.size(transform);
 
@@ -279,21 +406,20 @@ impl CircuitBlueprint {
             pins: imp.describe_pins(transform),
             imp,
             transform,
-            trans_support,
         }
     }
 
     pub fn recalculate(&mut self) {
-        self.trans_support = self.imp.transform_support();
+        self.transform.support = self.imp.transform_support();
         self.inner_size = self.imp.size(self.transform);
-        self.transformed_size =
-            handle_automatic_size_transform(&self.trans_support, &self.transform, self.inner_size);
+        self.transformed_size = self
+            .transform
+            .transform_size(self.inner_size, Some(TransformSupport::Automatic));
         self.pins = self.imp.describe_pins(self.transform);
-        handle_automatic_pin_transform(
-            &self.trans_support,
-            &self.transform,
+        self.transform.transform_pins(
             self.inner_size,
             &mut self.pins.iter_mut().map(|p| p.pos_dir_mut()),
+            Some(TransformSupport::Automatic),
         );
     }
 }
@@ -304,133 +430,17 @@ impl<T: CircuitImpl + 'static> From<T> for CircuitBlueprint {
     }
 }
 
-pub fn handle_automatic_size_transform(
-    support: &CircuitTransformSupport,
-    trans: &CircuitTransform,
-    size: Vec2usize,
-) -> Vec2usize {
-    let Some(rot) = support.rotation else {
-        return size;
-    };
-
-    if !matches!(rot.support, TransformSupport::Automatic) {
-        return size;
-    }
-
-    if rot.default_dir.is_vertical() == trans.dir.is_vertical() {
-        size
-    } else {
-        size.swapped()
-    }
-}
-
 pub struct PosDirMut<'a> {
     pub pos: &'a mut Vec2usize,
-    pub dir: Option<&'a mut Direction8>
+    pub dir: Option<&'a mut Direction8>,
 }
 
-pub fn handle_automatic_pin_transform(
-    support: &CircuitTransformSupport,
-    trans: &CircuitTransform,
-    size: Vec2usize,
-    pins: &mut dyn Iterator<Item = PosDirMut>,
-) {
-    let transformed_size = handle_automatic_size_transform(support, trans, size);
-
-    for mut pin in pins {
-        'flip: {
-            let Some(flip) = &support.flip else {
-                break 'flip;
-            };
-
-            if !trans.flip || !matches!(flip.support, TransformSupport::Automatic) {
-                break 'flip;
-            }
-
-            *pin.pos = match flip.ty {
-                FlipType::Vertical => [pin.pos.x, size.y - pin.pos.y - 1],
-                FlipType::Horizontal => [size.x - pin.pos.x - 1, pin.pos.y],
-                FlipType::Both => [size.x - pin.pos.x - 1, size.y - pin.pos.y - 1],
-            }
-            .into();
-
-            if let Some(pin_dir) = &mut pin.dir {
-                **pin_dir = match flip.ty {
-                    FlipType::Vertical => pin_dir.flip_by(Direction8::Left),
-                    FlipType::Horizontal => pin_dir.flip_by(Direction8::Up),
-                    FlipType::Both => pin_dir.inverted(),
-                };
-            }
-        }
-
-        'rotate: {
-            let Some(rot) = &support.rotation else {
-                break 'rotate;
-            };
-
-            if !matches!(rot.support, TransformSupport::Automatic) {
-                break 'rotate;
-            }
-
-            let dir = trans.dir.rotated_counterclockwise_by(rot.default_dir);
-
-            *pin.pos = rotate_pos(*pin.pos, transformed_size, dir);
-
-            if let Some(pin_dir) = &mut pin.dir {
-                **pin_dir = pin_dir.rotated_clockwise_by(dir.into());
-            }
-        }
-    }
-}
-
-pub fn handle_automatic_quarter_backtransform(
-    support: &CircuitTransformSupport,
-    trans: &CircuitTransform,
-    size: Vec2usize,
-    mut quarter: Vec2usize,
-) -> Vec2usize {
-    let qsize = size * 2;
-
-    'rotate: {
-        let Some(rot) = &support.rotation else {
-            break 'rotate;
-        };
-
-        if !matches!(rot.support, TransformSupport::Automatic) {
-            break 'rotate;
-        }
-
-        let dir = rot.default_dir.rotated_counterclockwise_by(trans.dir);
-
-        quarter = rotate_pos(quarter, qsize, dir);
-    }
-
-    'flip: {
-        let Some(flip) = &support.flip else {
-            break 'flip;
-        };
-
-        if !trans.flip || !matches!(flip.support, TransformSupport::Automatic) {
-            break 'flip;
-        }
-
-        quarter = match flip.ty {
-            FlipType::Vertical => [quarter.x, qsize.y - quarter.y - 1],
-            FlipType::Horizontal => [qsize.x - quarter.x - 1, quarter.y],
-            FlipType::Both => [qsize.x - quarter.x - 1, qsize.y - quarter.y - 1],
-        }
-        .into();
-    }
-
-    quarter
-}
-
-pub const fn rotate_pos(pos: Vec2usize, size: Vec2usize, dir: Direction4) -> Vec2usize {
+pub const fn rotate_pos(pos: Vec2usize, target_size: Vec2usize, dir: Direction4) -> Vec2usize {
     match dir {
         Direction4::Up => pos,
-        Direction4::Left => Vec2usize::new(pos.y, size.y - pos.x - 1),
-        Direction4::Down => Vec2usize::new(size.x - pos.x - 1, size.y - pos.y - 1),
-        Direction4::Right => Vec2usize::new(size.x - pos.y - 1, pos.x),
+        Direction4::Left => Vec2usize::new(pos.y, target_size.y - pos.x - 1),
+        Direction4::Down => Vec2usize::new(target_size.x - pos.x - 1, target_size.y - pos.y - 1),
+        Direction4::Right => Vec2usize::new(target_size.x - pos.y - 1, pos.x),
     }
 }
 

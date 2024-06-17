@@ -19,8 +19,8 @@ use parking_lot::{Mutex, RwLock};
 use crate::{
     app::{App, SelectedItem},
     circuits::{
-        handle_automatic_quarter_backtransform, CircuitBlueprint, CircuitRenderingContext,
-        CircuitSelectionRenderingContext,
+        CircuitBlueprint, CircuitRenderingContext,
+        CircuitSelectionRenderingContext, TransformSupport,
     },
     drawing::{self, rotated_rect},
     editor::{BoardEditor, BoardSelectionImpl, QuarterPos, SelectedBoardItem},
@@ -711,7 +711,6 @@ impl BoardView {
                     info.render_size,
                     selection,
                     info.transform,
-                    &imp.transform_support(),
                 );
                 imp.draw(&circuit_ctx);
 
@@ -1151,14 +1150,15 @@ impl BoardView {
         let world_place_pos = world_mouse - blueprint.transformed_size.convert(|v| v as f32 / 2.0);
         let world_place_tile = world_place_pos.convert(|v| v.round() as isize);
 
-        let rect = ctx.screen.world_to_screen_tile_rect(world_place_tile, blueprint.transformed_size);
+        let rect = ctx
+            .screen
+            .world_to_screen_tile_rect(world_place_tile, blueprint.transformed_size);
         let circuit_ctx = CircuitRenderingContext::new(
             ctx,
             rect,
             blueprint.inner_size,
             None,
             blueprint.transform,
-            &blueprint.trans_support,
         );
         blueprint.imp.draw(&circuit_ctx);
 
@@ -1171,11 +1171,10 @@ impl BoardView {
 
             let has_quarters = QuarterPos::ALL.iter().copied().any(|q| {
                 let quarter_pos = pin.pos * 2 + q.into_position();
-                let quarter_pos = handle_automatic_quarter_backtransform(
-                    &blueprint.trans_support,
-                    &blueprint.transform,
-                    blueprint.inner_size,
+                let quarter_pos = blueprint.transform.backtransform_pos(
+                    blueprint.inner_size * 2,
                     quarter_pos,
+                    Some(TransformSupport::Automatic),
                 );
                 blueprint
                     .imp
@@ -1217,13 +1216,15 @@ impl BoardView {
         {
             let pos = Vec2usize::new(x, y);
             let quarter_pos = pos * 2 + q.into_position();
-            let quarter_pos = handle_automatic_quarter_backtransform(
-                &blueprint.trans_support,
-                &blueprint.transform,
-                blueprint.inner_size,
+            let quarter_pos = blueprint.transform.backtransform_pos(
+                blueprint.inner_size * 2,
                 quarter_pos,
+                Some(TransformSupport::Automatic),
             );
-            if !blueprint.imp.occupies_quarter(blueprint.transform, quarter_pos) {
+            if !blueprint
+                .imp
+                .occupies_quarter(blueprint.transform, quarter_pos)
+            {
                 continue;
             }
 
@@ -1295,7 +1296,10 @@ impl BoardView {
             };
 
             if !clear {
-                let world_off = [blueprint.transformed_size.x as f32 / 2.0, blueprint.transformed_size.y as f32];
+                let world_off = [
+                    blueprint.transformed_size.x as f32 / 2.0,
+                    blueprint.transformed_size.y as f32,
+                ];
                 let world_pos = world_place_tile.convert(|v| v as f32) + world_off;
                 let screen_pos = ctx.screen.world_to_screen(world_pos);
 
@@ -1386,7 +1390,7 @@ impl BoardView {
         if ui.input(|input| input.key_pressed(Key::R)) {
             if let Some(SelectedItem::Circuit(blueprint)) = &app.selected_item {
                 let mut blueprint = blueprint.write();
-                if blueprint.trans_support.rotation.is_some() {
+                if blueprint.transform.support.rotation.is_some() {
                     blueprint.transform.dir = blueprint.transform.dir.rotated_clockwise();
                     blueprint.recalculate();
                 }
@@ -1396,7 +1400,7 @@ impl BoardView {
         if ui.input(|input| input.key_pressed(Key::F)) {
             if let Some(SelectedItem::Circuit(blueprint)) = &app.selected_item {
                 let mut blueprint = blueprint.write();
-                if blueprint.trans_support.flip.is_some() {
+                if blueprint.transform.support.flip.is_some() {
                     blueprint.transform.flip = !blueprint.transform.flip;
                     blueprint.recalculate();
                 }

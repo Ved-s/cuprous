@@ -8,7 +8,7 @@ use eframe::egui::{remap_clamp, vec2, Rect};
 
 use crate::{
     board::{Board, Wire, WirePoint},
-    circuits::{handle_automatic_quarter_backtransform, Circuit, CircuitBlueprint, CircuitPin},
+    circuits::{Circuit, CircuitBlueprint, CircuitPin, TransformSupport},
     containers::Chunks2D,
     selection::SelectionImpl,
     vector::{Vec2f, Vec2isize, Vec2usize},
@@ -176,7 +176,6 @@ impl BoardEditor {
     ) -> Result<(), CircuitPlaceError> {
         let size = blueprint.inner_size;
         let transformed_size = blueprint.transformed_size;
-        let trans_support = &blueprint.trans_support;
         if transformed_size.x == 0 || transformed_size.y == 0 {
             return Err(CircuitPlaceError::ZeroSizeCircuit);
         }
@@ -204,7 +203,11 @@ impl BoardEditor {
 
                 for quarter in QuarterPos::ALL {
                     let pos = quarter.into_position() + [x * 2, y * 2];
-                    let qpos = handle_automatic_quarter_backtransform(trans_support, &transform, size, pos);
+                    let qpos = transform.backtransform_pos(
+                        size * 2,
+                        pos,
+                        Some(TransformSupport::Automatic),
+                    );
                     if !imp.occupies_quarter(transform, qpos) {
                         continue;
                     }
