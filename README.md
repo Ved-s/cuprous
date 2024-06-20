@@ -1,6 +1,11 @@
 ## Cuprous Logic Simulator
 Renamed from RLS (Rust Logic Simulator)
 
+> [!IMPORTANT]
+> This project is being rewritten from scratch in the `rewrite` branch.
+> 
+> Current version is not being maintained or changed in any way.
+
 Logisim-inspired logic circuits simulator
 
 ### Global TODOs
