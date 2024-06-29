@@ -80,7 +80,7 @@ impl TabImpl for ComponentList {
                             blueprint.transform,
                         );
 
-                        blueprint.imp.draw(&ctx);
+                        blueprint.imp.draw(None, &ctx);
                     };
 
                     let res = selectable_icon_label(

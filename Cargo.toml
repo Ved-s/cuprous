@@ -8,6 +8,7 @@ eframe = { version = "0.27.2", features = ["persistence"] }
 egui_dock = { version = "0.12.0", features = ["serde"] }
 eyre = "0.6.12"
 geo-nd = "0.5.0"
+getrandom = "0.2.15"
 glow = "0.13.1"
 num-traits = "0.2.19"
 parking_lot = { version = "0.12.3", features = ["arc_lock", "serde"] }

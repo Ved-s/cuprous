@@ -61,12 +61,13 @@ pub fn get_pooled_with<T: Poolable>(maker: impl FnOnce() -> T) -> Pooled<T> {
     Pooled::new(T::pool().0.lock().pop().unwrap_or_else(maker))
 }
 
+#[macro_export]
 macro_rules! generate_pool {
     ($ty:ty, $pname:ident, |$si:ident| $clear:expr) => {
-        static $pname: Pool<$ty> = Pool::new();
+        static $pname: $crate::pool::Pool<$ty> = $crate::pool::Pool::new();
 
-        impl Poolable for $ty {
-            fn pool() -> &'static Pool<Self> {
+        impl $crate::pool::Poolable for $ty {
+            fn pool() -> &'static $crate::pool::Pool<Self> {
                 &$pname
             }
 
@@ -82,4 +83,10 @@ generate_pool! {
     ColoredTriangleBuffer,
     COLORED_TRIANGLE_BUFFER_POOL,
     |s| s.clear()
+}
+
+generate_pool! {
+    Vec<usize>,
+    USIZE_VEC_POOL,
+    |v| v.clear()
 }

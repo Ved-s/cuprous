@@ -5,6 +5,7 @@ use eframe::{
     egui::{Align2, Color32, PaintCallback, PaintCallbackInfo, Painter, Rect, Ui},
     egui_glow,
 };
+use state::WireState;
 use vector::{Vec2f, Vec2isize, Vec2usize};
 
 pub mod app;
@@ -21,7 +22,11 @@ pub mod str;
 pub mod tabs;
 pub mod vector;
 pub mod vertex_renderer;
+
+#[macro_use]
 pub mod pool;
+pub mod state;
+pub mod simulation;
 
 pub const CHUNK_SIZE: usize = 16;
 pub const WIRE_WIDTH: f32 = 0.2;
@@ -51,10 +56,29 @@ pub enum PinStyle {
     },
 }
 
+pub struct WireColors {
+    pub none: Color32,
+    pub r#false: Color32,
+    pub r#true: Color32,
+    pub error: Color32,
+}
+
+impl WireColors {
+    pub fn get(&self, state: &WireState) -> Color32 {
+        match state {
+            WireState::None => self.none,
+            WireState::Bool(false) => self.r#false,
+            WireState::Bool(true) => self.r#true,
+            WireState::Error => self.error,
+        }
+    }
+}
+
 pub struct Style {
     selection_fill: Color32,
     selection_border: Color32,
     pins: PinStyle,
+    wire_colors: WireColors,
 }
 
 impl Default for Style {
@@ -67,6 +91,12 @@ impl Default for Style {
                 angle: 0.0,
                 directional: true,
             },
+            wire_colors: WireColors {
+                none: Color32::from_rgb(30, 30, 255),
+                r#false: Color32::from_rgb(10, 120, 10),
+                r#true: Color32::from_rgb(30, 255, 30),
+                error: Color32::from_rgb(255, 30, 30),
+            }
         }
     }
 }

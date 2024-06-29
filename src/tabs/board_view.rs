@@ -19,14 +19,15 @@ use parking_lot::{Mutex, RwLock};
 use crate::{
     app::{App, SelectedItem},
     circuits::{
-        CircuitBlueprint, CircuitRenderingContext,
-        CircuitSelectionRenderingContext, TransformSupport,
+        CircuitBlueprint, CircuitRenderingContext, CircuitSelectionRenderingContext,
+        TransformSupport, UntypedCircuitCtx,
     },
     drawing::{self, rotated_rect},
     editor::{BoardEditor, BoardSelectionImpl, QuarterPos, SelectedBoardItem},
     ext::IteratorProduct,
     pool::get_pooled,
     selection::{Selection, SelectionRenderer},
+    state::{BoardState, UpdateTaskPool},
     vector::{Vec2f, Vec2isize, Vec2usize, Vector2},
     vertex_renderer::{ColoredLineBuffer, ColoredTriangleBuffer, ColoredVertexRenderer},
     CustomPaintContext, Direction4Half, Direction8, Direction8Array, PaintContext, Screen,
@@ -43,6 +44,8 @@ pub struct BoardView {
     wire_draw_start: Option<Vec2isize>,
 
     editor: Arc<RwLock<BoardEditor>>,
+    state: Arc<BoardState>,
+
     fixed_screen_pos: Option<(Rect, PanAndZoom)>,
     wire_debug: bool,
     circuit_debug: bool,
@@ -62,11 +65,23 @@ pub struct BoardView {
 
 impl TabCreation for BoardView {
     fn new(app: &App) -> Self {
+        let board = app
+            .sim
+            .boards()
+            .read()
+            .values()
+            .next()
+            .cloned()
+            .expect("at least one board");
+        let state = board.states().write().main_state().clone();
+
         Self {
             pan_zoom: Default::default(),
             wire_draw_start: None,
 
-            editor: Default::default(),
+            editor: board.make_editor(),
+            state,
+
             fixed_screen_pos: None,
             wire_debug: false,
             circuit_debug: false,
@@ -407,7 +422,7 @@ impl BoardView {
 
         let force_draw_points = ctx.ui.input(|input| input.modifiers.shift);
 
-        for (pos, lookaround, node) in editor.wires.iter_area_with_lookaround(tl, size) {
+        for (pos, lookaround, node) in editor.wires().iter_area_with_lookaround(tl, size) {
             for dir in Direction4Half::ALL {
                 let dist = node.directions.get(dir.into());
                 let Some(dist) = dist else {
@@ -501,7 +516,7 @@ impl BoardView {
                 let color = self
                     .wire_colors
                     .entry(wire.id)
-                    .or_insert_with(|| wire.color());
+                    .or_insert_with(|| self.state.wire_color(wire, &ctx.style));
 
                 part_buffer.add_quad_line(pos1, pos2, line_width, color.to_normalized_gamma_f32());
             }
@@ -576,7 +591,7 @@ impl BoardView {
                 let color = self
                     .wire_colors
                     .entry(wire.id)
-                    .or_insert_with(|| wire.color());
+                    .or_insert_with(|| self.state.wire_color(wire, &ctx.style));
                 let point_size = remap_clamp(
                     all as f32,
                     4.0..=8.0,
@@ -655,7 +670,7 @@ impl BoardView {
         pin_buffer.clear();
 
         for (pos, node) in editor
-            .circuits
+            .circuits()
             .iter_area(ctx.tile_bounds_tl, ctx.tile_bounds_size)
         {
             let draw_pins = node.quarters.values().any(|q| q.is_none());
@@ -677,7 +692,7 @@ impl BoardView {
                         (WIRE_WIDTH / 2.0) * ctx.screen.scale,
                         &ctx.style.pins,
                         dir,
-                        circuit.pin_color(pin),
+                        self.state.pin_color(pin, &ctx.style),
                         pin_buffer.deref_mut(),
                     );
                 }
@@ -705,21 +720,36 @@ impl BoardView {
 
                 let rect = ctx.screen.world_to_screen_tile_rect(circuit_pos, info.size);
 
-                let circuit_ctx = CircuitRenderingContext::new(
+                let render_ctx = CircuitRenderingContext::new(
                     ctx,
                     rect,
                     info.render_size,
                     selection,
                     info.transform,
                 );
-                imp.draw(&circuit_ctx);
+
+                let mut update_tasks = get_pooled::<UpdateTaskPool>();
+
+                let circuit_ctx = UntypedCircuitCtx {
+                    state: &self.state,
+                    circuit,
+                    tasks: &mut update_tasks,
+                    instance: imp.instance.deref(),
+                };
+
+                imp.imp.draw(Some(circuit_ctx), &render_ctx);
 
                 drop(imp);
+
+                if !update_tasks.is_empty() {
+                    self.state.add_tasks(&mut update_tasks.drain(), true);
+                }
+                drop(update_tasks);
 
                 if selected && !custom_selection {
                     let mut renderer = self.selection_renderer.lock();
 
-                    for (pos, node) in editor.circuits.iter_area(circuit_pos, info.size) {
+                    for (pos, node) in editor.circuits().iter_area(circuit_pos, info.size) {
                         for qpos in QuarterPos::ALL {
                             if !node
                                 .quarters
@@ -767,7 +797,7 @@ impl BoardView {
     fn draw_wire_debug(&self, ctx: &PaintContext) {
         let editor = self.editor.read();
         for (pos, lookaround, node) in editor
-            .wires
+            .wires()
             .iter_area_with_lookaround(ctx.tile_bounds_tl, ctx.tile_bounds_size)
         {
             let screen_pos = ctx.screen.world_to_screen_tile(pos);
@@ -850,8 +880,8 @@ impl BoardView {
                 if let Some(wire) = &node.wire {
                     rgb[0] = 255;
                     let correct_wire = editor
-                        .board
-                        .wires
+                        .board()
+                        .wires()
                         .read()
                         .get(wire.id)
                         .is_some_and(|board_wire| Arc::ptr_eq(wire, board_wire));
@@ -887,7 +917,7 @@ impl BoardView {
     fn draw_circuit_debug(&self, ctx: &PaintContext) {
         let editor = self.editor.read();
         for (pos, node) in editor
-            .circuits
+            .circuits()
             .iter_area(ctx.tile_bounds_tl, ctx.tile_bounds_size)
         {
             for qpos in QuarterPos::ALL {
@@ -906,8 +936,8 @@ impl BoardView {
                     text.into_galley(ctx.ui, Some(false), f32::INFINITY, TextStyle::Monospace);
 
                 let correct_circuit = editor
-                    .board
-                    .circuits
+                    .board()
+                    .circuits()
                     .read()
                     .get(circuit.id)
                     .is_some_and(|ec| Arc::ptr_eq(ec, circuit));
@@ -966,7 +996,7 @@ impl BoardView {
                     let galley =
                         text.into_galley(ctx.ui, Some(false), f32::INFINITY, TextStyle::Monospace);
 
-                    let wire_point = editor.wires.get(pos).and_then(|n| n.wire.clone());
+                    let wire_point = editor.wires().get(pos).and_then(|n| n.wire.clone());
 
                     let properly_connected_wire_point = (wire.is_none() && wire_point.is_none())
                         || wire.as_ref().is_some_and(|w| {
@@ -975,8 +1005,8 @@ impl BoardView {
 
                     let properly_connected_backend = wire.is_none()
                         || wire.is_some_and(|w| {
-                            w.connected_pins.read().iter().any(|(c, p)| {
-                                Arc::ptr_eq(c, &quarter.circuit) && Arc::ptr_eq(p, pin)
+                            w.connected_pins.read().iter().any(|p| {
+                                Arc::ptr_eq(&p.circuit, &quarter.circuit) && Arc::ptr_eq(p, pin)
                             })
                         });
 
@@ -1072,48 +1102,50 @@ impl BoardView {
                 length
             };
             let length = length.round() as u32;
+            
+            if length > 0 {
+                let place = !ctx.ui.input(|input| input.modifiers.shift);
+                let end = start + direction.into_dir_isize() * length as isize;
+                let endf = end.convert(|v| v as f32 + 0.5);
 
-            let end = start + direction.into_dir_isize() * length as isize;
-            let endf = end.convert(|v| v as f32 + 0.5);
+                let startf = ctx.screen.world_to_screen(startf);
+                let endf = ctx.screen.world_to_screen(endf);
 
-            let startf = ctx.screen.world_to_screen(startf);
-            let endf = ctx.screen.world_to_screen(endf);
+                let color = if place {
+                    Color32::from_gray(100)
+                } else {
+                    Color32::from_rgb(255, 100, 100)
+                };
 
-            let place = !ctx.ui.input(|input| input.modifiers.shift);
-            let color = if place {
-                Color32::from_gray(100)
-            } else {
-                Color32::from_rgb(255, 100, 100)
-            };
+                let add_len = if direction.is_diagonal() {
+                    WIRE_WIDTH / 2.0 * (22.5f32).to_radians().tan()
+                } else {
+                    WIRE_WIDTH / 2.0
+                };
 
-            let add_len = if direction.is_diagonal() {
-                WIRE_WIDTH / 2.0 * (22.5f32).to_radians().tan()
-            } else {
-                WIRE_WIDTH / 2.0
-            };
+                let vec = direction.into_dir_f32() * add_len * ctx.screen.scale;
 
-            let vec = direction.into_dir_f32() * add_len * ctx.screen.scale;
+                let startf = startf - vec;
+                let endf = endf + vec;
 
-            let startf = startf - vec;
-            let endf = endf + vec;
+                ctx.painter.line_segment(
+                    [startf.into(), endf.into()],
+                    Stroke::new(WIRE_WIDTH * ctx.screen.scale, color),
+                );
 
-            ctx.painter.line_segment(
-                [startf.into(), endf.into()],
-                Stroke::new(WIRE_WIDTH * ctx.screen.scale, color),
-            );
-
-            if !ctx
-                .ui
-                .input(|input| input.pointer.button_down(PointerButton::Primary))
-            {
-                if let Some(nonzero_len) = NonZeroU32::new(length) {
-                    let mut editor = self.editor.write();
-                    match place {
-                        true => editor.place_wire(start, direction, nonzero_len),
-                        false => editor.remove_wire(start, direction, nonzero_len),
+                if !ctx
+                    .ui
+                    .input(|input| input.pointer.button_down(PointerButton::Primary))
+                {
+                    if let Some(nonzero_len) = NonZeroU32::new(length) {
+                        let mut editor = self.editor.write();
+                        match place {
+                            true => editor.place_wire(start, direction, nonzero_len),
+                            false => editor.remove_wire(start, direction, nonzero_len),
+                        }
                     }
+                    self.wire_draw_start = None;
                 }
-                self.wire_draw_start = None;
             }
         }
 
@@ -1160,7 +1192,7 @@ impl BoardView {
             None,
             blueprint.transform,
         );
-        blueprint.imp.draw(&circuit_ctx);
+        blueprint.imp.draw(None, &circuit_ctx);
 
         let mut blueprint_pins = get_pooled::<ColoredTriangleBuffer>();
         blueprint_pins.clear();
@@ -1230,7 +1262,7 @@ impl BoardView {
 
             let world_pos = pos.convert(|v| v as isize) + world_place_tile;
 
-            let Some(node) = editor.circuits.get(world_pos) else {
+            let Some(node) = editor.circuits().get(world_pos) else {
                 continue;
             };
 
@@ -1344,7 +1376,7 @@ impl BoardView {
                 match item {
                     SelectedBoardItem::WirePart { pos, dir } => {
                         let dir = Direction8::from(*dir);
-                        let dist = editor.wires.get(*pos).and_then(|n| {
+                        let dist = editor.wires().get(*pos).and_then(|n| {
                             n.wire.is_some().then(|| *n.directions.get(dir)).flatten()
                         });
                         if let Some(dist) = dist {
@@ -1355,7 +1387,8 @@ impl BoardView {
                         editor.remove_wire_point_with_parts(*pos);
                     }
                     SelectedBoardItem::Circuit { id, pos } => {
-                        let Some(circuit) = editor.board.circuits.read().get(*id).cloned() else {
+                        let Some(circuit) = editor.board().circuits().read().get(*id).cloned()
+                        else {
                             continue;
                         };
 

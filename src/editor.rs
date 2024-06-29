@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     num::NonZeroU32,
+    ops::DerefMut,
     sync::Arc,
 };
 
@@ -8,24 +9,51 @@ use eframe::egui::{remap_clamp, vec2, Rect};
 
 use crate::{
     board::{Board, Wire, WirePoint},
-    circuits::{Circuit, CircuitBlueprint, CircuitPin, TransformSupport},
+    circuits::{Circuit, CircuitBlueprint, CircuitPin, PinType, TransformSupport},
     containers::Chunks2D,
+    pool::get_pooled,
     selection::SelectionImpl,
+    state::UpdateTaskPool,
     vector::{Vec2f, Vec2isize, Vec2usize},
     Direction4Half, Direction4HalfArray, Direction8, Direction8Array, BIG_WIRE_POINT_WIDTH,
     CHUNK_SIZE, WIRE_POINT_WIDTH, WIRE_WIDTH,
 };
 
-#[derive(Default)]
 pub struct BoardEditor {
-    pub wires: Chunks2D<CHUNK_SIZE, WireNode>,
-    pub circuits: Chunks2D<CHUNK_SIZE, CircuitNode>,
+    wires: Chunks2D<CHUNK_SIZE, WireNode>,
+    circuits: Chunks2D<CHUNK_SIZE, CircuitNode>,
 
-    pub board: Arc<Board>,
+    board: Arc<Board>,
 }
 
 impl BoardEditor {
+    pub fn board(&self) -> &Arc<Board> {
+        &self.board
+    }
+
+    pub fn wires(&self) -> &Chunks2D<CHUNK_SIZE, WireNode> {
+        &self.wires
+    }
+
+    pub fn circuits(&self) -> &Chunks2D<CHUNK_SIZE, CircuitNode> {
+        &self.circuits
+    }
+}
+
+impl BoardEditor {
+    pub(crate) fn new(board: Arc<Board>) -> Self {
+
+        // TODO: actual implementation
+
+        Self {
+            board,
+            wires: Default::default(),
+            circuits: Default::default(),
+        }
+    }
+
     pub fn place_wire(&mut self, pos: Vec2isize, dir: Direction8, length: NonZeroU32) {
+        let mut tasks = get_pooled::<UpdateTaskPool>();
         let mut wire_map = HashMap::new();
 
         for pos in dir.iter_along(pos, length.get() as usize + 1) {
@@ -37,7 +65,7 @@ impl BoardEditor {
                     .any(|q| q.as_ref().is_some_and(|q| q.pin.is_some()))
             }) {
                 let start = wire_map.values().next().cloned();
-                let wire = self.set_wire_point(pos, start, false);
+                let wire = self.set_wire_point(pos, start, false, tasks.deref_mut());
                 wire_map.insert(wire.id, wire);
             }
         }
@@ -60,8 +88,9 @@ impl BoardEditor {
 
         let start = wire_map.values().next().cloned();
 
-        let wire = self.set_wire_point(pos, start, false);
-        let other_wire = self.set_wire_point(other_pos, Some(wire.clone()), false);
+        let wire = self.set_wire_point(pos, start, false, tasks.deref_mut());
+        let other_wire =
+            self.set_wire_point(other_pos, Some(wire.clone()), false, tasks.deref_mut());
 
         wire_map.insert(wire.id, wire);
         wire_map.insert(other_wire.id, other_wire);
@@ -69,15 +98,21 @@ impl BoardEditor {
         self.set_wire_distances(pos, dir, length.get() as usize, true, true);
 
         for pos in dir.iter_along(pos, length.get() as usize + 1) {
-            self.remove_needless_wire_point(pos);
+            self.remove_needless_wire_point(pos, tasks.deref_mut());
         }
 
         if wire_map.len() > 1 {
-            self.merge_many_wires(wire_map.values().cloned());
+            self.merge_many_wires(wire_map.values().cloned(), None, tasks.deref_mut());
         }
+        else if let Some(wire) = wire_map.values().next() {
+            tasks.add_wire_task(wire.id, true);
+        }
+
+        self.board.states().read().add_tasks(&tasks);
     }
 
     pub fn remove_wire(&mut self, pos: Vec2isize, dir: Direction8, length: NonZeroU32) {
+        let mut tasks = get_pooled::<UpdateTaskPool>();
         let other_pos = pos + dir.into_dir_isize() * length.get() as isize;
 
         // Place wire points if they don't exist and nodes have connections
@@ -91,7 +126,9 @@ impl BoardEditor {
                 )
             })
             .and_then(|(wire, any_dir)| {
-                wire.or_else(|| any_dir.then(|| self.set_wire_point(pos, None, true)))
+                wire.or_else(|| {
+                    any_dir.then(|| self.set_wire_point(pos, None, true, tasks.deref_mut()))
+                })
             });
 
         let end_wire = self
@@ -104,7 +141,9 @@ impl BoardEditor {
                 )
             })
             .and_then(|(wire, any_dir)| {
-                wire.or_else(|| any_dir.then(|| self.set_wire_point(other_pos, None, true)))
+                wire.or_else(|| {
+                    any_dir.then(|| self.set_wire_point(other_pos, None, true, tasks.deref_mut()))
+                })
             });
 
         let mut wire_map = HashMap::new();
@@ -127,18 +166,22 @@ impl BoardEditor {
         }
 
         for pos in dir.iter_along(pos, length.get() as usize + 1) {
-            self.remove_needless_wire_point(pos);
+            self.remove_needless_wire_point(pos, tasks.deref_mut());
         }
 
         for wire in wire_map.values() {
-            self.unmerge_wire(wire.clone());
+            self.unmerge_wire(wire.clone(), tasks.deref_mut());
         }
+
+        self.board.states().read().add_tasks(&tasks);
     }
 
     pub fn toggle_wire_point(&mut self, pos: Vec2isize) {
         let Some(node) = self.wires.get(pos) else {
             return;
         };
+
+        let mut tasks = get_pooled::<UpdateTaskPool>();
 
         if node.wire.is_some() {
             for (dir, dist) in node.directions.iter() {
@@ -152,21 +195,26 @@ impl BoardEditor {
                 }
             }
 
-            self.remove_wire_point(pos, true, false);
+            self.remove_wire_point(pos, true, false, tasks.deref_mut());
         } else {
             if node.directions.values().all(|d| d.is_none()) {
                 return;
             }
 
-            self.set_wire_point(pos, None, true);
+            self.set_wire_point(pos, None, true, tasks.deref_mut());
         }
+
+        self.board.states().read().add_tasks(&tasks);
     }
 
     pub fn remove_wire_point_with_parts(&mut self, pos: Vec2isize) {
         if self.should_pin_wire_point_exist(pos) {
             return;
         }
-        self.remove_wire_point(pos, true, true);
+        let mut tasks = get_pooled::<UpdateTaskPool>();
+        self.remove_wire_point(pos, true, true, tasks.deref_mut());
+
+        self.board.states().read().add_tasks(&tasks);
     }
 
     pub fn place_circuit(
@@ -208,7 +256,7 @@ impl BoardEditor {
                         pos,
                         Some(TransformSupport::Automatic),
                     );
-                    if !imp.occupies_quarter(transform, qpos) {
+                    if !imp.imp.occupies_quarter(transform, qpos) {
                         continue;
                     }
                     occupies_any = true;
@@ -238,14 +286,15 @@ impl BoardEditor {
 
         drop(imp);
 
+        let mut tasks = get_pooled::<UpdateTaskPool>();
+
         if intersects || !occupies_any || any_disconnected_pins {
             drop(pins);
-            self.remove_circuit(&circuit);
+            self.remove_circuit_internal(&circuit, tasks.deref_mut());
 
             if any_disconnected_pins && occupies_any {
                 return Err(CircuitPlaceError::DisconnectedPins);
-            }
-            else if intersects {
+            } else if intersects {
                 return Err(CircuitPlaceError::PlaceOccupied);
             } else {
                 return Err(CircuitPlaceError::OccupiesNoTiles);
@@ -256,14 +305,38 @@ impl BoardEditor {
             let world_pos = pos + pin.desc.pos.convert(|v| v as isize);
             if self.should_pin_wire_point_exist(world_pos) {
                 // set_wire_point connects wire to pins
-                self.set_wire_point(world_pos, None, true);
+                self.set_wire_point(world_pos, None, true, tasks.deref_mut());
+            }
+
+            if let Some(wire) = pin.pin.wire.read().as_ref().map(|w| w.id) {
+                match pin.pin.ty {
+                    PinType::Inside => {
+                        for state in self.board.states().read().iter() {
+                            state.set_pin(circuit.id, pin.pin.id, state.get_wire(wire));
+                        }
+                    }
+                    PinType::Custom => {
+                        tasks.add_wire_task(wire, true);
+                    }
+                    PinType::Outside => {}
+                }
             }
         }
+
+        tasks.add_circuit_task(circuit.id, None);
+
+        self.board.states().read().add_tasks(&tasks);
 
         Ok(())
     }
 
     pub fn remove_circuit(&mut self, circuit: &Arc<Circuit>) {
+        let mut tasks = get_pooled::<UpdateTaskPool>();
+        self.remove_circuit_internal(circuit, tasks.deref_mut());
+
+        self.board.states().read().add_tasks(&tasks);
+    }
+    fn remove_circuit_internal(&mut self, circuit: &Arc<Circuit>, tasks: &mut UpdateTaskPool) {
         let info = circuit.info.read();
         let transformed_size = info.size;
         let pos = info.pos;
@@ -277,8 +350,27 @@ impl BoardEditor {
                 for quarter in QuarterPos::ALL {
                     let quarter = node.quarters.get_mut(quarter);
 
-                    if quarter.as_ref().is_some_and(|q| q.circuit.id == circuit.id) {
-                        *quarter = None;
+                    let Some(q) = quarter.take() else {
+                        continue;
+                    };
+
+                    if q.circuit.id != circuit.id {
+                        *quarter = Some(q);
+                        continue;
+                    }
+                    
+                    if let Some(pin) = q.pin {
+                        if let Some(wire) = pin.wire.read().clone() {
+                            match pin.ty {
+                                PinType::Custom => todo!(),
+                                PinType::Inside => {},
+                                PinType::Outside => {
+                                    tasks.add_wire_task(wire.id, true);
+                                },
+                            }
+
+                            wire.remove_pin(pin.circuit.id, pin.id);
+                        }
                     }
                 }
             }
@@ -286,7 +378,7 @@ impl BoardEditor {
 
         for pin in circuit.pins.read().iter() {
             let world_pos = pos + pin.desc.pos.convert(|v| v as isize);
-            self.remove_needless_wire_point(world_pos);
+            self.remove_needless_wire_point(world_pos, tasks);
         }
 
         self.board.free_circuit(circuit);
@@ -397,6 +489,7 @@ impl BoardEditor {
         pos: Vec2isize,
         new_wire: Option<Arc<Wire>>,
         merge: bool,
+        tasks: &mut UpdateTaskPool,
     ) -> Arc<Wire> {
         let node = self.wires.get(pos);
         let mut merge_wires = HashMap::new();
@@ -451,16 +544,7 @@ impl BoardEditor {
                     continue;
                 };
 
-                wire.add_pin(quarter.circuit.clone(), pin.clone());
-
-                let mut pin_wire = pin.wire.write();
-                if pin_wire.as_ref().is_some_and(|w| Arc::ptr_eq(w, &wire)) {
-                    continue;
-                }
-
-                *pin_wire = Some(wire.clone());
-
-                // TODO: update state
+                pin.connect(wire.clone(), tasks);
             }
         }
 
@@ -469,17 +553,19 @@ impl BoardEditor {
         }
 
         if merge_wires.len() > 1 {
-            self.merge_many_wires(merge_wires.values().cloned());
+            self.merge_many_wires(merge_wires.values().cloned(), Some(wire.clone()), tasks);
         }
 
         wire
     }
 
+    /// No update tasks are added if `unmerge: false`
     fn remove_wire_point(
         &mut self,
         pos: Vec2isize,
         unmerge: bool,
         remove_connected_parts: bool,
+        tasks: &mut UpdateTaskPool,
     ) -> Option<Arc<Wire>> {
         let node = self.wires.get(pos);
 
@@ -506,15 +592,7 @@ impl BoardEditor {
 
                     let Some(pin) = &quarter.pin else { continue };
 
-                    wire.remove_pin(quarter.circuit.id, pin.id);
-                    let mut pin_wire = pin.wire.write();
-                    if pin_wire.as_ref().is_none() {
-                        continue;
-                    }
-
-                    *pin_wire = None;
-
-                    // TODO: update state
+                    pin.disconnect(tasks);
                 }
             }
 
@@ -534,13 +612,13 @@ impl BoardEditor {
                 };
 
                 let target = pos + dir.into_dir_isize() * dist.get() as isize;
-                self.remove_needless_wire_point(target);
+                self.remove_needless_wire_point(target, tasks);
             }
         }
 
         if unmerge {
             if let Some(wire) = wire.clone() {
-                self.unmerge_wire(wire);
+                self.unmerge_wire(wire, tasks);
             }
         }
 
@@ -589,32 +667,43 @@ impl BoardEditor {
         }))
     }
 
-    fn merge_many_wires<I>(&mut self, iter: I)
-    where
+    fn merge_many_wires<I>(
+        &mut self,
+        iter: I,
+        into: Option<Arc<Wire>>,
+        tasks: &mut UpdateTaskPool,
+    ) where
         I: Clone + Iterator<Item = Arc<Wire>>,
     {
-        let mut biggest_wire = None;
-        let mut max_points = None;
+        let merge_into = if into.is_some() {
+            into
+        } else {
+            let mut merge_into = None;
+            let mut max_points = None;
 
-        for wire in iter.clone() {
-            let points = wire.points.read().len();
-            if !max_points.is_some_and(|mp| points <= mp) {
-                max_points = Some(points);
-                biggest_wire = Some(wire.clone());
+            for wire in iter.clone() {
+                let points = wire.points.read().len();
+                if !max_points.is_some_and(|mp| points <= mp) {
+                    max_points = Some(points);
+                    merge_into = Some(wire.clone());
+                }
             }
-        }
+            merge_into
+        };
 
-        let Some(biggest_wire) = biggest_wire else {
+        let Some(merge_into) = merge_into else {
             return;
         };
 
         for wire in iter {
-            if wire.id == biggest_wire.id {
+            if wire.id == merge_into.id {
                 continue;
             }
 
-            self.merge_wires(wire, biggest_wire.clone());
+            self.merge_wires(wire, merge_into.clone());
         }
+
+        tasks.add_wire_task(merge_into.id, true);
     }
 
     fn merge_wires(&mut self, from: Arc<Wire>, into: Arc<Wire>) {
@@ -626,18 +715,35 @@ impl BoardEditor {
             self.wires.get_or_create_mut(pos).wire = Some(into.clone());
         }
 
+        let mut pins_from = from.connected_pins.write();
+        let mut pins_into = into.connected_pins.write();
+
+        for pin in pins_from.drain(..) {
+            let mut pin_wire = pin.wire.write();
+            if !pin_wire.as_ref().is_some_and(|w| w.id == from.id) {
+
+                // Weird pin connected to a different wire?
+                continue;
+            }
+
+            *pin_wire = Some(into.clone());
+            drop(pin_wire);
+            pins_into.push(pin);
+        }
+
         self.board.free_wire(&from);
     }
 
-    fn unmerge_wire(&mut self, wire: Arc<Wire>) {
+    fn unmerge_wire(&mut self, wire: Arc<Wire>, tasks: &mut UpdateTaskPool) {
         let start_wire_id = wire.id;
         let mut points = wire.points.write_arc();
         let mut positions: HashSet<_> = HashSet::from_iter(points.keys().copied());
         let mut trav_positions = HashSet::new();
-
+        
+        let mut old_pins = std::mem::take(wire.connected_pins.write().deref_mut());
         points.clear();
 
-        let mut wire = Some((wire, points));
+        let mut first_wire = Some((wire, points));
 
         while let Some(pos) = positions.iter().next().copied() {
             positions.remove(&pos);
@@ -646,7 +752,7 @@ impl BoardEditor {
                 continue;
             };
 
-            let mut wire = wire.take().unwrap_or_else(|| {
+            let (wire, mut wire_points) = first_wire.take().unwrap_or_else(|| {
                 let wire = self.board.create_wire();
                 (wire.clone(), wire.points.write_arc())
             });
@@ -658,7 +764,7 @@ impl BoardEditor {
                 positions.remove(&pos);
                 trav_positions.remove(&pos);
 
-                if wire.1.contains_key(&pos) {
+                if wire_points.contains_key(&pos) {
                     continue;
                 }
 
@@ -670,8 +776,24 @@ impl BoardEditor {
                     continue;
                 };
 
-                node.wire = Some(wire.0.clone());
+                node.wire = Some(wire.clone());
                 let directions = node.directions;
+
+                if let Some(circuit) = self.circuits.get(pos) {
+                    for quarter in circuit.quarters.values() {
+                        let Some(quarter) = quarter else {
+                            continue;
+                        };
+
+                        let Some(pin) = &quarter.pin else {
+                            continue;
+                        };
+
+                        pin.connect(wire.clone(), tasks);
+
+                        old_pins.retain(|p| !Arc::ptr_eq(p, pin));
+                    }
+                }
 
                 let mut point_directions = Direction4HalfArray::default();
 
@@ -686,12 +808,12 @@ impl BoardEditor {
                         *point_directions.get_mut(dir) = true;
                     }
 
-                    if !wire.1.contains_key(&target_pos) {
+                    if !wire_points.contains_key(&target_pos) {
                         trav_positions.insert(target_pos);
                     }
                 }
 
-                wire.1.insert(
+                wire_points.insert(
                     pos,
                     WirePoint {
                         directions: point_directions,
@@ -699,17 +821,24 @@ impl BoardEditor {
                 );
             }
 
-            if wire.1.is_empty() {
-                self.board.free_wire(&wire.0);
+            if wire_points.is_empty() && wire.connected_pins.read().is_empty() {
+                self.board.free_wire(&wire);
+                continue;
             }
+
+            tasks.add_wire_task(wire.id, true);
         }
 
-        if let Some(wire) = wire {
+        if let Some(wire) = first_wire {
             self.board.free_wire(&wire.0);
+        }
+
+        for pin in old_pins {
+            pin.disconnect(tasks);
         }
     }
 
-    fn remove_needless_wire_point(&mut self, pos: Vec2isize) {
+    fn remove_needless_wire_point(&mut self, pos: Vec2isize, tasks: &mut UpdateTaskPool) {
         let Some(node) = self.wires.get(pos) else {
             return;
         };
@@ -743,7 +872,7 @@ impl BoardEditor {
             return;
         }
 
-        self.remove_wire_point(pos, false, false);
+        self.remove_wire_point(pos, false, false, tasks);
     }
 }
 

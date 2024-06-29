@@ -5,9 +5,7 @@ use egui_dock::{DockArea, DockState, NodeIndex};
 use parking_lot::RwLock;
 
 use crate::{
-    circuits::{CircuitBlueprint, TestCircuit},
-    tabs::{SafeTabType, Tab, TabSerde, TabType, TabViewer},
-    Style,
+    circuits::{CircuitBlueprint, TestCircuit}, simulation::SimulationCtx, tabs::{SafeTabType, Tab, TabSerde, TabType, TabViewer}, Style
 };
 
 pub struct App {
@@ -16,6 +14,7 @@ pub struct App {
     pub selected_tab: Option<TabType>,
     pub blueprints: Vec<Arc<RwLock<CircuitBlueprint>>>,
     pub style: Arc<Style>,
+    pub sim: Arc<SimulationCtx>,
 }
 
 impl App {
@@ -28,6 +27,7 @@ impl App {
             selected_tab: None,
             blueprints,
             style: Arc::new(Style::default()),
+            sim: SimulationCtx::new(),
         }
     }
 }
@@ -86,6 +86,8 @@ impl eframe::App for DockedApp {
 
             surface.split_left(NodeIndex::root(), 0.2, vec![tab]);
         }
+
+        self.app.sim.temp_run();
 
         self.app.selected_tab = self
             .dock

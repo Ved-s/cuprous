@@ -255,9 +255,10 @@ impl ParsedContainer {
                 (Some("downcast"), syn::Meta::Path(_)) => {
                     container.downcast = true;
                 }
-                (Some("downcast"), _) => {
-                    errors.push(syn::Error::new(span, "invalid downcast attribute, valid form is `#[downcast]`"))
-                }
+                (Some("downcast"), _) => errors.push(syn::Error::new(
+                    span,
+                    "invalid downcast attribute, valid form is `#[downcast]`",
+                )),
 
                 // (Some("accept"), syn::Meta::List(l)) => {
                 //     container.accept = ContainerAccept::parse_set(l.tokens, errors);
@@ -265,18 +266,21 @@ impl ParsedContainer {
                 // (Some("accept"), _) => {
                 //     errors.push(syn::Error::new(span, "invalid accept attribute, valid form is `#[accept(...)]`"))
                 // }
-
                 (Some("on_cast_fail"), syn::Meta::NameValue(v)) => {
                     match CastFailBehavior::parse(v.value) {
                         Ok(b) => container.on_cast_fail = Some(b),
                         Err(e) => errors.push(e),
                     }
                 }
-                (Some("on_cast_fail"), _) => {
-                    errors.push(syn::Error::new(span, "invalid on_cast_fail attribute, valid form is `#[on_cast_fail = ...]`"))
-                }
+                (Some("on_cast_fail"), _) => errors.push(syn::Error::new(
+                    span,
+                    "invalid on_cast_fail attribute, valid form is `#[on_cast_fail = ...]`",
+                )),
 
-                _ => errors.push(syn::Error::new(span, "invalid attribute, expected `#[downcast]` or `#[on_cast_fail = ...]`"))
+                _ => errors.push(syn::Error::new(
+                    span,
+                    "invalid attribute, expected `#[downcast]` or `#[on_cast_fail = ...]`",
+                )),
             }
         }
 
@@ -323,21 +327,32 @@ struct ParsedTraitType {
 
 impl ParsedTraitType {
     pub fn parse(input: syn::TraitItemType, errors: &mut Vec<syn::Error>) -> Self {
-
         if !input.attrs.is_empty() {
-            errors.push(syn::Error::new(input.ident.span(), "attributes on trait types are not supported"));
+            errors.push(syn::Error::new(
+                input.ident.span(),
+                "attributes on trait types are not supported",
+            ));
         }
 
         if input.generics.lt_token.is_some() {
-            errors.push(syn::Error::new(input.generics.span(), "generics in trait types are not supported"));
+            errors.push(syn::Error::new(
+                input.generics.span(),
+                "generics in trait types are not supported",
+            ));
         }
 
         if !input.bounds.is_empty() {
-            errors.push(syn::Error::new(input.bounds.span(), "bounds on trait types are not supported.\nomit them"));
+            errors.push(syn::Error::new(
+                input.bounds.span(),
+                "bounds on trait types are not supported.\nomit them",
+            ));
         }
 
         if let Some(def) = &input.default {
-            errors.push(syn::Error::new(def.1.span(), "defaults for trait types are not supported"));
+            errors.push(syn::Error::new(
+                def.1.span(),
+                "defaults for trait types are not supported",
+            ));
         }
 
         Self {
@@ -410,18 +425,21 @@ impl ParsedFnArg {
             let string = ident.map(|i| i.to_string());
 
             match (string.as_deref(), &attr.meta) {
-
                 (Some("on_cast_fail"), syn::Meta::NameValue(v)) => {
                     match CastFailBehavior::parse(v.value.clone()) {
                         Ok(b) => on_cast_fail = Some(b),
                         Err(e) => errors.push(e),
                     }
                 }
-                (Some("on_cast_fail"), _) => {
-                    errors.push(syn::Error::new(span, "invalid on_cast_fail attribute, valid form is `#[on_cast_fail = ...]`"))
-                }
+                (Some("on_cast_fail"), _) => errors.push(syn::Error::new(
+                    span,
+                    "invalid on_cast_fail attribute, valid form is `#[on_cast_fail = ...]`",
+                )),
 
-                _ => errors.push(syn::Error::new(span, "invalid attribute, expected `#[on_cast_fail = ...]`"))
+                _ => errors.push(syn::Error::new(
+                    span,
+                    "invalid attribute, expected `#[on_cast_fail = ...]`",
+                )),
             }
         }
 
@@ -474,7 +492,10 @@ impl ParsedTraitFn {
         let mut recv = None;
 
         if let Some(def) = &input.default {
-            errors.push(syn::Error::new(def.span(), "defaults for trait functions are not supported"));
+            errors.push(syn::Error::new(
+                def.span(),
+                "defaults for trait functions are not supported",
+            ));
         }
 
         let args = input
@@ -506,18 +527,21 @@ impl ParsedTraitFn {
             let string = ident.map(|i| i.to_string());
 
             match (string.as_deref(), attr.meta) {
-
                 (Some("on_cast_fail"), syn::Meta::NameValue(v)) => {
                     match CastFailBehavior::parse(v.value) {
                         Ok(b) => on_cast_fail = Some(b),
                         Err(e) => errors.push(e),
                     }
                 }
-                (Some("on_cast_fail"), _) => {
-                    errors.push(syn::Error::new(span, "invalid on_cast_fail attribute, valid form is `#[on_cast_fail = ...]`"))
-                }
+                (Some("on_cast_fail"), _) => errors.push(syn::Error::new(
+                    span,
+                    "invalid on_cast_fail attribute, valid form is `#[on_cast_fail = ...]`",
+                )),
 
-                _ => errors.push(syn::Error::new(span, "invalid attribute, expected `#[on_cast_fail = ...]`"))
+                _ => errors.push(syn::Error::new(
+                    span,
+                    "invalid attribute, expected `#[on_cast_fail = ...]`",
+                )),
             }
         }
 
@@ -546,9 +570,11 @@ struct ParsedTrait {
 
 impl ParsedTrait {
     pub fn parse(input: syn::ItemTrait, errors: &mut Vec<syn::Error>) -> Self {
-
         if input.generics.lt_token.is_some() {
-            errors.push(syn::Error::new(input.generics.span(), "generics in traits are not supported"));
+            errors.push(syn::Error::new(
+                input.generics.span(),
+                "generics in traits are not supported",
+            ));
         }
 
         let name = input.ident.to_string();
@@ -591,25 +617,29 @@ impl ParsedTrait {
             let string = ident.map(|i| i.to_string());
 
             match (string.as_deref(), attr.meta) {
-
                 (Some("on_cast_fail"), syn::Meta::NameValue(v)) => {
                     match CastFailBehavior::parse(v.value) {
                         Ok(b) => output.on_cast_fail = Some(b),
                         Err(e) => errors.push(e),
                     }
                 }
-                (Some("on_cast_fail"), _) => {
-                    errors.push(syn::Error::new(span, "invalid on_cast_fail attribute, valid form is `#[on_cast_fail = ...]`"))
-                }
+                (Some("on_cast_fail"), _) => errors.push(syn::Error::new(
+                    span,
+                    "invalid on_cast_fail attribute, valid form is `#[on_cast_fail = ...]`",
+                )),
 
                 (Some("as_impl"), syn::Meta::Path(_)) => {
                     output.as_impl = true;
                 }
-                (Some("as_impl"), _) => {
-                    errors.push(syn::Error::new(span, "invalid as_impl attribute, valid form is `#[as_impl]`"))
-                }
+                (Some("as_impl"), _) => errors.push(syn::Error::new(
+                    span,
+                    "invalid as_impl attribute, valid form is `#[as_impl]`",
+                )),
 
-                _ => errors.push(syn::Error::new(span, "invalid attribute, expected `#[as_impl]` or `#[on_cast_fail = ...]`"))
+                _ => errors.push(syn::Error::new(
+                    span,
+                    "invalid attribute, expected `#[as_impl]` or `#[on_cast_fail = ...]`",
+                )),
             }
         }
 
@@ -724,6 +754,7 @@ struct ParsedImplFn {
     name: String,
     name_ident: syn::Ident,
     self_pass: Option<ValuePassType>,
+    first_arg_self: bool,
     type_bounds: syn::TypeParam,
     where_clause: Option<syn::WhereClause>,
     args: Vec<ParsedFnArg>,
@@ -765,18 +796,21 @@ impl ParsedImplFn {
             let string = ident.map(|i| i.to_string());
 
             match (string.as_deref(), attr.meta) {
-
                 (Some("on_cast_fail"), syn::Meta::NameValue(v)) => {
                     match CastFailBehavior::parse(v.value) {
                         Ok(b) => on_cast_fail = Some(b),
                         Err(e) => errors.push(e),
                     }
                 }
-                (Some("on_cast_fail"), _) => {
-                    errors.push(syn::Error::new(span, "invalid on_cast_fail attribute, valid form is `#[on_cast_fail = ...]`"))
-                }
+                (Some("on_cast_fail"), _) => errors.push(syn::Error::new(
+                    span,
+                    "invalid on_cast_fail attribute, valid form is `#[on_cast_fail = ...]`",
+                )),
 
-                _ => errors.push(syn::Error::new(span, "invalid attribute, expected `#[on_cast_fail = ...]`"))
+                _ => errors.push(syn::Error::new(
+                    span,
+                    "invalid attribute, expected `#[on_cast_fail = ...]`",
+                )),
             }
         }
 
@@ -794,10 +828,40 @@ impl ParsedImplFn {
             ));
         };
 
+        let mut self_pass = recv.map(ValuePassType::parse);
+        let mut first_arg_self = false;
+
+        if self_pass.is_none() && !args.is_empty() {
+            if let ParsedFnArgType::Type(syn::Type::Path(p)) = &args[0].ty {
+                if let Some(ident) = p.path.get_ident() {
+                    if ident == type_bounds.ident.to_string().as_str() {
+                        self_pass = Some(ValuePassType::Owned);
+                        first_arg_self = true;
+                    }
+                }
+            }
+
+            if let ParsedFnArgType::Type(syn::Type::Reference(r)) = &args[0].ty {
+                if let syn::Type::Path(p) = r.elem.deref() {
+                    if let Some(ident) = p.path.get_ident() {
+                        if ident == type_bounds.ident.to_string().as_str() {
+                            first_arg_self = true;
+                            if r.mutability.is_some() {
+                                self_pass = Some(ValuePassType::Mut);
+                            } else {
+                                self_pass = Some(ValuePassType::Ref);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         Ok(Self {
             name: input.sig.ident.to_string(),
             name_ident: input.sig.ident.clone(),
-            self_pass: recv.map(ValuePassType::parse),
+            self_pass,
+            first_arg_self,
             args,
             type_bounds,
             where_clause: input.sig.generics.where_clause,
@@ -845,7 +909,11 @@ impl ParsedFn for ParsedImplFn {
         self.self_pass
     }
     fn args(&self) -> &[ParsedFnArg] {
-        &self.args
+        if self.first_arg_self {
+            &self.args[1..]
+        } else {
+            &self.args
+        }
     }
     fn ret(&self) -> Option<&ParsedFnRet> {
         self.ret.as_ref()
@@ -879,18 +947,21 @@ impl ParsedImpl {
             let string = ident.map(|i| i.to_string());
 
             match (string.as_deref(), attr.meta) {
-
                 (Some("on_cast_fail"), syn::Meta::NameValue(v)) => {
                     match CastFailBehavior::parse(v.value) {
                         Ok(b) => on_cast_fail = Some(b),
                         Err(e) => errors.push(e),
                     }
                 }
-                (Some("on_cast_fail"), _) => {
-                    errors.push(syn::Error::new(span, "invalid on_cast_fail attribute, valid form is `#[on_cast_fail = ...]`"))
-                }
+                (Some("on_cast_fail"), _) => errors.push(syn::Error::new(
+                    span,
+                    "invalid on_cast_fail attribute, valid form is `#[on_cast_fail = ...]`",
+                )),
 
-                _ => errors.push(syn::Error::new(span, "invalid attribute, expected `#[on_cast_fail = ...]`"))
+                _ => errors.push(syn::Error::new(
+                    span,
+                    "invalid attribute, expected `#[on_cast_fail = ...]`",
+                )),
             }
         }
 
@@ -1014,7 +1085,14 @@ fn generate_vtable(c: &ParsedContainer, parsed: &ParsedMacroInput) -> TokenStrea
     let impl_fns = parsed.impls.iter().flat_map(|i| {
         i.fns.iter().map(|f| {
             let name = format!("impl_{}", f.name);
-            make_vtable_fn(&name, f.self_pass.is_some(), &f.args, f.ret.as_ref())
+
+            let args = if f.first_arg_self {
+                &f.args[1..]
+            } else {
+                &f.args[..]
+            };
+
+            make_vtable_fn(&name, f.self_pass.is_some(), args, f.ret.as_ref())
         })
     });
 
@@ -1104,7 +1182,6 @@ fn generate_new(c: &ParsedContainer, parsed: &ParsedMacroInput) -> TokenStream {
             let type_name = &f.type_bounds.ident;
             let name = &f.name_ident;
             let bounds = &f.type_bounds;
-            let self_pass = f.self_pass.map(|p| quote! { #p self, });
 
             let args = f.args.iter().map(|a| {
                 let name = &a.name;
@@ -1129,15 +1206,28 @@ fn generate_new(c: &ParsedContainer, parsed: &ParsedMacroInput) -> TokenStream {
             let where_clause = f.where_clause.as_ref();
             let block = &f.block;
 
+            let self_pass = f
+                .first_arg_self
+                .not()
+                .then_some(f.self_pass)
+                .flatten()
+                .map(|p| quote! { #p self, });
+
             let extra_defs = quote! {
                 fn #name<#bounds>(#self_pass #(#args,)*) #return_type #where_clause
                 #block
             };
 
+            let args = if f.first_arg_self {
+                &f.args[1..]
+            } else {
+                &f.args[..]
+            };
+
             Intermediate {
                 name: f.name_ident.clone(),
                 vtable_name,
-                args: &f.args,
+                args,
                 ret: f.ret.as_ref(),
                 self_pass: f.self_pass,
                 on_cast_fail,
@@ -1202,9 +1292,9 @@ fn generate_new(c: &ParsedContainer, parsed: &ParsedMacroInput) -> TokenStream {
                 }
                 Some(CastFailBehavior::Expr(e)) => e.to_token_stream(),
                 None => {
+                    let error = "#[on_cast_fail = ...] not specified but type downcast may fail";
                     let error =
-                        "#[on_cast_fail = ...] not specified but type downcast may fail";
-                    let error = syn::Error::new(name.span().join(ty.span()).unwrap_or(name.span()), error);
+                        syn::Error::new(name.span().join(ty.span()).unwrap_or(name.span()), error);
                     error.into_compile_error()
                 }
             };
@@ -1312,7 +1402,9 @@ fn generate_new(c: &ParsedContainer, parsed: &ParsedMacroInput) -> TokenStream {
                 let Some(ptr) = std::ptr::NonNull::new(ptr.cast()) else {
                     std::alloc::handle_alloc_error(layout);
                 };
-                ptr
+                unsafe { ptr.write(value) };
+                ptr.cast()
+
             };
 
             fn drop<Tinner>(p: std::ptr::NonNull<()>) {
@@ -1377,11 +1469,10 @@ fn generate_impl(c: &ParsedContainer, parsed: &ParsedMacroInput) -> TokenStream 
 
     let new = generate_new(c, parsed);
 
-    let as_impl_trait_fns = parsed
-        .traits
-        .iter()
-        .filter(|&t| t.as_impl)
-        .map(|t| generate_impl_fns(c, Some(t), &t.fns, &format!("trait_{}_", t.lowercase_name)));
+    let as_impl_trait_fns =
+        parsed.traits.iter().filter(|&t| t.as_impl).map(|t| {
+            generate_impl_fns(c, Some(t), &t.fns, &format!("trait_{}_", t.lowercase_name))
+        });
 
     let impl_fns = parsed
         .impls
@@ -1512,7 +1603,6 @@ fn generate_impl_fns<F: ParsedFn>(
 }
 
 fn generate_container(c: &ParsedContainer, parsed: &ParsedMacroInput) -> TokenStream {
-
     let vtable = generate_vtable(c, parsed);
     let imp = generate_impl(c, parsed);
 
@@ -1520,17 +1610,16 @@ fn generate_container(c: &ParsedContainer, parsed: &ParsedMacroInput) -> TokenSt
     let vtable_name = &c.sized_vtable_name;
     let vis = &c.vis;
 
-    let trait_impls = parsed
-        .traits
-        .iter()
-        .filter(|&t| t.as_impl.not())
-        .map(|t| generate_impl_fns(c, Some(t), &t.fns, &format!("trait_{}_", t.lowercase_name)));
+    let trait_impls =
+        parsed.traits.iter().filter(|&t| t.as_impl.not()).map(|t| {
+            generate_impl_fns(c, Some(t), &t.fns, &format!("trait_{}_", t.lowercase_name))
+        });
 
     let all_value_bounds = &parsed.all_value_bounds;
 
     quote! {
         #vtable
-        
+
         #vis struct #name {
             data: std::ptr::NonNull<()>,
             vtable: &'static #vtable_name,
@@ -1548,7 +1637,7 @@ fn generate_container(c: &ParsedContainer, parsed: &ParsedMacroInput) -> TokenSt
             fn from(value: T) -> Self {
                 Self::new(value)
             }
-        } 
+        }
 
         #(#trait_impls)*
     }

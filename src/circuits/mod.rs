@@ -1,19 +1,20 @@
 use std::{
+    any::Any,
     f32::consts::TAU,
-    hash::{DefaultHasher, Hasher},
     ops::Deref,
     sync::Arc,
 };
 
-use eframe::egui::{Color32, Rect};
+use eframe::egui::{Color32, FontId, Rect};
 use parking_lot::{Mutex, RwLock};
 
 use crate::{
-    board::Wire,
+    board::{Board, Wire},
     editor::QuarterPos,
     ext::IteratorProduct,
     pool::get_pooled,
     selection::SelectionRenderer,
+    state::{BoardState, UpdateTaskPool, WireState},
     str::ArcStaticStr,
     vector::{Vec2f, Vec2isize, Vec2usize},
     vertex_renderer::{ColoredTriangleBuffer, ColoredVertexRenderer},
@@ -22,25 +23,10 @@ use crate::{
 
 pub struct Circuit {
     pub id: usize,
+    pub board: Arc<Board>,
     pub info: RwLock<CircuitInfo>,
-    pub imp: RwLock<CircuitImplBox>,
+    pub imp: RwLock<CircuitImplData>,
     pub pins: RwLock<Box<[RealizedPin]>>,
-}
-
-impl Circuit {
-    pub fn pin_color(&self, pin: &CircuitPin) -> Color32 {
-        // TODO: actual pin color
-        let mut hasher = DefaultHasher::new();
-        hasher.write_usize(75402938460);
-        hasher.write_usize(self.id);
-        hasher.write_usize(pin.id);
-        let v = hasher.finish();
-        let r = ((v >> 16) & 0xff) as u8;
-        let g = ((v >> 8) & 0xff) as u8;
-        let b = (v & 0xff) as u8;
-
-        Color32::from_rgb(r, g, b)
-    }
 }
 
 #[derive(Clone)]
@@ -49,6 +35,11 @@ pub struct CircuitInfo {
     pub render_size: Vec2usize,
     pub size: Vec2usize,
     pub transform: CircuitTransform,
+}
+
+pub struct CircuitImplData {
+    pub imp: CircuitImplBox,
+    pub instance: Box<dyn Any + Send + Sync>,
 }
 
 #[derive(Clone, Copy)]
@@ -77,7 +68,82 @@ impl PinDescription {
 
 pub struct CircuitPin {
     pub id: usize,
+    pub ty: PinType,
+    pub circuit: Arc<Circuit>,
     pub wire: RwLock<Option<Arc<Wire>>>,
+}
+impl CircuitPin {
+    pub fn set_output(
+        &self,
+        board_state: &BoardState,
+        tasks: &mut UpdateTaskPool,
+        state: WireState,
+    ) {
+        board_state.set_pin(self.circuit.id, self.id, state);
+        if let Some(wire) = self.wire.read().as_ref().map(|w| w.id) {
+            tasks.add_wire_task(wire, false);
+        }
+    }
+
+    pub fn get_state(&self, state: &BoardState) -> WireState {
+        state.get_pin(self.circuit.id, self.id)
+    }
+
+    pub(crate) fn disconnect(&self, tasks: &mut UpdateTaskPool) {
+        let mut pin_wire = self.wire.write();
+        let Some(wire) = pin_wire.deref() else {
+            return;
+        };
+
+        wire.remove_pin(self.circuit.id, self.id);
+        let id = wire.id;
+
+        *pin_wire = None;
+
+        self.handle_disconnect(id, tasks);
+    }
+
+    pub(crate) fn connect(self: &Arc<Self>, wire: Arc<Wire>, tasks: &mut UpdateTaskPool) {
+        let mut pin_wire = self.wire.write();
+        if let Some(wire) = pin_wire.deref() {
+            wire.remove_pin(self.circuit.id, self.id);
+            self.handle_disconnect(wire.id, tasks);
+        };
+
+        wire.add_pin(self.circuit.clone(), self.clone());
+        let id = wire.id;
+        *pin_wire = Some(wire);
+        self.handle_connect(id, tasks);
+    }
+
+    fn handle_disconnect(&self, old_wire: usize, tasks: &mut UpdateTaskPool) {
+        match self.ty {
+            PinType::Custom => todo!(),
+            PinType::Inside => {
+                tasks.add_circuit_task(self.circuit.id, Some(self.id));
+                for state in self.circuit.board.states().read().iter() {
+                    state.set_pin(self.circuit.id, self.id, WireState::default());
+                }
+            }
+            PinType::Outside => {
+                tasks.add_wire_task(old_wire, true);
+            }
+        }
+    }
+
+    fn handle_connect(&self, wire: usize, tasks: &mut UpdateTaskPool) {
+        match self.ty {
+            PinType::Custom | PinType::Outside => {
+                tasks.add_wire_task(wire, true);
+            }
+            PinType::Inside => {
+                tasks.add_circuit_task(self.circuit.id, Some(self.id));
+                for state in self.circuit.board.states().read().iter() {
+                    state.set_pin(self.circuit.id, self.id, state.get_wire(wire));
+                }
+            }
+        }
+    }
 }
 
 pub struct RealizedPin {
@@ -322,7 +388,58 @@ impl CircuitTransform {
     }
 }
 
+pub struct UntypedCircuitCtx<'a> {
+    pub state: &'a Arc<BoardState>,
+    pub circuit: &'a Arc<Circuit>,
+    pub tasks: &'a mut UpdateTaskPool,
+    pub instance: &'a dyn Any,
+}
+
+impl<'a> UntypedCircuitCtx<'a> {
+    pub fn make_typed<C: CircuitImpl>(self) -> CircuitCtx<'a, C> {
+        CircuitCtx {
+            state: self.state,
+            circuit: self.circuit,
+            tasks: self.tasks,
+            instance: self
+                .instance
+                .downcast_ref::<C::Instance>()
+                .expect("correct instance for a circuit"),
+        }
+    }
+}
+
+pub struct CircuitCtx<'a, C: CircuitImpl> {
+    pub state: &'a Arc<BoardState>,
+    pub circuit: &'a Arc<Circuit>,
+    pub tasks: &'a mut UpdateTaskPool,
+    pub instance: &'a C::Instance,
+}
+
+impl<'a, C: CircuitImpl> CircuitCtx<'a, C> {
+    fn set_pin_output(&mut self, pin: &CircuitPin, state: WireState) {
+        pin.set_output(self.state, self.tasks, state);
+    }
+
+    fn get_pin_input(&mut self, pin: &CircuitPin) -> WireState {
+        pin.get_state(self.state)
+    }
+
+    fn read_internal_state<R>(&self, reader: impl FnOnce(&C::State) -> R) -> Option<R> {
+        self.state
+            .read_internal_circuit_state(self.circuit.id, reader)
+    }
+
+    fn write_internal_state<R>(&self, writer: impl FnOnce(&mut C::State) -> R) -> R {
+        self.state
+            .write_internal_circuit_state(self.circuit.id, writer)
+    }
+}
+
 pub trait CircuitImpl: Clone + Send + Sync {
+    type State: Default + Send + Sync + 'static;
+    type Instance: Send + Sync + 'static;
+
     fn id(&self) -> ArcStaticStr;
     fn display_name(&self) -> ArcStaticStr;
 
@@ -348,7 +465,11 @@ pub trait CircuitImpl: Clone + Send + Sync {
         }
     }
 
-    fn draw(&self, ctx: &CircuitRenderingContext);
+    fn draw(&self, circuit: Option<CircuitCtx<Self>>, render: &CircuitRenderingContext);
+
+    fn create_instance(&self, circuit: &Arc<Circuit>) -> Self::Instance;
+
+    fn update_signals(&self, ctx: CircuitCtx<Self>, changed_pin: Option<usize>);
 }
 
 traitbox::traitbox! {
@@ -362,7 +483,20 @@ traitbox::traitbox! {
         fn occupies_quarter(&self, transform: CircuitTransform, qpos: Vec2usize) -> bool;
         fn describe_pins(&self, transform: CircuitTransform) -> Box<[PinDescription]>;
         fn transform_support(&self) -> CircuitTransformSupport;
-        fn draw(&self, ctx: &CircuitRenderingContext);
+    }
+
+    impl {
+        fn create_instance<C: CircuitImpl>(this: &C, circuit: &Arc<Circuit>) -> Box<dyn Any + Send + Sync> {
+            Box::new(this.create_instance(circuit))
+        }
+
+        fn update_signals<C: CircuitImpl>(this: &C, ctx: UntypedCircuitCtx, changed_pin: Option<usize>) {
+            this.update_signals(ctx.make_typed(), changed_pin);
+        }
+
+        fn draw<C: CircuitImpl>(this: &C, circuit: Option<UntypedCircuitCtx>, render: &CircuitRenderingContext) {
+            this.draw(circuit.map(|c| c.make_typed()), render);
+        }
     }
 
     trait Clone {
@@ -444,10 +578,26 @@ pub const fn rotate_pos(pos: Vec2usize, target_size: Vec2usize, dir: Direction4)
     }
 }
 
+pub struct TestCircuitInstance {
+    pin_a: Arc<CircuitPin>,
+    pin_b: Arc<CircuitPin>,
+    pin_c: Arc<CircuitPin>,
+    pin_d: Arc<CircuitPin>,
+    pin_e: Arc<CircuitPin>,
+}
+
+#[derive(Default)]
+pub struct TestCircuitState {
+    count: usize,
+}
+
 #[derive(Clone)]
 pub struct TestCircuit;
 
 impl CircuitImpl for TestCircuit {
+    type State = TestCircuitState;
+    type Instance = TestCircuitInstance;
+
     fn id(&self) -> ArcStaticStr {
         "test".into()
     }
@@ -473,8 +623,8 @@ impl CircuitImpl for TestCircuit {
         QUARTERS[qpos.y][qpos.x] != 0
     }
 
-    fn draw(&self, ctx: &CircuitRenderingContext) {
-        let size = self.size(ctx.transform);
+    fn draw(&self, circuit: Option<CircuitCtx<Self>>, render: &CircuitRenderingContext) {
+        let size = self.size(render.transform);
 
         let mut buffer = get_pooled::<ColoredTriangleBuffer>();
 
@@ -484,14 +634,14 @@ impl CircuitImpl for TestCircuit {
         {
             let pos = Vec2usize::new(x, y);
             let quarter_pos = pos * 2 + q.into_position();
-            if !self.occupies_quarter(ctx.transform, quarter_pos) {
+            if !self.occupies_quarter(render.transform, quarter_pos) {
                 continue;
             }
 
             let pos = pos.convert(|v| v as f32) + q.into_quarter_position_f32();
 
-            let tl = ctx.transform_pos(pos);
-            let br = ctx.transform_pos(pos + 0.5);
+            let tl = render.transform_pos(pos);
+            let br = render.transform_pos(pos + 0.5);
 
             let rect = Rect::from_two_pos(tl.into(), br.into());
 
@@ -502,7 +652,7 @@ impl CircuitImpl for TestCircuit {
             )
         }
 
-        ctx.paint.custom_draw(move |ctx| {
+        render.paint.custom_draw(move |ctx| {
             let mut vertexes = ColoredVertexRenderer::global(ctx.painter.gl());
             vertexes.draw(
                 ctx.painter.gl(),
@@ -510,6 +660,25 @@ impl CircuitImpl for TestCircuit {
                 buffer.deref(),
             );
         });
+
+        let count = circuit
+            .as_ref()
+            .and_then(|c| c.read_internal_state(|s| s.count));
+
+        if let Some(count) = count {
+            let font = FontId {
+                size: render.paint.screen.scale,
+                family: eframe::egui::FontFamily::Monospace,
+            };
+
+            render.paint.painter.text(
+                render.screen_rect.center(),
+                eframe::egui::Align2::CENTER_CENTER,
+                count,
+                font,
+                Color32::BLACK,
+            );
+        }
 
         // ctx.paint.painter.rect_stroke(
         //     ctx.screen_rect,
@@ -570,5 +739,23 @@ impl CircuitImpl for TestCircuit {
                 ty: FlipType::Vertical,
             }),
         }
+    }
+
+    fn create_instance(&self, circuit: &Arc<Circuit>) -> Self::Instance {
+        let pins = circuit.pins.read();
+        TestCircuitInstance {
+            pin_a: pins[0].pin.clone(),
+            pin_b: pins[1].pin.clone(),
+            pin_c: pins[2].pin.clone(),
+            pin_d: pins[3].pin.clone(),
+            pin_e: pins[4].pin.clone(),
+        }
+    }
+    fn update_signals(&self, mut ctx: CircuitCtx<Self>, changed_pin: Option<usize>) {
+        if changed_pin.is_some_and(|c| c < 4) {
+            ctx.write_internal_state(|s| s.count += 1);
+        }
+
+        ctx.set_pin_output(&ctx.instance.pin_e, WireState::Bool(true));
     }
 }
