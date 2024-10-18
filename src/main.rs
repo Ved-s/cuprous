@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{ops::Deref, sync::Arc};
 
 use app::DockedApp;
 use eframe::{
@@ -175,6 +175,14 @@ pub struct PaintContext<'a> {
     pub gl: Arc<glow::Context>,
     pub screen: Screen,
     pub style: Arc<Style>,
+}
+
+impl<'a> Deref for PaintContext<'a> {
+    type Target = Painter;
+
+    fn deref(&self) -> &Self::Target {
+        self.painter
+    }
 }
 
 pub struct CustomPaintContext<'a> {

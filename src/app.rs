@@ -5,7 +5,7 @@ use egui_dock::{DockArea, DockState, NodeIndex};
 use parking_lot::RwLock;
 
 use crate::{
-    circuits::{CircuitBlueprint, TestCircuit}, simulation::SimulationCtx, tabs::{SafeTabType, Tab, TabSerde, TabType, TabViewer}, Style
+    circuits::CircuitBlueprint, simulation::SimulationCtx, tabs::{SafeTabType, Tab, TabSerde, TabType, TabViewer}, Style
 };
 
 pub struct App {
@@ -19,7 +19,10 @@ pub struct App {
 
 impl App {
     pub fn create(cc: &CreationContext, dock_load_error: Option<ron::error::SpannedError>) -> Self {
-        let blueprints = vec![Arc::new(RwLock::new(TestCircuit.into()))];
+        let blueprints = vec![
+            Arc::new(RwLock::new(crate::circuits::test::TestCircuit.into())),
+            Arc::new(RwLock::new(crate::circuits::button::Button.into())),
+        ];
 
         Self {
             gl: cc.gl.clone().expect("started in OpenGL context"),
