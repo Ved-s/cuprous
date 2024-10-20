@@ -4,6 +4,7 @@ version = "0.2.0"
 edition = "2021"
 
 [dependencies]
+bezier-nd = "0.5.0"
 eframe = { version = "0.27.2", features = ["persistence"] }
 egui_dock = { version = "0.12.0", features = ["serde"] }
 eyre = "0.6.12"

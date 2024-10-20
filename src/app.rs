@@ -22,6 +22,7 @@ impl App {
         let blueprints = vec![
             Arc::new(RwLock::new(crate::circuits::test::TestCircuit.into())),
             Arc::new(RwLock::new(crate::circuits::button::Button.into())),
+            Arc::new(RwLock::new(crate::circuits::gates::Gate::and().into())),
         ];
 
         Self {

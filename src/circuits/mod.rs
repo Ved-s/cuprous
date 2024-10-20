@@ -15,6 +15,7 @@ use crate::{
 
 pub mod test;
 pub mod button;
+pub mod gates;
 
 pub struct Circuit {
     pub id: usize,
@@ -160,7 +161,7 @@ pub struct CircuitRenderingContext<'a> {
     pub transform: CircuitTransform,
 
     // internal for transform_pos
-    render_size: Vec2usize,
+    world_size: Vec2usize,
     angle: Option<f32>,
     flip: Option<FlipType>,
 }
@@ -194,7 +195,7 @@ impl<'a> CircuitRenderingContext<'a> {
         Self {
             paint: ctx,
             screen_rect,
-            render_size,
+            world_size: render_size,
             selection,
             transform,
             angle,
@@ -204,7 +205,7 @@ impl<'a> CircuitRenderingContext<'a> {
 
     /// Transform circuit coordinate [0..size] to screen coordinate
     pub fn transform_pos(&self, pos: Vec2f) -> Vec2f {
-        let norm = pos / self.render_size.convert(|v| v as f32);
+        let norm = pos / self.world_size.convert(|v| v as f32);
 
         let norm = match self.flip {
             None => norm,
@@ -219,6 +220,10 @@ impl<'a> CircuitRenderingContext<'a> {
         };
 
         self.screen_rect.lerp_inside(norm.into()).into()
+    }
+    
+    pub fn world_size(&self) -> Vec2usize {
+        self.world_size
     }
 }
 
@@ -418,7 +423,7 @@ impl<'a, C: CircuitImpl> CircuitCtx<'a, C> {
         pin.set_output(self.state, self.tasks, state);
     }
 
-    fn get_pin_input(&mut self, pin: &CircuitPin) -> WireState {
+    fn get_pin_input(&self, pin: &CircuitPin) -> WireState {
         pin.get_state(self.state)
     }
 

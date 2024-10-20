@@ -27,6 +27,7 @@ pub mod vertex_renderer;
 pub mod pool;
 pub mod state;
 pub mod simulation;
+pub mod path;
 
 pub const CHUNK_SIZE: usize = 16;
 pub const WIRE_WIDTH: f32 = 0.2;
