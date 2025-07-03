@@ -5,6 +5,8 @@ use eframe::{
     egui::{Align2, Color32, PaintCallback, PaintCallbackInfo, Painter, Rect, Ui},
     egui_glow,
 };
+use serde::{Deserialize, Serialize};
+use smoldata::SmolReadWrite;
 use state::WireState;
 use vector::{Vec2f, Vec2isize, Vec2usize};
 
@@ -28,7 +30,7 @@ pub mod pool;
 pub mod state;
 pub mod simulation;
 pub mod path;
-// mod io;
+pub mod io;
 
 pub const CHUNK_SIZE: usize = 16;
 pub const WIRE_WIDTH: f32 = 0.2;
@@ -42,9 +44,9 @@ fn main() -> Result<(), eframe::Error> {
     };
 
     eframe::run_native(
-        "cuprous-dev",
+        app::APP_NAME,
         options,
-        Box::new(|cc| Box::new(DockedApp::create(cc))),
+        Box::new(|cc| Ok(Box::new(DockedApp::create(cc)))),
     )
 }
 
@@ -469,7 +471,7 @@ impl Direction8 {
 }
 
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, SmolReadWrite, Serialize, Deserialize)]
 pub enum Direction4 {
     Up,
     Right,
@@ -625,6 +627,16 @@ impl Direction4Half {
             _ => unreachable!(),
         }
     }
+
+    pub const fn into_dir_isize(self) -> Vec2isize {
+        let [x, y] = match self {
+            Direction4Half::Left => [-1, 0],
+            Direction4Half::UpLeft => [-1, -1],
+            Direction4Half::Up => [0, -1],
+            Direction4Half::UpRight => [1, -1],
+        };
+        Vec2isize::new(x, y)
+    }
 }
 
 impl From<Direction4Half> for Direction8 {
@@ -693,6 +705,13 @@ impl<T> Direction4HalfArray<T> {
 
     pub fn get_mut(&mut self, dir: Direction4Half) -> &mut T {
         &mut self.0[dir.into_index()]
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (Direction4Half, &T)> {
+        self.0
+            .iter()
+            .enumerate()
+            .map(|(i, v)| (Direction4Half::from_index(i), v))
     }
 }
 

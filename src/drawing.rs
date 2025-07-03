@@ -1,8 +1,8 @@
 use std::f32::consts::TAU;
 
 use eframe::{
-    egui::{Color32, Rect, Rounding, Stroke},
-    epaint::PathShape,
+    egui::{Color32, Rect},
+    epaint::{CornerRadiusF32, PathShape, PathStroke},
 };
 
 use crate::{vector::Vec2f, vertex_renderer::{ColoredTriangleBuffer, ColoredVertex}, Direction8, PinStyle};
@@ -11,9 +11,9 @@ pub fn rotated_rect(
     rect: Rect,
     origin: Vec2f,
     angle: f32,
-    rounding: Rounding,
+    rounding: CornerRadiusF32,
     fill: Color32,
-    stroke: Stroke,
+    stroke: PathStroke,
 ) -> PathShape {
     let mut points = vec![];
     eframe::epaint::tessellator::path::rounded_rectangle(&mut points, rect, rounding);

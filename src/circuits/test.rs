@@ -110,7 +110,7 @@ impl CircuitImpl for TestCircuit {
         }
 
         if let Some(cir) = &mut circuit {
-            let blink_state = render.paint.ui.ctx().frame_nr() % 120 >= 60;
+            let blink_state = render.paint.ui.ctx().cumulative_pass_nr() % 120 >= 60;
             cir.instance
                 .pin_a
                 .set_output(cir.state, cir.tasks, WireState::Bool(blink_state));

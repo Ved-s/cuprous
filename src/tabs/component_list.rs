@@ -2,10 +2,9 @@ use std::{f32::consts::PI, ops::Deref, sync::Arc};
 
 use eframe::{
     egui::{
-        pos2, vec2, CollapsingHeader, Color32, FontSelection, Margin, Painter, Pos2, Rect,
-        Response, Rounding, Sense, Shape, Stroke, Ui, WidgetText,
+        pos2, vec2, CollapsingHeader, Color32, FontSelection, Painter, Pos2, Rect, Response, Sense, Shape, Stroke, StrokeKind, TextWrapMode, Ui, WidgetText
     },
-    epaint::PathShape,
+    epaint::{Marginf, PathShape, PathStroke},
 };
 
 use crate::{
@@ -114,14 +113,14 @@ fn selectable_icon_label(
     text: WidgetText,
     icon: &mut dyn FnMut(Rect, &mut Ui),
 ) -> Response {
-    let padding = Margin::same(2.0);
+    let padding = Marginf::same(2.0);
     let spacing = 3.0;
 
     let icon_size = FontSelection::Default.resolve(ui.style()).size + 2.0;
     let max_text_width =
         ui.available_width() - (icon_size + spacing + padding.left + padding.right);
 
-    let galley = text.into_galley(ui, Some(true), max_text_width, FontSelection::Default);
+    let galley = text.into_galley(ui, Some(TextWrapMode::Wrap), max_text_width, FontSelection::Default);
 
     let size = vec2(
         galley.size().x + spacing + icon_size,
@@ -143,9 +142,10 @@ fn selectable_icon_label(
 
         ui.painter().rect(
             rect,
-            visuals.rounding,
+            visuals.corner_radius,
             visuals.weak_bg_fill,
             visuals.bg_stroke,
+            StrokeKind::Middle,
         );
     }
 
@@ -186,14 +186,14 @@ fn wire_icon(rect: Rect, ui: &mut Ui) {
         points: rotated_rect_shape(rect1, PI * 0.25, rect1.center()),
         closed: true,
         fill: color,
-        stroke: Stroke::NONE,
+        stroke: PathStroke::NONE,
     });
 
     painter.add(PathShape {
         points: rotated_rect_shape(rect2, PI * 0.25, rect2.center()),
         closed: true,
         fill: color,
-        stroke: Stroke::NONE,
+        stroke: PathStroke::NONE,
     });
 }
 
@@ -205,12 +205,12 @@ fn selection_icon(rect: Rect, painter: &Painter, style: &Style) {
 
     let painter = painter.with_clip_rect(rect);
 
-    painter.rect_filled(rect, Rounding::ZERO, style.selection_fill);
+    painter.rect_filled(rect, 0.0, style.selection_fill);
     let rect_corners = [
         rect.left_top(),
-        rect.right_top(),
-        rect.right_bottom(),
-        rect.left_bottom(),
+        rect.right_top() - vec2(1.0, 0.0),
+        rect.right_bottom() - vec2(1.0, 1.0),
+        rect.left_bottom() - vec2(0.0, 1.0),
         rect.left_top(),
     ];
 

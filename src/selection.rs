@@ -4,8 +4,8 @@ use std::{
     marker::PhantomData,
 };
 
-use eframe::egui::{Rect, Response, Rounding, Stroke, Ui};
-use glow::{Context, HasContext};
+use eframe::egui::{CornerRadius, Rect, Response, Stroke, StrokeKind, Ui};
+use glow::{Context, HasContext, PixelUnpackData};
 
 use crate::{
     vector::Vec2f,
@@ -136,9 +136,10 @@ impl<I: SelectionImpl> Selection<I> {
 
         ctx.painter.rect(
             rect,
-            Rounding::ZERO,
+            CornerRadius::ZERO,
             ctx.style.selection_fill,
             Stroke::new(2.0, ctx.style.selection_border),
+            StrokeKind::Middle
         );
     }
 
@@ -272,7 +273,7 @@ impl SelectionRenderer {
                     0,
                     glow::RG,
                     glow::UNSIGNED_BYTE,
-                    None,
+                    PixelUnpackData::Slice(None)
                 );
                 gl.tex_parameter_i32(
                     glow::TEXTURE_2D,

@@ -45,6 +45,139 @@ impl Board {
     pub fn states(&self) -> &RwLock<BoardStateCollection> {
         &self.states
     }
+
+    pub fn save(&self) -> crate::io::Board {
+        crate::io::Board {
+            uid: self.uid,
+            wires: self
+                .wires
+                .read()
+                .inner
+                .iter()
+                .map(|o| o.as_ref().map(|w| w.save()))
+                .collect(),
+            circuits: self
+                .circuits
+                .read()
+                .inner
+                .iter()
+                .map(|o| o.as_ref().map(|c| c.save()))
+                .collect(),
+            states: self.states.read().save(),
+        }
+    }
+
+    pub fn preload(data: &crate::io::Board, sim: Arc<SimulationCtx>) -> Arc<Self> {
+        let this = Arc::new(Board {
+            uid: data.uid,
+            wires: RwLock::new(Vec::with_capacity(data.wires.len()).into()),
+            circuits: RwLock::new(Vec::with_capacity(data.circuits.len()).into()),
+            simulation: sim,
+            editor: Default::default(),
+            states: RwLock::new(BoardStateCollection::uninitialized()),
+        });
+
+        this.states.write().preload(&data.states, this.clone());
+
+        this
+    }
+
+    pub fn load_stage1_shallow(
+        self: &Arc<Self>,
+        data: &crate::io::Board,
+        blueprints: &[Arc<RwLock<CircuitBlueprint>>],
+    ) {
+        let mut wires = self.wires.write();
+
+        for (i, wire_data) in data.wires.iter().enumerate() {
+            let Some(wire_data) = wire_data else {
+                continue;
+            };
+
+            let wire = Wire {
+                id: i,
+                points: Arc::new(RwLock::new(
+                    wire_data
+                        .points
+                        .iter()
+                        .map(|(pos, dirs)| {
+                            (
+                                *pos,
+                                WirePoint {
+                                    directions: Direction4HalfArray(*dirs),
+                                },
+                            )
+                        })
+                        .collect(),
+                )),
+                connected_pins: Default::default(),
+            };
+
+            wires.set(i, Arc::new(wire));
+        }
+
+        drop(wires);
+
+        let mut circuits = self.circuits.write();
+
+        for (i, circuit_data) in data.circuits.iter().enumerate() {
+            let Some(circuit_data) = circuit_data else {
+                continue;
+            };
+            let circuit = Circuit::preload(i, self.clone(), circuit_data, blueprints);
+            circuits.set(i, Arc::new(circuit));
+        }
+
+        drop(circuits);
+
+        self.states.read().load_stage1_shallow(&data.states);
+    }
+
+    pub fn load_stage2_circuits(&self, data: &crate::io::Board) {
+        let circuits = self.circuits.read();
+
+        for (i, circuit_data) in data.circuits.iter().enumerate() {
+            let Some(circuit_data) = circuit_data else {
+                continue;
+            };
+
+            let circuit = circuits.get(i).expect("shallow-loaded circuit");
+            circuit.load_finish(circuit_data);
+        }
+
+        let wires = self.wires.read();
+        for wire in wires.iter() {
+            let Some(wire_data) = data.wires.get(wire.id).and_then(Option::as_ref) else {
+                continue;
+            };
+
+            let mut connected_pins = wire.connected_pins.write();
+
+            for pin_id in &wire_data.connected_pins {
+                let pin = circuits.get(pin_id.circuit).and_then(|c| {
+                    c.pins
+                        .read()
+                        .iter()
+                        .find(|p| p.desc.id == pin_id.name)
+                        .map(|p| p.pin.clone())
+                });
+                let Some(pin) = pin else {
+                    // todo: error reporting
+                    continue;
+                };
+                *pin.wire.write() = Some(wire.clone());
+                connected_pins.push(pin);
+            }
+        }
+
+        drop(circuits);
+
+        self.states.read().load_stage2_circuits(&data.states);
+    }
+
+    pub fn load_stage3_circuit_states(&self, data: &crate::io::Board) {
+        self.states.read().load_stage3_circuit_states(&data.states);
+    }
 }
 
 impl Board {
@@ -60,7 +193,7 @@ impl Board {
             circuits: RwLock::new(vec![].into()),
             simulation,
             editor: Mutex::new(None),
-            states: RwLock::new(BoardStateCollection::new()),
+            states: RwLock::new(BoardStateCollection::uninitialized()),
         });
 
         this.states.write().initialize(this.clone());
@@ -193,17 +326,25 @@ impl Wire {
             .retain(|p| !(p.circuit.id == circuit_id && p.id == pin_id));
     }
 
-    // pub fn save(&self) -> crate::io::Wire {
-    //     crate::io::Wire {
-    //         id: self.id,
-    //         points: self
-    //             .points
-    //             .read()
-    //             .iter()
-    //             .map(|(pos, point)| (*pos, point.directions.0))
-    //             .collect(),
-    //     }
-    // }
+    pub fn save(&self) -> crate::io::Wire {
+        crate::io::Wire {
+            points: self
+                .points
+                .read()
+                .iter()
+                .map(|(pos, point)| (*pos, point.directions.0))
+                .collect(),
+            connected_pins: self
+                .connected_pins
+                .read()
+                .iter()
+                .map(|p| crate::io::PinId {
+                    circuit: p.circuit.id,
+                    name: p.circuit.pins.read()[p.id].desc.id.clone(),
+                })
+                .collect(),
+        }
+    }
 }
 
 #[derive(Default)]

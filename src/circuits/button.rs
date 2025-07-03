@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use eframe::egui::{Color32, CursorIcon, PointerButton, Rounding, Sense, Stroke};
+use eframe::egui::{Color32, CursorIcon, PointerButton, Sense, Stroke, StrokeKind};
+use smoldata::{raw::RawValue, SmolReadWrite};
 
 use crate::{state::WireState, str::ArcStaticStr, vector::Vec2usize, Direction4, Direction8};
 
@@ -12,7 +13,7 @@ use super::{
 #[derive(Clone)]
 pub struct Button;
 
-#[derive(Default)]
+#[derive(Default, SmolReadWrite)]
 pub struct ButtonState {
     state: bool,
 }
@@ -68,9 +69,10 @@ impl CircuitImpl for Button {
 
         render.paint.rect(
             render.screen_rect.expand(render.paint.screen.scale * -0.5),
-            Rounding::same(render.paint.screen.scale * 0.25),
+            render.paint.screen.scale * 0.25,
             Color32::from_gray(64),
-            Stroke::new(0.05 * render.paint.screen.scale, Color32::from_gray(92))
+            Stroke::new(0.05 * render.paint.screen.scale, Color32::from_gray(92)),
+            StrokeKind::Middle,
         );
 
         let color_mul = if semi_transparent { 0.5 } else { 1.0 };
@@ -153,5 +155,18 @@ impl CircuitImpl for Button {
     fn update_signals(&self, mut circuit: CircuitCtx<Self>, _: Option<usize>) {
         let state = circuit.read_internal_state(|s| s.state).unwrap_or(false);
         circuit.set_pin_output(&circuit.instance.pin, WireState::Bool(state));
+    }
+
+    fn save_state(&self, _circuit: &Circuit, _instance: &Self::Instance, state: &Self::State) -> Option<smoldata::raw::RawValue> {
+        RawValue::write_object(state).ok()
+    }
+
+    fn load_state(
+            &self,
+            _circuit: &Arc<Circuit>,
+            _instance: &Self::Instance,
+            data: &RawValue,
+        ) -> Result<Self::State, eyre::Report> {
+        data.read_object().map_err(Into::into)
     }
 }

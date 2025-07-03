@@ -1,8 +1,8 @@
-
 use std::{any::Any, f32::consts::TAU, ops::Deref, sync::Arc};
 
 use eframe::egui::Rect;
 use parking_lot::{Mutex, RwLock};
+use smoldata::raw::RawValue;
 
 use crate::{
     board::{Board, Wire},
@@ -13,9 +13,9 @@ use crate::{
     Direction4, Direction8, PaintContext,
 };
 
-pub mod test;
 pub mod button;
 pub mod gates;
+pub mod test;
 
 pub struct Circuit {
     pub id: usize,
@@ -23,6 +23,87 @@ pub struct Circuit {
     pub info: RwLock<CircuitInfo>,
     pub imp: RwLock<CircuitImplData>,
     pub pins: RwLock<Box<[RealizedPin]>>,
+}
+
+impl Circuit {
+    pub fn save(&self) -> crate::io::Circuit {
+        let imp = self.imp.read();
+        let info = self.info.read();
+
+        crate::io::Circuit {
+            id: imp.imp.id(),
+            pos: info.pos,
+            dir: info.transform.dir,
+            flip: info.transform.flip,
+            instance: imp.imp.save_instance(self, &imp.instance),
+        }
+    }
+
+    pub fn preload(
+        id: usize,
+        board: Arc<Board>,
+        circuit_data: &crate::io::Circuit,
+        blueprints: &[Arc<RwLock<CircuitBlueprint>>],
+    ) -> Circuit {
+        let blueprint = blueprints.iter().find(|b| b.read().id == circuit_data.id);
+        let Some(blueprint) = blueprint else {
+            todo!("unloaded circuit");
+        };
+
+        let blueprint = blueprint.read();
+
+        let info = CircuitInfo {
+            pos: circuit_data.pos,
+            render_size: 0.into(), // calculated later
+            size: 0.into(),        // calculated later
+            transform: CircuitTransform {
+                support: blueprint.imp.transform_support(),
+                dir: circuit_data.dir,
+                flip: circuit_data.flip,
+            },
+        };
+
+        let imp = CircuitImplData {
+            imp: blueprint.imp.clone(),
+            instance: Box::new(()), // loaded later
+        };
+
+        Self {
+            id,
+            board,
+            info: RwLock::new(info),
+            imp: RwLock::new(imp),
+            pins: RwLock::new(Box::new([])), // loaded later
+        }
+    }
+
+    pub fn load_finish(self: &Arc<Self>, data: &crate::io::Circuit) {
+        let mut imp = self.imp.write();
+        let mut info = self.info.write();
+
+        info.render_size = imp.imp.size(info.transform);
+        info.size = info
+            .transform
+            .transform_size(info.render_size, Some(TransformSupport::Automatic));
+
+        let pins = imp.imp.describe_pins(info.transform);
+        *self.pins.write() = pins.into_vec().into_iter().enumerate().map(|(id, desc)| RealizedPin {
+            pin: Arc::new(CircuitPin {
+                id,
+                ty: desc.ty,
+                circuit: self.clone(),
+                wire: RwLock::new(None),
+            }),
+            desc,
+        }).collect();
+
+        // todo: error reporting
+        imp.instance = data
+            .instance
+            .as_ref()
+            .and_then(|d| imp.imp.load_instance(self, d).ok())
+            .unwrap_or_else(|| imp.imp.create_instance(self));
+    }
 }
 
 #[derive(Clone)]
@@ -221,7 +302,7 @@ impl<'a> CircuitRenderingContext<'a> {
 
         self.screen_rect.lerp_inside(norm.into()).into()
     }
-    
+
     pub fn world_size(&self) -> Vec2usize {
         self.world_size
     }
@@ -238,6 +319,24 @@ pub enum FlipType {
     Vertical,
     Horizontal,
     Both,
+}
+
+impl FlipType {
+    fn has_vertical(self) -> bool {
+        match self {
+            FlipType::Vertical => true,
+            FlipType::Horizontal => false,
+            FlipType::Both => true,
+        }
+    }
+
+    fn has_horizontal(self) -> bool {
+        match self {
+            FlipType::Vertical => false,
+            FlipType::Horizontal => true,
+            FlipType::Both => true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -305,9 +404,19 @@ impl CircuitTransform {
 
         let flipped_pos = match flip {
             None => pos,
-            Some(FlipType::Vertical) => [pos.x, size.y - pos.y - 1].into(),
-            Some(FlipType::Horizontal) => [size.x - pos.x - 1, pos.y].into(),
-            Some(FlipType::Both) => [size.x - pos.x - 1, size.y - pos.y - 1].into(),
+            Some(ft) => {
+                let x = if ft.has_horizontal() && size.x > 1 {
+                    (size.x - 1) - pos.x
+                } else {
+                    pos.x
+                };
+                let y = if ft.has_vertical() && size.y > 1 {
+                    (size.y - 1) - pos.y
+                } else {
+                    pos.y
+                };
+                [x, y].into()
+            }
         };
 
         let default_dir = self.support.rotation_default_dir(support);
@@ -347,9 +456,19 @@ impl CircuitTransform {
 
         match flip {
             None => rotated_pos,
-            Some(FlipType::Vertical) => [rotated_pos.x, size.y - rotated_pos.y - 1].into(),
-            Some(FlipType::Horizontal) => [size.x - rotated_pos.x - 1, rotated_pos.y].into(),
-            Some(FlipType::Both) => [size.x - rotated_pos.x - 1, size.y - pos.y - 1].into(),
+            Some(ft) => {
+                let x = if ft.has_horizontal() && size.x > 1 {
+                    (size.x - 1) - rotated_pos.x
+                } else {
+                    rotated_pos.x
+                };
+                let y = if ft.has_vertical() && size.y > 1 {
+                    (size.y - 1) - rotated_pos.y
+                } else {
+                    rotated_pos.y
+                };
+                [x, y].into()
+            }
         }
     }
 
@@ -368,9 +487,34 @@ impl CircuitTransform {
         match default_dir {
             None => flipped,
             Some(default_dir) => {
-                let dir = self.dir.rotated_counterclockwise_by(default_dir);
-                flipped.rotated_clockwise_by(dir.into())
+                let default_rotated = self.dir.rotated_counterclockwise_by(default_dir);
+                flipped.rotated_clockwise_by(default_rotated.into())
             }
+        }
+    }
+
+    pub fn backtransform_dir(
+        &self,
+        dir: Direction8,
+        support: Option<TransformSupport>,
+    ) -> Direction8 {
+        let default_dir = self.support.rotation_default_dir(support);
+
+        let dir = match default_dir {
+            None => dir,
+            Some(default_dir) => {
+                let default_rotated = self.dir.rotated_counterclockwise_by(default_dir);
+                dir.rotated_counterclockwise_by(default_rotated.into())
+            }
+        };
+
+        let flip = self.flip.then(|| self.support.flip_type(support)).flatten();
+
+        match flip {
+            None => dir,
+            Some(FlipType::Vertical) => dir.flip_by(Direction8::Left),
+            Some(FlipType::Horizontal) => dir.flip_by(Direction8::Up),
+            Some(FlipType::Both) => dir.inverted(),
         }
     }
 
@@ -472,6 +616,41 @@ pub trait CircuitImpl: Clone + Send + Sync {
     fn create_instance(&self, circuit: &Arc<Circuit>) -> Self::Instance;
 
     fn update_signals(&self, ctx: CircuitCtx<Self>, changed_pin: Option<usize>);
+
+    fn save_instance(&self, circuit: &Circuit, instance: &Self::Instance) -> Option<RawValue> {
+        let _ = (circuit, instance);
+        None
+    }
+
+    fn save_state(
+        &self,
+        circuit: &Circuit,
+        instance: &Self::Instance,
+        state: &Self::State,
+    ) -> Option<RawValue> {
+        let _ = (circuit, instance, state);
+        None
+    }
+
+    fn load_instance(
+        &self,
+        circuit: &Arc<Circuit>,
+        data: &RawValue,
+    ) -> Result<Self::Instance, eyre::Report> {
+        let _ = data;
+        Ok(self.create_instance(circuit))
+    }
+
+    fn load_state(
+        &self,
+        circuit: &Arc<Circuit>,
+        instance: &Self::Instance,
+        data: &RawValue,
+    ) -> Result<Self::State, eyre::Report> {
+        let _ = (circuit, instance, data);
+
+        Ok(Self::State::default())
+    }
 }
 
 traitbox::traitbox! {
@@ -498,6 +677,22 @@ traitbox::traitbox! {
 
         fn draw<C: CircuitImpl>(this: &C, circuit: Option<UntypedCircuitCtx>, render: &CircuitRenderingContext) {
             this.draw(circuit.map(|c| c.make_typed()), render);
+        }
+
+        fn save_instance<C: CircuitImpl>(this: &C, circuit: &Circuit, instance: &Box<dyn Any + Send + Sync>) -> Option<RawValue> {
+            this.save_instance(circuit, instance.downcast_ref()?)
+        }
+
+        fn save_state<C: CircuitImpl>(this: &C, circuit: &Circuit, instance: &Box<dyn Any + Send + Sync>, state: &Box<dyn Any + Send + Sync>) -> Option<RawValue> {
+            this.save_state(circuit, instance.downcast_ref()?, state.downcast_ref()?)
+        }
+
+        fn load_instance<C: CircuitImpl>(this: &C, circuit: &Arc<Circuit>, data: &RawValue) -> Result<Box<dyn Any + Send + Sync>, eyre::Report> {
+            this.load_instance(circuit, data).map(|i| Box::new(i) as Box<_>)
+        }
+
+        fn load_state<C: CircuitImpl>(this: &C, circuit: &Arc<Circuit>, instance: &Box<dyn Any + Send + Sync>, data: &RawValue) -> Result<Box<dyn Any + Send + Sync>, eyre::Report> {
+            this.load_state(circuit, instance.downcast_ref().expect("correct circuit instance"), data).map(|i| Box::new(i) as Box<_>)
         }
     }
 
@@ -577,5 +772,57 @@ pub const fn rotate_pos(pos: Vec2usize, target_size: Vec2usize, dir: Direction4)
         Direction4::Left => Vec2usize::new(pos.y, target_size.y - pos.x - 1),
         Direction4::Down => Vec2usize::new(target_size.x - pos.x - 1, target_size.y - pos.y - 1),
         Direction4::Right => Vec2usize::new(target_size.x - pos.y - 1, pos.x),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_transforms() {
+        for start_dir in Direction4::ALL {
+            for flip in [FlipType::Horizontal, FlipType::Vertical, FlipType::Both] {
+                let support = CircuitTransformSupport {
+                    rotation: Some(CircuitRotationSupport {
+                        support: TransformSupport::Automatic,
+                        default_dir: start_dir,
+                    }),
+                    flip: Some(CircuitFlipSupport {
+                        support: TransformSupport::Automatic,
+                        ty: flip,
+                    }),
+                };
+
+                for dir in Direction4::ALL {
+                    for flip in [false, true] {
+                        let tr = CircuitTransform { support, dir, flip };
+
+                        for dir2 in Direction8::ALL {
+                            let int = tr.transform_dir(dir2, None);
+                            assert_eq!(
+                                tr.backtransform_dir(int, None),
+                                dir2,
+                                "retransform {dir:?} through {tr:?}, intermediate {int:?}"
+                            );
+                        }
+
+                        let size = Vec2usize::new(10, 10);
+
+                        for x in 0..10 {
+                            for y in 0..10 {
+                                let pos = Vec2usize::new(x, y);
+                                let int = tr.transform_pos(size, pos, None);
+                                assert_eq!(
+                                    tr.backtransform_pos(size, int, None),
+                                    pos,
+                                    "retransform {pos:?} through {tr:?}, intermediate {int:?}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }

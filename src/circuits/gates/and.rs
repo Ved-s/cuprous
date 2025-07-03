@@ -1,6 +1,6 @@
 use std::ops::Div;
 
-use eframe::{egui::{Color32, Stroke}, epaint::PathShape};
+use eframe::{egui::Color32, epaint::{PathShape, PathStroke}};
 
 use crate::{circuits::CircuitRenderingContext, path::{Path, PointPath}};
 
@@ -55,7 +55,7 @@ impl GateImpl for And {
             points,
             closed: true,
             fill: fill_color,
-            stroke: Stroke::new(0.15 * ctx.paint.screen.scale, border_color),
+            stroke: PathStroke::new(0.15 * ctx.paint.screen.scale, border_color),
         };
 
         ctx.paint.painter.add(path);

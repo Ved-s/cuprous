@@ -5,18 +5,20 @@ edition = "2021"
 
 [dependencies]
 bezier-nd = "0.5.0"
-eframe = { version = "0.27.2", features = ["persistence"] }
-egui_dock = { version = "0.12.0", features = ["serde"] }
+eframe = { version = "0.31.1", features = ["persistence"] }
+egui_dock = { version = "0.16.0", features = ["serde"] }
 eyre = "0.6.12"
 geo-nd = "0.5.0"
 getrandom = "0.2.15"
-glow = "0.13.1"
+glow = "0.16.0"
 num-traits = "0.2.19"
 parking_lot = { version = "0.12.3", features = ["arc_lock", "serde"] }
 paste = "1.0.15"
 ron = "0.8.1"
 serde = { version = "1.0.203", features = ["derive"] }
 thiserror = "1.0.63"
+directories-next = "2.0.0"
+egui_extras = "0.31.1"
 
 traitbox = { path = "crates/traitbox" }
-smoldata = { git = "https://github.com/Ved-s/smoldata.git" }
+smoldata = { git = "https://github.com/Ved-s/smoldata.git", rev = "8d0f8572713f66e389598a61611e08c880500b70" }

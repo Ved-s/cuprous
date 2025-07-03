@@ -1,6 +1,7 @@
 use std::{fmt::{Debug, Display}, ops::Deref, sync::Arc};
 
 use serde::{Deserialize, Serialize};
+use smoldata::{reader::{ReadError, UnexpectedValueResultExt}, SmolRead, SmolWrite};
 
 pub type ArcStaticStr = ArcRefStr<'static>;
 
@@ -48,6 +49,20 @@ impl<'a> From<ArcRefStr<'a>> for Arc<str> {
     }
 }
 
+impl std::hash::Hash for ArcRefStr<'_> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.deref().hash(state);
+    }
+}
+
+impl<T: Deref<Target = str>> PartialEq<T> for ArcRefStr<'_> {
+    fn eq(&self, other: &T) -> bool {
+        self.deref().eq(other.deref())
+    }
+}
+
+impl Eq for ArcRefStr<'_> {}
+
 impl Serialize for ArcRefStr<'_> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -83,5 +98,31 @@ impl Debug for ArcRefStr<'_> {
             },
         }
         
+    }
+}
+
+impl<'a> From<ArcRefStr<'a>> for smoldata::str::RefArcStr<'a> {
+    fn from(val: ArcRefStr<'a>) -> Self {
+        match val {
+            ArcRefStr::Ref(v) => smoldata::str::RefArcStr::Str(v),
+            ArcRefStr::Arc(v) => smoldata::str::RefArcStr::Arc(v),
+        }
+    }
+}
+
+impl SmolWrite for ArcRefStr<'_> {
+    fn write(&self, writer: smoldata::writer::ValueWriter) -> std::io::Result<()> {
+        writer.write_string(self.clone())
+    }
+}
+
+impl SmolRead for ArcRefStr<'_> {
+    fn read(reader: smoldata::reader::ValueReader) -> smoldata::reader::ReadResult<Self> {
+        let str = reader.read()?.take_string().with_type_name_of::<Self>().map_err(ReadError::from)?;
+        Ok(match str.read()? {
+            smoldata::str::SdString::Empty => Self::Ref(""),
+            smoldata::str::SdString::Arc(a) => Self::Arc(a),
+            smoldata::str::SdString::Owned(v) => Self::Arc(v.into()),
+        })
     }
 }

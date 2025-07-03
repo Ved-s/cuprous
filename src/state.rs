@@ -1,5 +1,5 @@
 use std::{
-    any::Any,
+    any::{type_name, Any},
     collections::{HashSet, VecDeque},
     hash::{DefaultHasher, Hasher},
     ops::{Deref, DerefMut},
@@ -8,6 +8,7 @@ use std::{
 };
 
 use parking_lot::RwLock;
+use smoldata::{reader::ReadError, SmolRead, SmolReadWrite, SmolWrite};
 
 use crate::{
     board::{Board, Wire},
@@ -56,6 +57,55 @@ impl WireState {
     }
 }
 
+impl SmolWrite for WireState {
+    fn write(&self, writer: smoldata::writer::ValueWriter) -> std::io::Result<()> {
+        match self {
+            WireState::None => writer.write_none(),
+            WireState::Bool(b) => writer.write_primitive(*b),
+            WireState::Error => writer.write_unit_variant("Error"),
+        }
+    }
+}
+
+impl SmolRead for WireState {
+    fn read(reader: smoldata::reader::ValueReader) -> smoldata::reader::ReadResult<Self> {
+        let read = reader.read()?;
+        match read {
+            smoldata::reader::ValueReading::Primitive(smoldata::reader::Primitive::Bool(b)) => {
+                Ok(Self::Bool(b))
+            }
+            smoldata::reader::ValueReading::Option(None) => Ok(Self::None),
+            smoldata::reader::ValueReading::Enum(er) => {
+                let (name, ty) = er.read_variant()?;
+                match name.deref() {
+                    "Error" => {
+                        ty.take_unit_variant().map_err(|e| {
+                            ReadError::from(e.with_variant_name_of::<Self>("Error"))
+                        })?;
+                        Ok(Self::Error)
+                    }
+                    _ => {
+                        let err = ReadError::UnexpectedEnumVariant {
+                            name,
+                            type_name: type_name::<Self>(),
+                        };
+                        Err(err.into())
+                    }
+                }
+            }
+            rest => {
+                let err = smoldata::reader::UnexpectedValueError {
+                    found: rest.ty(),
+                    expected: smoldata::reader::ValueTypeRequirement::Custom(
+                        "None, Bool or Error enum".into(),
+                    ),
+                };
+                Err(ReadError::from(err.with_type_name_of::<Self>()).into())
+            }
+        }
+    }
+}
+
 pub struct BoardState {
     id: usize,
     wires: RwLock<Vec<WireState>>,
@@ -81,6 +131,106 @@ impl BoardState {
 
     pub fn board(&self) -> &Arc<Board> {
         &self.board
+    }
+
+    pub fn save(&self) -> crate::io::BoardState {
+        let wires = self.board.wires().read();
+        let circuits = self.board.circuits().read();
+
+        crate::io::BoardState {
+            wires: self
+                .wires
+                .read()
+                .iter()
+                .enumerate()
+                .map(|(i, v)| match wires.get(i).is_some() {
+                    true => v.clone(),
+                    false => WireState::None,
+                })
+                .collect(),
+            circuits: self
+                .circuits
+                .read()
+                .iter()
+                .enumerate()
+                .map(|(i, v)| {
+                    let circuit = circuits.get(i)?;
+                    let pins = circuit.pins.read();
+
+                    Some(crate::io::CircuitState {
+                        pins: v
+                            .pins
+                            .iter()
+                            .enumerate()
+                            .take(pins.len())
+                            .map(|(i, v)| (pins[i].desc.id.clone(), v.clone()))
+                            .collect(),
+                        internal: {
+                            let int = v.internal.read();
+                            int.as_ref().and_then(|int| {
+                                let imp = circuit.imp.read();
+                                imp.imp.save_state(circuit, &imp.instance, int)
+                            })
+                        },
+                    })
+                })
+                .collect(),
+            sim: self.sim.read().save(),
+        }
+    }
+
+    fn load_stage1_shallow(&self, data: &crate::io::BoardState) {
+        self.wires.write().clone_from(&data.wires);
+
+        self.sim.write().load(&data.sim);
+    }
+
+    fn load_stage2_circuits(&self, data: &crate::io::BoardState) {
+        let board_circuits = self.board.circuits();
+        let board_circuits = board_circuits.read();
+        let mut circuits = self.circuits.write();
+        for (i, circuit_data) in data.circuits.iter().enumerate() {
+            let Some(circuit_data) = circuit_data else {
+                continue;
+            };
+
+            let board_circuit = board_circuits.get(i).expect("loaded circuits");
+
+            let pins = board_circuit.pins.read().iter().map(|p| {
+                circuit_data.pins.get(&p.desc.id).cloned().unwrap_or_default()
+            }).collect();
+            
+            let circuit = CircuitState {
+                pins,
+                internal: Default::default(),
+            };
+            
+            circuits.set(i, circuit);
+        };
+    }
+
+    fn load_stage3_circuit_states(&self, data: &crate::io::BoardState) {
+        let board_circuits = self.board.circuits();
+        let board_circuits = board_circuits.read();
+        let circuits = self.circuits.read();
+        for (i, circuit_data) in data.circuits.iter().enumerate() {
+            let Some(circuit_data) = circuit_data else {
+                continue;
+            };
+
+            let Some(state_data) = &circuit_data.internal else {
+                continue;
+            };
+
+            let board_circuit = board_circuits.get(i).expect("loaded circuits");
+            let circuit = circuits.get(i).expect("loaded circuits");
+
+            let imp = board_circuit.imp.read();
+
+            // todo: errors
+            let state = imp.imp.load_state(board_circuit, &imp.instance, state_data).ok();
+            *circuit.internal.write() = state;
+        };
     }
 }
 
@@ -413,10 +563,7 @@ impl UpdateTaskPool {
     }
 
     pub fn add_circuit_task(&mut self, id: usize, changed_pin: Option<usize>) {
-        self.add(CircuitUpdateTask {
-            id,
-            changed_pin
-        })
+        self.add(CircuitUpdateTask { id, changed_pin })
     }
 
     pub fn add(&mut self, task: impl Into<UpdateTask>) {
@@ -449,7 +596,13 @@ impl UpdateTaskPool {
             },
             UpdateTask::Circuit(CircuitUpdateTask { id, changed_pin }) => match changed_pin {
                 Some(_) => {
-                    if self.0.contains(&CircuitUpdateTask { id, changed_pin: None }.into()) {
+                    if self.0.contains(
+                        &CircuitUpdateTask {
+                            id,
+                            changed_pin: None,
+                        }
+                        .into(),
+                    ) {
                         return;
                     }
                 }
@@ -473,13 +626,13 @@ impl UpdateTaskPool {
     }
 }
 
-#[derive(Clone, Copy, Hash, PartialEq, Eq)]
+#[derive(Clone, Copy, Hash, PartialEq, Eq, SmolReadWrite)]
 pub struct WireUpdateTask {
     pub id: usize,
     pub force_pin_updates: bool,
 }
 
-#[derive(Clone, Copy, Hash, PartialEq, Eq)]
+#[derive(Clone, Copy, Hash, PartialEq, Eq, SmolReadWrite)]
 pub struct CircuitUpdateTask {
     pub id: usize,
     pub changed_pin: Option<usize>,
@@ -510,6 +663,20 @@ pub struct BoardStateSimulationCtx {
     // tmp_circuits: VecDeque<(usize, Option<usize>)>,
 }
 
+impl BoardStateSimulationCtx {
+    fn save(&self) -> crate::io::BoardStateSimulation {
+        crate::io::BoardStateSimulation {
+            wires: self.wires.iter().cloned().collect(),
+            circuits: self.circuits.iter().cloned().collect(),
+        }
+    }
+
+    fn load(&mut self, data: &crate::io::BoardStateSimulation) {
+        self.wires = data.wires.iter().cloned().collect();
+        self.circuits = data.circuits.iter().cloned().collect();
+    }
+}
+
 pub struct BoardStateCollection {
     main: Option<Arc<BoardState>>,
     states: FixedVec<Arc<BoardState>>,
@@ -524,7 +691,7 @@ impl BoardStateCollection {
         self.main_state().board()
     }
 
-    pub(crate) fn new() -> Self {
+    pub(crate) fn uninitialized() -> Self {
         Self {
             main: None,
             states: vec![].into(),
@@ -571,6 +738,66 @@ impl BoardStateCollection {
     pub fn add_tasks(&self, tasks: &UpdateTaskPool) {
         for state in self.iter() {
             state.add_tasks(&mut tasks.iter(), true)
+        }
+    }
+
+    pub fn save(&self) -> crate::io::BoardStates {
+        crate::io::BoardStates {
+            main: self.main_state().save(),
+            states: self
+                .states
+                .inner
+                .iter()
+                .map(|s| s.as_ref().map(|s| s.save()))
+                .collect(),
+        }
+    }
+
+    pub fn preload(&mut self, data: &crate::io::BoardStates, board: Arc<Board>) {
+        self.main = Some(BoardState::new(board.clone(), 0));
+        self.states = FixedVec::from_option_vec(
+            data.states
+                .iter()
+                .enumerate()
+                .map(|(i, v)| v.as_ref().map(|_| BoardState::new(board.clone(), i + 1)))
+                .collect::<Vec<Option<_>>>(),
+        );
+    }
+
+    pub fn load_stage1_shallow(&self, data: &crate::io::BoardStates) {
+        self.main
+            .as_ref()
+            .expect("preloaded state collection")
+            .load_stage1_shallow(&data.main);
+        for (i, state_data) in data.iter().enumerate() {
+            let Some(state_data) = state_data else {
+                continue;
+            };
+
+            let state = self.get(i).expect("preloaded state collection");
+            state.load_stage1_shallow(state_data);
+        }
+    }
+
+    pub fn load_stage2_circuits(&self, data: &crate::io::BoardStates) {
+        for (i, state_data) in data.iter().enumerate() {
+            let Some(state_data) = state_data else {
+                continue;
+            };
+
+            let state = self.get(i).expect("preloaded state collection");
+            state.load_stage2_circuits(state_data);
+        }
+    }
+
+    pub fn load_stage3_circuit_states(&self, data: &crate::io::BoardStates) {
+        for (i, state_data) in data.iter().enumerate() {
+            let Some(state_data) = state_data else {
+                continue;
+            };
+
+            let state = self.get(i).expect("preloaded state collection");
+            state.load_stage3_circuit_states(state_data);
         }
     }
 }

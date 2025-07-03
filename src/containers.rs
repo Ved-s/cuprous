@@ -42,7 +42,7 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for FixedVec<T> {
     }
 }
 
-impl<T: Default> Default for FixedVec<T> {
+impl<T> Default for FixedVec<T> {
     fn default() -> Self {
         Self::new()
     }

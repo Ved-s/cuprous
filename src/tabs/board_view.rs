@@ -9,10 +9,9 @@ use std::{
 
 use eframe::{
     egui::{
-        remap_clamp, vec2, Align, Align2, Color32, FontId, Key, PointerButton, Rect, Response,
-        Rounding, Sense, Stroke, TextStyle, Ui, WidgetText,
+        remap_clamp, vec2, Align, Align2, Color32, FontId, Key, PointerButton, Rect, Response, Sense, Stroke, StrokeKind, TextStyle, TextWrapMode, Ui, WidgetText
     },
-    epaint::TextShape,
+    epaint::{CornerRadiusF32, PathStroke, TextShape},
 };
 use num_traits::Zero;
 use parking_lot::{Mutex, RwLock};
@@ -114,6 +113,12 @@ impl TabImpl for BoardView {
             Sense::click_and_drag(),
         );
 
+        if interaction.hovered() && ui.input(|input| input.key_pressed(Key::F8)) {
+            let mut editor = self.editor.write();
+            let board = editor.board().clone();
+            *editor = BoardEditor::new(board);
+        }
+
         let dragged = app.selected_item.is_none()
             && interaction.dragged_by(PointerButton::Primary)
                 || interaction.dragged_by(PointerButton::Secondary);
@@ -189,8 +194,9 @@ impl TabImpl for BoardView {
         if self.fixed_screen_pos.is_some() {
             ui.painter().rect_stroke(
                 screen.screen_rect,
-                Rounding::ZERO,
+                0.0,
                 Stroke::new(1.0, Color32::RED),
+                StrokeKind::Middle,
             );
         }
 
@@ -851,7 +857,7 @@ impl BoardView {
 
                 let text = WidgetText::from(text);
                 let galley =
-                    text.into_galley(ctx.ui, Some(false), f32::INFINITY, TextStyle::Monospace);
+                    text.into_galley(ctx.ui, Some(TextWrapMode::Truncate), f32::INFINITY, TextStyle::Monospace);
 
                 let align = Vector2::<Align>::from(dir.into_align2().0);
                 let align = align.convert(|v| v.to_factor());
@@ -878,7 +884,7 @@ impl BoardView {
 
                 ctx.painter.rect_filled(
                     Rect::from_min_size(pos.into(), galley.size()).expand(1.0),
-                    Rounding::ZERO,
+                    0.0,
                     Color32::BLACK.gamma_multiply(0.4),
                 );
 
@@ -900,7 +906,7 @@ impl BoardView {
                 };
                 let text = WidgetText::from(text);
                 let galley =
-                    text.into_galley(ctx.ui, Some(false), f32::INFINITY, TextStyle::Monospace);
+                    text.into_galley(ctx.ui, Some(TextWrapMode::Truncate), f32::INFINITY, TextStyle::Monospace);
 
                 let pos = screen_pos + (ctx.screen.scale / 2.0) - (galley.size() / 2.0);
 
@@ -926,7 +932,7 @@ impl BoardView {
 
                 ctx.painter.rect_filled(
                     Rect::from_min_size(pos.into(), galley.size()).expand(1.0),
-                    Rounding::ZERO,
+                    0.0,
                     Color32::BLACK.gamma_multiply(0.4),
                 );
 
@@ -962,7 +968,7 @@ impl BoardView {
 
                 let text = WidgetText::from(format!("{}", circuit.id));
                 let galley =
-                    text.into_galley(ctx.ui, Some(false), f32::INFINITY, TextStyle::Monospace);
+                    text.into_galley(ctx.ui, Some(TextWrapMode::Truncate), f32::INFINITY, TextStyle::Monospace);
 
                 let correct_circuit = editor
                     .board()
@@ -1001,7 +1007,7 @@ impl BoardView {
 
                 ctx.painter.rect_filled(
                     Rect::from_min_size(text_pos.into(), galley.size()).expand(1.0),
-                    Rounding::ZERO,
+                    0.0,
                     Color32::BLACK.gamma_multiply(0.4),
                 );
 
@@ -1023,7 +1029,7 @@ impl BoardView {
                         None => WidgetText::from("X"),
                     };
                     let galley =
-                        text.into_galley(ctx.ui, Some(false), f32::INFINITY, TextStyle::Monospace);
+                        text.into_galley(ctx.ui, Some(TextWrapMode::Truncate), f32::INFINITY, TextStyle::Monospace);
 
                     let wire_point = editor.wires().get(pos).and_then(|n| n.wire.clone());
 
@@ -1067,7 +1073,7 @@ impl BoardView {
 
                     ctx.painter.rect_filled(
                         Rect::from_min_size(pos.into(), galley.size()).expand(1.0),
-                        Rounding::ZERO,
+                        0.0,
                         Color32::BLACK.gamma_multiply(0.4),
                     );
 
@@ -1523,7 +1529,7 @@ fn draw_pin_labels(
         let pos = ctx.screen.world_to_screen(pos.convert(|v| v as f32 + 0.5));
 
         let text = WidgetText::from(name);
-        let galley = text.into_galley(ctx.ui, Some(false), f32::INFINITY, font.clone());
+        let galley = text.into_galley(ctx.ui, Some(TextWrapMode::Truncate), f32::INFINITY, font.clone());
 
         let (text_pos, angle) = match dir {
             None => (
@@ -1570,9 +1576,9 @@ fn draw_pin_labels(
 
         let rect = Rect::from_min_size(rect_pos.into(), rect_size.into());
 
-        let rounding = Rounding::same(3.0 * text_scale);
+        let rounding = CornerRadiusF32::same(3.0 * text_scale);
         let fill = Color32::from_gray(30);
-        let stroke = Stroke::new(1.0, Color32::from_gray(100));
+        let stroke = PathStroke::new(1.0, Color32::from_gray(100));
 
         let path = rotated_rect(rect, rect_pos, angle, rounding, fill, stroke);
         ctx.painter.add(path);

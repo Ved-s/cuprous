@@ -2,7 +2,7 @@ use std::ops::Div;
 
 use eframe::{
     egui::{remap, Color32, Stroke},
-    epaint::PathShape,
+    epaint::{PathShape, PathStroke},
 };
 
 use crate::{
@@ -66,19 +66,33 @@ impl GateImpl for Xnor {
                 straightness,
             );
 
-        let points = path
+        let points: Vec<_> = path
             .iter_points(|v| ctx.transform_pos(v))
             .map(Into::into)
             .collect();
 
-        let path = PathShape {
-            points,
-            closed: true,
-            fill: fill_color,
-            stroke: Stroke::new(0.15 * ctx.paint.screen.scale, border_color),
-        };
-
-        ctx.paint.painter.add(path);
+        if super::or::EGUI_BEZIER_OVERDRAW_HACK {
+            ctx.paint.painter.add(PathShape {
+                points: points.clone(),
+                closed: true,
+                fill: fill_color,
+                stroke: PathStroke::NONE,
+            });
+            ctx.paint.painter.add(PathShape {
+                points,
+                closed: true,
+                fill: Color32::TRANSPARENT,
+                stroke: PathStroke::new(0.15 * ctx.paint.screen.scale, border_color),
+            });
+        }
+        else {
+            ctx.paint.painter.add(PathShape {
+                points,
+                closed: true,
+                fill: fill_color,
+                stroke: PathStroke::new(0.15 * ctx.paint.screen.scale, border_color),
+            });
+        }
 
         let circle_pos = ctx.transform_pos([size.x - 0.68, size.y / 2.0].into());
         ctx.paint.circle(
@@ -123,7 +137,7 @@ impl GateImpl for Xnor {
             points: points_inner,
             closed: false,
             fill: Color32::TRANSPARENT,
-            stroke: Stroke::new(0.1 * ctx.paint.screen.scale, fill_color),
+            stroke: PathStroke::new(0.1 * ctx.paint.screen.scale, fill_color),
         };
 
         let points_outer = arc_outer
@@ -135,7 +149,7 @@ impl GateImpl for Xnor {
             points: points_outer,
             closed: true,
             fill: Color32::TRANSPARENT,
-            stroke: Stroke::new(0.08 * ctx.paint.screen.scale, border_color),
+            stroke: PathStroke::new(0.08 * ctx.paint.screen.scale, border_color),
         };
 
         ctx.paint.painter.add(path_inner);

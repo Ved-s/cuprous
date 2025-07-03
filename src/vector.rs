@@ -1,13 +1,13 @@
 #![allow(dead_code)]
 
 use std::{
-    fmt::Display,
-    ops::{Add, Mul}, marker::PhantomData,
+    fmt::Display, marker::PhantomData, ops::{Add, Mul}
 };
 
 use eframe::emath;
 use num_traits::{Float, FloatConst, Zero};
 use serde::{de::Visitor, Deserialize};
+use smoldata::{SmolRead, SmolWrite};
 
 #[derive(PartialEq, Eq, Copy, Clone, Debug, Hash, Default)]
 pub struct Vector2<T> {
@@ -230,6 +230,20 @@ impl<T> From<Vector2<T>> for [T; 2] {
     }
 }
 
+impl<T> From<(T, T)> for Vector2<T> {
+    fn from(value: (T, T)) -> Self {
+        let (x, y) = value;
+        Self::new(x, y)
+    }
+}
+
+impl<T> From<Vector2<T>> for (T, T) {
+    fn from(val: Vector2<T>) -> Self {
+        (val.x, val.y)
+    }
+}
+
+
 impl From<Vec2f> for emath::Pos2 {
     fn from(val: Vec2f) -> Self {
         emath::pos2(val.x, val.y)
@@ -386,5 +400,18 @@ impl<T: geo_nd::Float + Default> geo_nd::Vector<T, 2> for Vector2<T>
 
     fn dot(&self, other: &Self) -> T {
         self.x * other.x + self.y * other.y
+    }
+}
+
+impl<T: SmolWrite> SmolWrite for Vector2<T> {
+    fn write(&self, writer: smoldata::writer::ValueWriter) -> std::io::Result<()> {
+        (&self.x, &self.y).write(writer)
+    }
+}
+
+impl<T: SmolRead> SmolRead for Vector2<T> {
+    fn read(reader: smoldata::reader::ValueReader) -> smoldata::reader::ReadResult<Self> {
+        let tup = <(T, T) as SmolRead>::read(reader)?;
+        Ok(tup.into())
     }
 }

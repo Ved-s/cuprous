@@ -42,13 +42,152 @@ impl BoardEditor {
 
 impl BoardEditor {
     pub(crate) fn new(board: Arc<Board>) -> Self {
+        let mut wires: Chunks2D<CHUNK_SIZE, WireNode> = Chunks2D::default();
 
-        // TODO: actual implementation
+        let board_wires = board.wires().read();
+        let board_circuits = board.circuits().read();
+
+        for wire in board_wires.iter() {
+            let points = wire.points.read();
+
+            for (pos, point) in points.iter() {
+                let pos = *pos;
+
+                wires.get_or_create_mut(pos).wire = Some(wire.clone());
+
+                let abs_coord_diff_pos = pos.x.abs_diff(pos.y);
+                let abs_coord_diff_neg = (-pos.x).abs_diff(pos.y);
+
+                for dir in point.directions.iter() {
+                    if !dir.1 {
+                        continue;
+                    }
+                    let dir = dir.0;
+
+                    let mut closest_target_dist = None::<usize>;
+
+                    for (target_pos, _) in points.iter() {
+                        let target_pos = *target_pos;
+                        let dist = match dir {
+                            Direction4Half::Left => {
+                                if target_pos.y != pos.y || target_pos.x >= pos.x {
+                                    continue;
+                                }
+                                (pos.x - target_pos.x) as usize
+                            }
+                            Direction4Half::Up => {
+                                if target_pos.x != pos.x || target_pos.y >= pos.y {
+                                    continue;
+                                }
+                                (pos.y - target_pos.y) as usize
+                            }
+                            Direction4Half::UpLeft => {
+                                if target_pos.x >= pos.x || target_pos.y >= pos.y {
+                                    continue;
+                                }
+
+                                let target_abs_coord_diff = target_pos.x.abs_diff(target_pos.y);
+                                if target_abs_coord_diff != abs_coord_diff_pos {
+                                    // Not on the same diagonal
+                                    continue;
+                                }
+
+                                (pos.x - target_pos.x) as usize
+                            }
+                            Direction4Half::UpRight => {
+                                if target_pos.x <= pos.x || target_pos.y >= pos.y {
+                                    continue;
+                                }
+
+                                let target_abs_coord_diff = (-target_pos.x).abs_diff(target_pos.y);
+                                if target_abs_coord_diff != abs_coord_diff_neg {
+                                    // Not on the same diagonal
+                                    continue;
+                                }
+
+                                (target_pos.x - pos.x) as usize
+                            }
+                        };
+
+                        closest_target_dist = Some(match closest_target_dist {
+                            None => dist,
+                            Some(old_dist) => dist.min(old_dist),
+                        });
+                    }
+
+                    let Some(target_dist) = closest_target_dist else {
+                        // todo: an error or a warning
+                        continue;
+                    };
+
+                    let Ok(target_dist) = u32::try_from(target_dist) else {
+                        // todo: an error
+                        continue;
+                    };
+
+                    let mut pos = pos;
+                    let dir_isize = dir.into_dir_isize();
+                    for i in 0..=target_dist {
+                        let cell = wires.get_or_create_mut(pos);
+
+                        let forward = Direction8::from(dir);
+
+                        if let Some(backward_dist) = NonZeroU32::new(i) {
+                            let backward = forward.inverted();
+                            *cell.directions.get_mut(backward) = Some(backward_dist);
+                        }
+                        if let Some(forward_dist) = NonZeroU32::new(target_dist - i) {
+                            *cell.directions.get_mut(forward) = Some(forward_dist);
+                        }
+
+                        pos += dir_isize;
+                    }
+                }
+            }
+        }
+
+        let mut circuits = Chunks2D::<CHUNK_SIZE, CircuitNode>::default();
+
+        for circuit in board_circuits.iter() {
+            let imp = circuit.imp.read();
+            let info = circuit.info.read();
+            let pins = circuit.pins.read();
+
+            let orig_size = info.transform.transform_size(info.size, Some(TransformSupport::Automatic));
+
+            for y in 0..info.size.y {
+                for x in 0..info.size.x {
+                    let offset = Vec2usize::new(x, y);
+                    let cell = circuits.get_or_create_mut(info.pos + offset.convert(|v| v as isize));
+                    for q in QuarterPos::ALL {
+                        let qpos = info.transform.backtransform_pos(
+                            orig_size * 2,
+                            q.into_position() + offset * 2,
+                            Some(TransformSupport::Automatic),
+                        );
+                        if !imp.imp.occupies_quarter(info.transform, qpos) {
+                            continue;
+                        }
+
+                        let pin = pins.iter().find_map(|p| p.desc.pos.eq(&offset).then_some(&p.pin)).cloned();
+
+                        let quarter = cell.quarters.get_mut(q);
+                        *quarter = Some(CircuitNodeQuarter {
+                            circuit: circuit.clone(),
+                            offset,
+                            pin,
+                        })
+                    }
+                }
+            }
+        }
+
+        drop((board_wires, board_circuits));
 
         Self {
             board,
-            wires: Default::default(),
-            circuits: Default::default(),
+            wires,
+            circuits,
         }
     }
 
@@ -103,8 +242,7 @@ impl BoardEditor {
 
         if wire_map.len() > 1 {
             self.merge_many_wires(wire_map.values().cloned(), None, tasks.deref_mut());
-        }
-        else if let Some(wire) = wire_map.values().next() {
+        } else if let Some(wire) = wire_map.values().next() {
             tasks.add_wire_task(wire.id, true);
         }
 
@@ -358,15 +496,15 @@ impl BoardEditor {
                         *quarter = Some(q);
                         continue;
                     }
-                    
+
                     if let Some(pin) = q.pin {
                         if let Some(wire) = pin.wire.read().clone() {
                             match pin.ty {
                                 PinType::Custom => todo!(),
-                                PinType::Inside => {},
+                                PinType::Inside => {}
                                 PinType::Outside => {
                                     tasks.add_wire_task(wire.id, true);
-                                },
+                                }
                             }
 
                             wire.remove_pin(pin.circuit.id, pin.id);
@@ -667,12 +805,8 @@ impl BoardEditor {
         }))
     }
 
-    fn merge_many_wires<I>(
-        &mut self,
-        iter: I,
-        into: Option<Arc<Wire>>,
-        tasks: &mut UpdateTaskPool,
-    ) where
+    fn merge_many_wires<I>(&mut self, iter: I, into: Option<Arc<Wire>>, tasks: &mut UpdateTaskPool)
+    where
         I: Clone + Iterator<Item = Arc<Wire>>,
     {
         let merge_into = if into.is_some() {
@@ -721,7 +855,6 @@ impl BoardEditor {
         for pin in pins_from.drain(..) {
             let mut pin_wire = pin.wire.write();
             if pin_wire.as_ref().is_none_or(|w| w.id != from.id) {
-
                 // Weird pin connected to a different wire?
                 continue;
             }
@@ -739,7 +872,7 @@ impl BoardEditor {
         let mut points = wire.points.write_arc();
         let mut positions: HashSet<_> = HashSet::from_iter(points.keys().copied());
         let mut trav_positions = HashSet::new();
-        
+
         let mut old_pins = std::mem::take(wire.connected_pins.write().deref_mut());
         points.clear();
 
