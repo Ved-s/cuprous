@@ -91,7 +91,13 @@ impl Circuit {
             .transform
             .transform_size(info.render_size, Some(TransformSupport::Automatic));
 
-        let pins = imp.imp.describe_pins(info.transform);
+        let mut pins = imp.imp.describe_pins(info.transform);
+        info.transform.transform_pins(
+            info.render_size,
+            &mut pins.iter_mut().map(|p| p.pos_dir_mut()),
+            Some(TransformSupport::Automatic),
+        );
+        
         *self.pins.write() = pins.into_vec().into_iter().enumerate().map(|(id, desc)| RealizedPin {
             pin: Arc::new(CircuitPin {
                 id,

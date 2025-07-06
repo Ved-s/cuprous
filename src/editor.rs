@@ -554,6 +554,11 @@ impl BoardEditor {
             self.remove_needless_wire_point(world_pos, tasks);
         }
 
+        let states = self.board.states().read();
+        for state in states.iter() {
+            state.circuits().write().remove(circuit.id);
+        }
+
         self.board.free_circuit(circuit);
     }
 
