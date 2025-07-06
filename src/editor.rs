@@ -8,7 +8,7 @@ use std::{
 use eframe::egui::{remap_clamp, vec2, Rect};
 
 use crate::{
-    board::{Board, Wire, WirePoint},
+    board::{Board, CircuitCreationOverrides, Wire, WirePoint},
     circuits::{Circuit, CircuitBlueprint, CircuitPin, PinType, TransformSupport},
     containers::Chunks2D,
     pool::get_pooled,
@@ -153,12 +153,15 @@ impl BoardEditor {
             let info = circuit.info.read();
             let pins = circuit.pins.read();
 
-            let orig_size = info.transform.transform_size(info.size, Some(TransformSupport::Automatic));
+            let orig_size = info
+                .transform
+                .transform_size(info.size, Some(TransformSupport::Automatic));
 
             for y in 0..info.size.y {
                 for x in 0..info.size.x {
                     let offset = Vec2usize::new(x, y);
-                    let cell = circuits.get_or_create_mut(info.pos + offset.convert(|v| v as isize));
+                    let cell =
+                        circuits.get_or_create_mut(info.pos + offset.convert(|v| v as isize));
                     for q in QuarterPos::ALL {
                         let qpos = info.transform.backtransform_pos(
                             orig_size * 2,
@@ -169,7 +172,10 @@ impl BoardEditor {
                             continue;
                         }
 
-                        let pin = pins.iter().find_map(|p| p.desc.pos.eq(&offset).then_some(&p.pin)).cloned();
+                        let pin = pins
+                            .iter()
+                            .find_map(|p| p.desc.pos.eq(&offset).then_some(&p.pin))
+                            .cloned();
 
                         let quarter = cell.quarters.get_mut(q);
                         *quarter = Some(CircuitNodeQuarter {
@@ -193,6 +199,16 @@ impl BoardEditor {
 
     pub fn place_wire(&mut self, pos: Vec2isize, dir: Direction8, length: NonZeroU32) {
         let mut tasks = get_pooled::<UpdateTaskPool>();
+        self.place_wire_manual(pos, dir, length, tasks.deref_mut());
+        self.board.states().read().add_tasks(&tasks);
+    }
+    pub fn place_wire_manual(
+        &mut self,
+        pos: Vec2isize,
+        dir: Direction8,
+        length: NonZeroU32,
+        tasks: &mut UpdateTaskPool,
+    ) {
         let mut wire_map = HashMap::new();
 
         for pos in dir.iter_along(pos, length.get() as usize + 1) {
@@ -204,7 +220,7 @@ impl BoardEditor {
                     .any(|q| q.as_ref().is_some_and(|q| q.pin.is_some()))
             }) {
                 let start = wire_map.values().next().cloned();
-                let wire = self.set_wire_point(pos, start, false, tasks.deref_mut());
+                let wire = self.set_wire_point(pos, start, false, tasks);
                 wire_map.insert(wire.id, wire);
             }
         }
@@ -227,9 +243,8 @@ impl BoardEditor {
 
         let start = wire_map.values().next().cloned();
 
-        let wire = self.set_wire_point(pos, start, false, tasks.deref_mut());
-        let other_wire =
-            self.set_wire_point(other_pos, Some(wire.clone()), false, tasks.deref_mut());
+        let wire = self.set_wire_point(pos, start, false, tasks);
+        let other_wire = self.set_wire_point(other_pos, Some(wire.clone()), false, tasks);
 
         wire_map.insert(wire.id, wire);
         wire_map.insert(other_wire.id, other_wire);
@@ -237,16 +252,14 @@ impl BoardEditor {
         self.set_wire_distances(pos, dir, length.get() as usize, true, true);
 
         for pos in dir.iter_along(pos, length.get() as usize + 1) {
-            self.remove_needless_wire_point(pos, tasks.deref_mut());
+            self.remove_needless_wire_point(pos, tasks);
         }
 
         if wire_map.len() > 1 {
-            self.merge_many_wires(wire_map.values().cloned(), None, tasks.deref_mut());
+            self.merge_many_wires(wire_map.values().cloned(), None, tasks);
         } else if let Some(wire) = wire_map.values().next() {
             tasks.add_wire_task(wire.id, true);
         }
-
-        self.board.states().read().add_tasks(&tasks);
     }
 
     pub fn remove_wire(&mut self, pos: Vec2isize, dir: Direction8, length: NonZeroU32) {
@@ -313,13 +326,16 @@ impl BoardEditor {
 
         self.board.states().read().add_tasks(&tasks);
     }
-
     pub fn toggle_wire_point(&mut self, pos: Vec2isize) {
+        let mut tasks = get_pooled::<UpdateTaskPool>();
+        self.toggle_wire_point_manual(pos, tasks.deref_mut());
+        self.board.states().read().add_tasks(&tasks);
+    }
+
+    pub fn toggle_wire_point_manual(&mut self, pos: Vec2isize, tasks: &mut UpdateTaskPool) {
         let Some(node) = self.wires.get(pos) else {
             return;
         };
-
-        let mut tasks = get_pooled::<UpdateTaskPool>();
 
         if node.wire.is_some() {
             for (dir, dist) in node.directions.iter() {
@@ -333,16 +349,14 @@ impl BoardEditor {
                 }
             }
 
-            self.remove_wire_point(pos, true, false, tasks.deref_mut());
+            self.remove_wire_point(pos, true, false, tasks);
         } else {
             if node.directions.values().all(|d| d.is_none()) {
                 return;
             }
 
-            self.set_wire_point(pos, None, true, tasks.deref_mut());
+            self.set_wire_point(pos, None, true, tasks);
         }
-
-        self.board.states().read().add_tasks(&tasks);
     }
 
     pub fn remove_wire_point_with_parts(&mut self, pos: Vec2isize) {
@@ -359,7 +373,28 @@ impl BoardEditor {
         &mut self,
         pos: Vec2isize,
         blueprint: &CircuitBlueprint,
-    ) -> Result<(), CircuitPlaceError> {
+    ) -> Result<Arc<Circuit>, CircuitPlaceError> {
+        let mut tasks = get_pooled::<UpdateTaskPool>();
+
+        let res = self.place_circuit_manual(
+            pos,
+            blueprint,
+            CircuitCreationOverrides::NONE,
+            tasks.deref_mut(),
+        )?;
+
+        self.board.states().read().add_tasks(&tasks);
+
+        Ok(res)
+    }
+
+    pub fn place_circuit_manual(
+        &mut self,
+        pos: Vec2isize,
+        blueprint: &CircuitBlueprint,
+        overrides: CircuitCreationOverrides,
+        tasks: &mut UpdateTaskPool,
+    ) -> Result<Arc<Circuit>, CircuitPlaceError> {
         let size = blueprint.inner_size;
         let transformed_size = blueprint.transformed_size;
         if transformed_size.x == 0 || transformed_size.y == 0 {
@@ -367,7 +402,7 @@ impl BoardEditor {
         }
 
         let transform = blueprint.transform;
-        let circuit = self.board.create_circuit(pos, blueprint);
+        let circuit = self.board.create_circuit(pos, blueprint, overrides);
 
         let imp = circuit.imp.read();
         let pins = circuit.pins.read();
@@ -424,11 +459,9 @@ impl BoardEditor {
 
         drop(imp);
 
-        let mut tasks = get_pooled::<UpdateTaskPool>();
-
         if intersects || !occupies_any || any_disconnected_pins {
             drop(pins);
-            self.remove_circuit_internal(&circuit, tasks.deref_mut());
+            self.remove_circuit_internal(&circuit, tasks);
 
             if any_disconnected_pins && occupies_any {
                 return Err(CircuitPlaceError::DisconnectedPins);
@@ -443,7 +476,7 @@ impl BoardEditor {
             let world_pos = pos + pin.desc.pos.convert(|v| v as isize);
             if self.should_pin_wire_point_exist(world_pos) {
                 // set_wire_point connects wire to pins
-                self.set_wire_point(world_pos, None, true, tasks.deref_mut());
+                self.set_wire_point(world_pos, None, true, tasks);
             }
 
             if let Some(wire) = pin.pin.wire.read().as_ref().map(|w| w.id) {
@@ -461,11 +494,13 @@ impl BoardEditor {
             }
         }
 
+        drop(pins);
+
         tasks.add_circuit_task(circuit.id, None);
 
-        self.board.states().read().add_tasks(&tasks);
+        self.board.states().read().add_tasks(tasks);
 
-        Ok(())
+        Ok(circuit)
     }
 
     pub fn remove_circuit(&mut self, circuit: &Arc<Circuit>) {

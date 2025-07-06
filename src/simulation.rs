@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use parking_lot::RwLock;
 
-use crate::{board::Board, circuits::CircuitBlueprint};
+use crate::{board::Board, circuits::CircuitBlueprint, io::savestate};
 
 pub struct SimulationCtx {
     boards: RwLock<HashMap<u128, Arc<Board>>>
@@ -36,13 +36,13 @@ impl SimulationCtx {
         
     }
     
-    pub fn save(&self) -> crate::io::Simulation {
-        crate::io::Simulation {
+    pub fn save(&self) -> savestate::Simulation {
+        savestate::Simulation {
             boards: self.boards.read().values().map(|b| b.save()).collect()
         }
     }
 
-    pub fn load(data: &crate::io::Simulation, blueprints: &[Arc<RwLock<CircuitBlueprint>>]) -> Arc<Self> {
+    pub fn load(data: &savestate::Simulation, blueprints: &[Arc<RwLock<CircuitBlueprint>>]) -> Arc<Self> {
         let this = Arc::new(Self { boards: Default::default() });
 
         let mut boards = this.boards.write();

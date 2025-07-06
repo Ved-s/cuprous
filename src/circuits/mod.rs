@@ -5,12 +5,7 @@ use parking_lot::{Mutex, RwLock};
 use smoldata::raw::RawValue;
 
 use crate::{
-    board::{Board, Wire},
-    selection::SelectionRenderer,
-    state::{BoardState, UpdateTaskPool, WireState},
-    str::ArcStaticStr,
-    vector::{Vec2f, Vec2isize, Vec2usize},
-    Direction4, Direction8, PaintContext,
+    board::{Board, Wire}, io::savestate, selection::SelectionRenderer, state::{BoardState, UpdateTaskPool, WireState}, str::ArcStaticStr, vector::{Vec2f, Vec2isize, Vec2usize}, Direction4, Direction8, PaintContext
 };
 
 pub mod button;
@@ -26,15 +21,16 @@ pub struct Circuit {
 }
 
 impl Circuit {
-    pub fn save(&self) -> crate::io::Circuit {
+    pub fn save(&self) -> savestate::Circuit {
         let imp = self.imp.read();
         let info = self.info.read();
 
-        crate::io::Circuit {
+        savestate::Circuit {
             id: imp.imp.id(),
             pos: info.pos,
             dir: info.transform.dir,
             flip: info.transform.flip,
+            config: imp.imp.save_config(),
             instance: imp.imp.save_instance(self, &imp.instance),
         }
     }
@@ -42,7 +38,7 @@ impl Circuit {
     pub fn preload(
         id: usize,
         board: Arc<Board>,
-        circuit_data: &crate::io::Circuit,
+        circuit_data: &savestate::Circuit,
         blueprints: &[Arc<RwLock<CircuitBlueprint>>],
     ) -> Circuit {
         let blueprint = blueprints.iter().find(|b| b.read().id == circuit_data.id);
@@ -57,7 +53,7 @@ impl Circuit {
             render_size: 0.into(), // calculated later
             size: 0.into(),        // calculated later
             transform: CircuitTransform {
-                support: blueprint.imp.transform_support(),
+                support: blueprint.transform.support,
                 dir: circuit_data.dir,
                 flip: circuit_data.flip,
             },
@@ -77,9 +73,18 @@ impl Circuit {
         }
     }
 
-    pub fn load_finish(self: &Arc<Self>, data: &crate::io::Circuit) {
+    pub fn load_finish(self: &Arc<Self>, data: &savestate::Circuit) {
         let mut imp = self.imp.write();
         let mut info = self.info.write();
+
+
+        if let Some(config) = &data.config {
+
+            // todo: error handling
+            imp.imp.load_config(config).ok();
+        }
+
+        info.transform.support = imp.imp.transform_support();
 
         info.render_size = imp.imp.size(info.transform);
         info.size = info
@@ -135,7 +140,7 @@ pub struct PinDescription {
     pub ty: PinType,
 }
 impl PinDescription {
-    pub fn pos_dir_mut(&mut self) -> PosDirMut {
+    pub fn pos_dir_mut(&mut self) -> PosDirMut<'_> {
         PosDirMut {
             pos: &mut self.pos,
             dir: self.dir.as_mut(),
@@ -617,6 +622,10 @@ pub trait CircuitImpl: Clone + Send + Sync {
 
     fn update_signals(&self, ctx: CircuitCtx<Self>, changed_pin: Option<usize>);
 
+    fn save_config(&self) -> Option<RawValue> {
+        None
+    }
+
     fn save_instance(&self, circuit: &Circuit, instance: &Self::Instance) -> Option<RawValue> {
         let _ = (circuit, instance);
         None
@@ -630,6 +639,11 @@ pub trait CircuitImpl: Clone + Send + Sync {
     ) -> Option<RawValue> {
         let _ = (circuit, instance, state);
         None
+    }
+
+    fn load_config(&mut self, data: &RawValue) -> Result<(), eyre::Report> {
+        let _ = data;
+        Ok(())
     }
 
     fn load_instance(
@@ -679,12 +693,20 @@ traitbox::traitbox! {
             this.draw(circuit.map(|c| c.make_typed()), render);
         }
 
+        fn save_config<C: CircuitImpl>(this: &C) -> Option<RawValue> {
+            this.save_config()
+        }
+
         fn save_instance<C: CircuitImpl>(this: &C, circuit: &Circuit, instance: &Box<dyn Any + Send + Sync>) -> Option<RawValue> {
             this.save_instance(circuit, instance.downcast_ref()?)
         }
 
         fn save_state<C: CircuitImpl>(this: &C, circuit: &Circuit, instance: &Box<dyn Any + Send + Sync>, state: &Box<dyn Any + Send + Sync>) -> Option<RawValue> {
             this.save_state(circuit, instance.downcast_ref()?, state.downcast_ref()?)
+        }
+
+        fn load_config<C: CircuitImpl>(this: &mut C, data: &RawValue) -> Result<(), eyre::Report> {
+            this.load_config(data)
         }
 
         fn load_instance<C: CircuitImpl>(this: &C, circuit: &Arc<Circuit>, data: &RawValue) -> Result<Box<dyn Any + Send + Sync>, eyre::Report> {
@@ -704,6 +726,7 @@ traitbox::traitbox! {
     auto trait Sync {}
 }
 
+#[derive(Clone)]
 pub struct CircuitBlueprint {
     pub id: ArcStaticStr,
     pub display_name: ArcStaticStr,

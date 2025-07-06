@@ -4,15 +4,10 @@ use std::{
 };
 
 use parking_lot::{Mutex, RwLock};
+use smoldata::raw::RawValue;
 
 use crate::{
-    circuits::{Circuit, CircuitBlueprint, CircuitImplData, CircuitInfo, CircuitPin, RealizedPin},
-    containers::FixedVec,
-    editor::BoardEditor,
-    simulation::SimulationCtx,
-    state::BoardStateCollection,
-    vector::Vec2isize,
-    Direction4HalfArray,
+    circuits::{Circuit, CircuitBlueprint, CircuitImplData, CircuitInfo, CircuitPin, CircuitTransform, RealizedPin, TransformSupport}, containers::FixedVec, editor::BoardEditor, io::savestate, simulation::SimulationCtx, state::BoardStateCollection, vector::Vec2isize, Direction4, Direction4HalfArray
 };
 
 pub struct Board {
@@ -46,8 +41,8 @@ impl Board {
         &self.states
     }
 
-    pub fn save(&self) -> crate::io::Board {
-        crate::io::Board {
+    pub fn save(&self) -> savestate::Board {
+        savestate::Board {
             uid: self.uid,
             wires: self
                 .wires
@@ -67,7 +62,7 @@ impl Board {
         }
     }
 
-    pub fn preload(data: &crate::io::Board, sim: Arc<SimulationCtx>) -> Arc<Self> {
+    pub fn preload(data: &savestate::Board, sim: Arc<SimulationCtx>) -> Arc<Self> {
         let this = Arc::new(Board {
             uid: data.uid,
             wires: RwLock::new(Vec::with_capacity(data.wires.len()).into()),
@@ -84,7 +79,7 @@ impl Board {
 
     pub fn load_stage1_shallow(
         self: &Arc<Self>,
-        data: &crate::io::Board,
+        data: &savestate::Board,
         blueprints: &[Arc<RwLock<CircuitBlueprint>>],
     ) {
         let mut wires = self.wires.write();
@@ -133,7 +128,7 @@ impl Board {
         self.states.read().load_stage1_shallow(&data.states);
     }
 
-    pub fn load_stage2_circuits(&self, data: &crate::io::Board) {
+    pub fn load_stage2_circuits(&self, data: &savestate::Board) {
         let circuits = self.circuits.read();
 
         for (i, circuit_data) in data.circuits.iter().enumerate() {
@@ -175,10 +170,12 @@ impl Board {
         self.states.read().load_stage2_circuits(&data.states);
     }
 
-    pub fn load_stage3_circuit_states(&self, data: &crate::io::Board) {
+    pub fn load_stage3_circuit_states(&self, data: &savestate::Board) {
         self.states.read().load_stage3_circuit_states(&data.states);
     }
 }
+
+// TODO: properly drop cyclic references on circuit/board removal!
 
 impl Board {
     pub fn new(simulation: Arc<SimulationCtx>) -> Arc<Self> {
@@ -241,6 +238,7 @@ impl Board {
         self: &Arc<Self>,
         pos: Vec2isize,
         blueprint: &CircuitBlueprint,
+        overrides: CircuitCreationOverrides,
     ) -> Arc<Circuit> {
         let mut circuits = self.circuits.write();
 
@@ -264,6 +262,37 @@ impl Board {
 
         let circuit = Arc::new(circuit);
 
+        let mut imp = circuit.imp.write();
+        circuits.set(id, circuit.clone());
+
+        let mut rebuild_info = false;
+
+        if let Some(config) = overrides.config {
+            // todo: error handling
+            imp.imp.load_config(config).ok();
+
+            rebuild_info = true;
+        }
+
+        if overrides.dir.is_some() || overrides.flip.is_some() {
+            rebuild_info = true;
+        }
+
+        if rebuild_info {
+            let mut info = circuit.info.write();
+
+            info.transform = CircuitTransform {
+                support: imp.imp.transform_support(),
+                dir: overrides.dir.unwrap_or(info.transform.dir),
+                flip: overrides.flip.unwrap_or(info.transform.flip),
+            };
+
+            info.render_size = imp.imp.size(info.transform);
+            info.size = info
+                .transform
+                .transform_size(info.render_size, Some(TransformSupport::Automatic));
+        }
+
         *circuit.pins.write() = blueprint
             .pins
             .iter()
@@ -279,10 +308,12 @@ impl Board {
             })
             .collect();
 
-        let mut imp = circuit.imp.write();
-        circuits.set(id, circuit.clone());
+        let loaded_instance = overrides.instance.and_then(|i| {
+            // todo: error handling
+            imp.imp.load_instance(&circuit, i).ok()
+        });
 
-        imp.instance = imp.imp.create_instance(&circuit);
+        imp.instance = loaded_instance.unwrap_or_else(|| imp.imp.create_instance(&circuit));
 
         drop(imp);
 
@@ -299,6 +330,23 @@ impl Board {
             circuits.remove(circuit.id);
         }
     }
+}
+
+#[derive(Default, Clone, Copy)]
+pub struct CircuitCreationOverrides<'a> {
+    pub dir: Option<Direction4>,
+    pub flip: Option<bool>,
+    pub config: Option<&'a RawValue>,
+    pub instance: Option<&'a RawValue>,
+}
+
+impl<'a> CircuitCreationOverrides<'a> {
+    pub const NONE: Self = Self {
+        dir: None,
+        flip: None,
+        config: None,
+        instance: None,
+    };
 }
 
 pub struct Wire {
@@ -326,8 +374,8 @@ impl Wire {
             .retain(|p| !(p.circuit.id == circuit_id && p.id == pin_id));
     }
 
-    pub fn save(&self) -> crate::io::Wire {
-        crate::io::Wire {
+    pub fn save(&self) -> savestate::Wire {
+        savestate::Wire {
             points: self
                 .points
                 .read()
@@ -338,7 +386,7 @@ impl Wire {
                 .connected_pins
                 .read()
                 .iter()
-                .map(|p| crate::io::PinId {
+                .map(|p| savestate::PinId {
                     circuit: p.circuit.id,
                     name: p.circuit.pins.read()[p.id].desc.id.clone(),
                 })

@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashSet, VecDeque},
     f32::consts::{PI, SQRT_2, TAU},
     num::NonZeroU32,
     ops::{Deref, DerefMut, Not},
@@ -9,7 +9,8 @@ use std::{
 
 use eframe::{
     egui::{
-        remap_clamp, vec2, Align, Align2, Color32, FontId, Key, PointerButton, Rect, Response, Sense, Stroke, StrokeKind, TextStyle, TextWrapMode, Ui, WidgetText
+        pos2, remap_clamp, vec2, Align, Color32, FontId, FontSelection, Key, PointerButton,
+        Rect, Response, Sense, Stroke, StrokeKind, TextStyle, TextWrapMode, Ui, WidgetText,
     },
     epaint::{CornerRadiusF32, PathStroke, TextShape},
 };
@@ -17,7 +18,8 @@ use num_traits::Zero;
 use parking_lot::{Mutex, RwLock};
 
 use crate::{
-    app::{App, SelectedItem},
+    app::{App, SelectedItem, COPY_PASTE_BOARD_ITEMS_PREFIX},
+    board::CircuitCreationOverrides,
     circuits::{
         CircuitBlueprint, CircuitRenderingContext, CircuitSelectionRenderingContext,
         TransformSupport, UntypedCircuitCtx,
@@ -25,6 +27,7 @@ use crate::{
     drawing::{self, rotated_rect},
     editor::{BoardEditor, BoardSelectionImpl, QuarterPos, SelectedBoardItem},
     ext::IteratorProduct,
+    io::copystate,
     pool::get_pooled,
     selection::{Selection, SelectionRenderer},
     state::{BoardState, UpdateTaskPool},
@@ -36,7 +39,13 @@ use crate::{
 
 use super::{TabCreation, TabImpl};
 
-const PLACEMENT_ERROR_TIME: Duration = Duration::from_secs(1);
+const INWORLD_ERROR_FADE_TIME: Duration = Duration::from_millis(400);
+
+pub struct InWorldError {
+    world_rect: Rect,
+    deadline: Instant,
+    text: String,
+}
 
 pub struct BoardView {
     pan_zoom: PanAndZoom,
@@ -60,7 +69,7 @@ pub struct BoardView {
     circuits_drawn: HashSet<usize>,
     wire_colors: BTreeMap<usize, Color32>,
 
-    last_placement_error: Option<(Instant, String)>,
+    in_world_errors: VecDeque<InWorldError>,
 
     camera_move_velocity: Vec2f,
 }
@@ -97,7 +106,7 @@ impl TabCreation for BoardView {
 
             circuits_drawn: HashSet::new(),
             wire_colors: BTreeMap::new(),
-            last_placement_error: None,
+            in_world_errors: Default::default(),
 
             camera_move_velocity: Vec2f::zero(),
         }
@@ -119,17 +128,11 @@ impl TabImpl for BoardView {
             *editor = BoardEditor::new(board);
         }
 
-        let dragged = app.selected_item.is_none()
-            && interaction.dragged_by(PointerButton::Primary)
-                || interaction.dragged_by(PointerButton::Secondary);
+        let dragged = app.selected_item.is_none() && interaction.dragged_by(PointerButton::Primary)
+            || interaction.dragged_by(PointerButton::Secondary);
 
         if self.fixed_screen_pos.is_none() || ui.input(|input| input.modifiers.alt) {
-            self.pan_zoom.update(
-                ui,
-                screen_rect,
-                dragged,
-                &interaction,
-            );
+            self.pan_zoom.update(ui, screen_rect, dragged, &interaction);
         }
 
         let global_screen = self.pan_zoom.to_screen(screen_rect);
@@ -158,12 +161,7 @@ impl TabImpl for BoardView {
                 pan_zoom.scale *= self.pan_zoom.scale;
                 let screen_rect = global_screen.world_to_screen_rect(*rect);
                 if !ui.input(|input| input.modifiers.alt) {
-                    pan_zoom.update(
-                        ui,
-                        screen_rect,
-                        dragged,
-                        &interaction,
-                    );
+                    pan_zoom.update(ui, screen_rect, dragged, &interaction);
                 }
                 let screen = pan_zoom.to_screen(screen_rect);
                 pan_zoom.scale /= self.pan_zoom.scale;
@@ -246,6 +244,10 @@ impl TabImpl for BoardView {
         if let Some(SelectedItem::Circuit(c)) = app.selected_item.as_ref() {
             self.handle_circuit_placement(&interaction, &ctx, c.read().deref());
         }
+
+        self.handle_paste(&interaction, &ctx, app);
+
+        self.draw_in_world_errors(ui, &ctx);
     }
 
     fn tab_style_override(&self, global: &egui_dock::TabStyle) -> Option<egui_dock::TabStyle> {
@@ -790,7 +792,8 @@ impl BoardView {
                             if node
                                 .quarters
                                 .get(qpos)
-                                .as_ref().is_none_or(|q| q.circuit.id != circuit.id)
+                                .as_ref()
+                                .is_none_or(|q| q.circuit.id != circuit.id)
                             {
                                 continue;
                             }
@@ -856,8 +859,12 @@ impl BoardView {
                 };
 
                 let text = WidgetText::from(text);
-                let galley =
-                    text.into_galley(ctx.ui, Some(TextWrapMode::Truncate), f32::INFINITY, TextStyle::Monospace);
+                let galley = text.into_galley(
+                    ctx.ui,
+                    Some(TextWrapMode::Truncate),
+                    f32::INFINITY,
+                    TextStyle::Monospace,
+                );
 
                 let align = Vector2::<Align>::from(dir.into_align2().0);
                 let align = align.convert(|v| v.to_factor());
@@ -905,8 +912,12 @@ impl BoardView {
                     None => "?".into(),
                 };
                 let text = WidgetText::from(text);
-                let galley =
-                    text.into_galley(ctx.ui, Some(TextWrapMode::Truncate), f32::INFINITY, TextStyle::Monospace);
+                let galley = text.into_galley(
+                    ctx.ui,
+                    Some(TextWrapMode::Truncate),
+                    f32::INFINITY,
+                    TextStyle::Monospace,
+                );
 
                 let pos = screen_pos + (ctx.screen.scale / 2.0) - (galley.size() / 2.0);
 
@@ -967,8 +978,12 @@ impl BoardView {
                 let circuit = &quarter.circuit;
 
                 let text = WidgetText::from(format!("{}", circuit.id));
-                let galley =
-                    text.into_galley(ctx.ui, Some(TextWrapMode::Truncate), f32::INFINITY, TextStyle::Monospace);
+                let galley = text.into_galley(
+                    ctx.ui,
+                    Some(TextWrapMode::Truncate),
+                    f32::INFINITY,
+                    TextStyle::Monospace,
+                );
 
                 let correct_circuit = editor
                     .board()
@@ -1028,8 +1043,12 @@ impl BoardView {
                         Some(w) => WidgetText::from(format!("{}", w.id)),
                         None => WidgetText::from("X"),
                     };
-                    let galley =
-                        text.into_galley(ctx.ui, Some(TextWrapMode::Truncate), f32::INFINITY, TextStyle::Monospace);
+                    let galley = text.into_galley(
+                        ctx.ui,
+                        Some(TextWrapMode::Truncate),
+                        f32::INFINITY,
+                        TextStyle::Monospace,
+                    );
 
                     let wire_point = editor.wires().get(pos).and_then(|n| n.wire.clone());
 
@@ -1199,27 +1218,14 @@ impl BoardView {
         }
     }
 
-    fn handle_circuit_placement(
-        &mut self,
-        interaction: &Response,
-        ctx: &PaintContext,
+    fn draw_circuit_for_placement(
+        pos: Vec2isize,
         blueprint: &CircuitBlueprint,
+        ctx: &PaintContext,
     ) {
-        let world_mouse = ctx
-            .ui
-            .input(|input| input.pointer.latest_pos())
-            .map(|p| ctx.screen.screen_to_world(p));
-
-        let Some(world_mouse) = world_mouse else {
-            return;
-        };
-
-        let world_place_pos = world_mouse - blueprint.transformed_size.convert(|v| v as f32 / 2.0);
-        let world_place_tile = world_place_pos.convert(|v| v.round() as isize);
-
         let rect = ctx
             .screen
-            .world_to_screen_tile_rect(world_place_tile, blueprint.transformed_size);
+            .world_to_screen_tile_rect(pos, blueprint.transformed_size);
         let circuit_ctx = CircuitRenderingContext::new(
             ctx,
             rect,
@@ -1233,7 +1239,7 @@ impl BoardView {
         blueprint_pins.clear();
 
         for pin in blueprint.pins.iter() {
-            let pos = pin.pos.convert(|v| v as isize) + world_place_tile;
+            let pos = pin.pos.convert(|v| v as isize) + pos;
             let pos = ctx.screen.world_to_screen(pos.convert(|v| v as f32 + 0.5));
 
             let has_quarters = QuarterPos::ALL.iter().copied().any(|q| {
@@ -1273,6 +1279,27 @@ impl BoardView {
                 blueprint_pins.deref(),
             );
         });
+    }
+
+    fn handle_circuit_placement(
+        &mut self,
+        interaction: &Response,
+        ctx: &PaintContext,
+        blueprint: &CircuitBlueprint,
+    ) {
+        let world_mouse = ctx
+            .ui
+            .input(|input| input.pointer.latest_pos())
+            .map(|p| ctx.screen.screen_to_world(p));
+
+        let Some(world_mouse) = world_mouse else {
+            return;
+        };
+
+        let world_place_pos = world_mouse - blueprint.transformed_size.convert(|v| v as f32 / 2.0);
+        let world_place_tile = world_place_pos.convert(|v| v.round() as isize);
+
+        Self::draw_circuit_for_placement(world_place_tile, blueprint, ctx);
 
         let mut overlap_buffer = None;
         let editor = self.editor.read();
@@ -1338,58 +1365,6 @@ impl BoardView {
 
         draw_pin_labels(ctx, &mut iter);
 
-        let clear_placement_error = if let Some((time, error)) = &self.last_placement_error {
-            let since = Instant::now() - *time;
-
-            let ended = since.checked_sub(PLACEMENT_ERROR_TIME);
-
-            let (opacity, clear) = match ended {
-                None => {
-                    ctx.ui
-                        .ctx()
-                        .request_repaint_after(PLACEMENT_ERROR_TIME - since);
-                    (1.0, false)
-                }
-                Some(ended) => {
-                    let animation = ctx.ui.style().animation_time;
-                    let time = animation - ended.as_secs_f32();
-                    if time < 0.0 {
-                        (0.0, true)
-                    } else {
-                        ctx.ui.ctx().request_repaint();
-                        (time / animation, false)
-                    }
-                }
-            };
-
-            if !clear {
-                let world_off = [
-                    blueprint.transformed_size.x as f32 / 2.0,
-                    blueprint.transformed_size.y as f32,
-                ];
-                let world_pos = world_place_tile.convert(|v| v as f32) + world_off;
-                let screen_pos = ctx.screen.world_to_screen(world_pos);
-
-                let font = TextStyle::Body.resolve(ctx.ui.style());
-
-                ctx.painter.text(
-                    screen_pos.into(),
-                    Align2::CENTER_TOP,
-                    error,
-                    font,
-                    Color32::RED.gamma_multiply(opacity),
-                );
-            }
-
-            clear
-        } else {
-            false
-        };
-
-        if clear_placement_error {
-            self.last_placement_error = None;
-        }
-
         if interaction.clicked() {
             let res = self
                 .editor
@@ -1397,7 +1372,16 @@ impl BoardView {
                 .place_circuit(world_place_tile, blueprint);
 
             if let Err(e) = res {
-                self.last_placement_error = Some((Instant::now(), e.to_string()));
+                let rect = Rect::from_min_size(
+                    world_place_tile.convert(|v| v as f32).into(),
+                    blueprint.transformed_size.convert(|v| v as f32).into(),
+                );
+
+                self.in_world_errors.push_front(InWorldError {
+                    world_rect: rect,
+                    deadline: Instant::now() + Duration::from_secs(2),
+                    text: e.to_string(),
+                });
             }
         }
     }
@@ -1494,6 +1478,400 @@ impl BoardView {
                 }
             }
         }
+
+        if ui.input(|input| input.events.contains(&eframe::egui::Event::Copy))
+            && !self.selection.is_empty()
+        {
+            let copy = self.copy_selection();
+
+            let buf = Vec::from(COPY_PASTE_BOARD_ITEMS_PREFIX.as_bytes());
+            let base64 = base64::write::EncoderWriter::new(
+                buf,
+                &base64::engine::general_purpose::STANDARD_NO_PAD,
+            );
+            let mut flate = flate2::write::DeflateEncoder::new(base64, flate2::Compression::best());
+
+            let buf = smoldata::write_into(&copy, &mut flate)
+                .and_then(|()| flate.finish())
+                .and_then(|mut b| b.finish());
+
+            match buf {
+                Ok(buf) => {
+                    let str = String::from_utf8(buf).expect("base64 encoded into valid utf-8");
+
+                    ui.output_mut(|output| {
+                        output
+                            .commands
+                            .push(eframe::egui::OutputCommand::CopyText(str))
+                    });
+                }
+                Err(_) => {
+                    // todo: error handling
+                }
+            };
+        }
+    }
+
+    fn copy_selection(&self) -> copystate::CopyState {
+        let editor = self.editor.read();
+        let circuits = editor.board().circuits().read();
+        let circuit_states = self.state.circuits().read();
+
+        let mut min_pos = Vec2isize::single_value(isize::MAX);
+        for &selected in self.selection.iter() {
+            let min = match selected {
+                SelectedBoardItem::WirePart { pos, dir } => {
+                    let Some(node) = editor.wires().get(pos) else {
+                        continue;
+                    };
+
+                    let Some(dist) = node.directions.get(dir.into()) else {
+                        continue;
+                    };
+
+                    let pos2 = pos + dir.into_dir_isize() * dist.get() as isize;
+
+                    let min = [pos.x.min(pos2.x), pos.y.min(pos2.y)];
+
+                    min.into()
+                }
+                SelectedBoardItem::WirePoint { pos } => {
+                    let Some(node) = editor.wires().get(pos) else {
+                        continue;
+                    };
+
+                    if node.wire.is_none() {
+                        continue;
+                    }
+
+                    pos
+                }
+                SelectedBoardItem::Circuit { id, pos } => {
+                    if circuits.get(id).is_none() {
+                        continue;
+                    };
+
+                    pos
+                }
+            };
+
+            min_pos = [min.x.min(min_pos.x), min.y.min(min_pos.y)].into();
+        }
+
+        let mut data = copystate::CopyState::default();
+        for &selected in self.selection.iter() {
+            match selected {
+                SelectedBoardItem::WirePart { pos, dir } => {
+                    let Some(node) = editor.wires().get(pos) else {
+                        continue;
+                    };
+
+                    let Some(dist) = node.directions.get(dir.into()) else {
+                        continue;
+                    };
+
+                    data.wire_parts.push(copystate::WirePart {
+                        pos: (pos - min_pos).convert(|v| v as usize),
+                        dir,
+                        len: dist.get(),
+                    });
+                }
+                SelectedBoardItem::WirePoint { pos } => {
+                    let Some(node) = editor.wires().get(pos) else {
+                        continue;
+                    };
+
+                    if node.wire.is_none() {
+                        continue;
+                    }
+
+                    data.wire_points
+                        .push((pos - min_pos).convert(|v| v as usize));
+                }
+                SelectedBoardItem::Circuit { id, pos } => {
+                    let Some(circuit) = circuits.get(id) else {
+                        continue;
+                    };
+
+                    let info = circuit.info.read();
+                    let imp = circuit.imp.read();
+
+                    let state = circuit_states.get(id);
+                    let state = state.map(|s| s.internal.read_arc());
+                    let state = state.as_ref().and_then(|s| s.as_ref());
+
+                    data.circuits.push(copystate::Circuit {
+                        id: imp.imp.id(),
+                        pos: (pos - min_pos).convert(|v| v as usize),
+                        dir: info.transform.dir,
+                        flip: info.transform.flip,
+                        config: imp.imp.save_config(),
+                        instance: imp.imp.save_instance(circuit, &imp.instance),
+                        state: state.and_then(|s| imp.imp.save_state(circuit, &imp.instance, s)),
+                    });
+                }
+            }
+        }
+
+        data
+    }
+
+    fn handle_paste(&mut self, interaction: &Response, ctx: &PaintContext, app: &App) {
+        let Some(SelectedItem::Paste(paste)) = &app.selected_item else {
+            return;
+        };
+
+        let world_mouse = ctx
+            .ui
+            .input(|input| input.pointer.latest_pos())
+            .map(|p| ctx.screen.screen_to_world(p));
+
+        let Some(world_mouse) = world_mouse else {
+            return;
+        };
+
+        let world_place_pos = world_mouse - paste.size.convert(|v| v as f32 / 2.0);
+        let world_place_tile = world_place_pos.convert(|v| v.round() as isize);
+
+        let world_place_rect = Rect::from_min_size(
+            world_place_tile.convert(|v| v as f32).into(),
+            paste.size.convert(|v| v as f32).into(),
+        );
+        ctx.painter.rect_stroke(
+            ctx.screen.world_to_screen_rect(world_place_rect),
+            1.0,
+            Stroke::new(2.0, Color32::LIGHT_BLUE),
+            StrokeKind::Outside,
+        );
+
+        let mut wire_buf = get_pooled::<ColoredTriangleBuffer>();
+        let mut overlap_buf = get_pooled::<ColoredTriangleBuffer>();
+
+        for p in &paste.wire_points {
+            let pos = world_place_tile + p.convert(|v| v as isize);
+            let center_pos = pos.convert(|v| v as f32) + 0.5;
+            let screen_pos = ctx.screen.world_to_screen(center_pos);
+            wire_buf.add_centered_rect(
+                screen_pos,
+                WIRE_POINT_WIDTH * ctx.screen.scale,
+                app.style.wire_colors.r#false.to_normalized_gamma_f32(),
+            );
+        }
+
+        for p in &paste.wire_parts {
+            if p.len == 0 {
+                continue;
+            }
+            let pos1 = world_place_tile + p.pos.convert(|v| v as isize);
+            let pos2 = pos1 + p.dir.into_dir_isize() * p.len as isize;
+
+            let pos1_center = ctx.screen.world_to_screen(pos1.convert(|v| v as f32) + 0.5);
+            let pos2_center = ctx.screen.world_to_screen(pos2.convert(|v| v as f32) + 0.5);
+
+            wire_buf.add_quad_line(
+                pos1_center,
+                pos2_center,
+                WIRE_WIDTH * ctx.screen.scale,
+                app.style.wire_colors.r#false.to_normalized_gamma_f32(),
+            );
+        }
+
+        ctx.custom_draw(move |ctx| {
+            let mut vertexes = ColoredVertexRenderer::global(ctx.painter.gl());
+            vertexes.draw(
+                ctx.painter.gl(),
+                ctx.paint_info.screen_size_px,
+                wire_buf.deref(),
+            );
+        });
+
+        let editor = self.editor.read();
+
+        let mut any_overlap = false;
+
+        for circuit in &paste.circuits {
+            let circuit_pos = world_place_tile + circuit.pos.convert(|v| v as isize);
+            Self::draw_circuit_for_placement(circuit_pos, &circuit.blueprint, ctx);
+
+            for ((y, x), q) in (0..circuit.blueprint.transformed_size.y)
+                .product_clone(0..circuit.blueprint.transformed_size.x)
+                .product_clone(QuarterPos::ALL.iter().copied())
+            {
+                let world_pos = circuit_pos + [x as isize, y as isize];
+
+                let Some(node) = editor.circuits().get(world_pos) else {
+                    continue;
+                };
+
+                if node.quarters.get(q).is_none() {
+                    continue;
+                }
+
+                let pos = Vec2usize::new(x, y);
+                let quarter_pos = pos * 2 + q.into_position();
+                let quarter_pos = circuit.blueprint.transform.backtransform_pos(
+                    circuit.blueprint.inner_size * 2,
+                    quarter_pos,
+                    Some(TransformSupport::Automatic),
+                );
+
+                if !circuit
+                    .blueprint
+                    .imp
+                    .occupies_quarter(circuit.blueprint.transform, quarter_pos)
+                {
+                    continue;
+                }
+
+                let world_pos = world_pos.convert(|v| v as f32) + q.into_quarter_position_f32();
+                let screen_pos = ctx.screen.world_to_screen(world_pos);
+                overlap_buf.add_new_rect(
+                    screen_pos,
+                    ctx.screen.scale * 0.5,
+                    Color32::RED.gamma_multiply(0.6).to_normalized_gamma_f32(),
+                );
+
+                any_overlap = true;
+            }
+        }
+
+        ctx.custom_draw(move |ctx| {
+            let mut vertexes = ColoredVertexRenderer::global(ctx.painter.gl());
+            vertexes.draw(
+                ctx.painter.gl(),
+                ctx.paint_info.screen_size_px,
+                overlap_buf.deref(),
+            );
+        });
+
+        drop(editor);
+
+        if any_overlap {
+            return;
+        }
+
+        if interaction.clicked() {
+            let mut editor = self.editor.write();
+            let mut tasks = get_pooled();
+
+            for p in &paste.wire_parts {
+                let Some(len) = NonZeroU32::new(p.len) else {
+                    continue;
+                };
+                let pos = world_place_tile + p.pos.convert(|v| v as isize);
+                editor.place_wire_manual(pos, p.dir.into(), len, &mut tasks);
+            }
+
+            for p in &paste.wire_points {
+                let pos = world_place_tile + p.convert(|v| v as isize);
+
+                if editor.wires().get(pos).is_some_and(|n| n.wire.is_some()) {
+                    continue;
+                }
+
+                editor.toggle_wire_point_manual(pos, &mut tasks);
+            }
+
+            for c in &paste.circuits {
+                let pos = world_place_tile + c.pos.convert(|v| v as isize);
+
+                let overrides = CircuitCreationOverrides {
+                    dir: None,
+                    flip: None,
+                    config: None,
+                    instance: c.instance.as_ref(),
+                };
+
+                let res = editor.place_circuit_manual(pos, &c.blueprint, overrides, &mut tasks);
+
+                match res {
+                    Err(e) => {
+                        let rect = Rect::from_min_size(
+                            world_place_tile.convert(|v| v as f32).into(),
+                            c.blueprint.transformed_size.convert(|v| v as f32).into(),
+                        );
+                        self.in_world_errors.push_front(InWorldError {
+                            world_rect: rect,
+                            deadline: Instant::now() + Duration::from_secs(2),
+                            text: e.to_string(),
+                        });
+                    }
+                    Ok(circuit) => {
+                        if let Some(state_data) = &c.state {
+                            let imp = circuit.imp.read();
+                            for state in editor.board().states().read().iter() {
+                                match imp.imp.load_state(&circuit, &imp.instance, state_data) {
+                                    Err(e) => {
+                                        let rect = Rect::from_min_size(
+                                            world_place_tile.convert(|v| v as f32).into(),
+                                            c.blueprint
+                                                .transformed_size
+                                                .convert(|v| v as f32)
+                                                .into(),
+                                        );
+                                        self.in_world_errors.push_front(InWorldError {
+                                            world_rect: rect,
+                                            deadline: Instant::now() + Duration::from_secs(2),
+                                            text: e.wrap_err("loading circuit state").to_string(),
+                                        });
+                                    }
+                                    Ok(s) => {
+                                        let mut circuits = state.circuits().write();
+                                        let circuit_state = circuits
+                                            .get_or_create_mut(circuit.id, Default::default);
+                                        *circuit_state.internal.write() = Some(s);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            editor.board().states().read().add_tasks(&tasks);
+        }
+    }
+
+    fn draw_in_world_errors(&mut self, ui: &Ui, ctx: &PaintContext) {
+        let now = Instant::now();
+
+        self.in_world_errors.retain_mut(|e| {
+            let remaining = e.deadline.checked_duration_since(now);
+            let Some(remaining) = remaining else {
+                return false;
+            };
+
+            let fade = if remaining > INWORLD_ERROR_FADE_TIME {
+                1.0
+            } else {
+                remaining.as_secs_f32() / INWORLD_ERROR_FADE_TIME.as_secs_f32()
+            };
+
+            let color = Color32::RED.gamma_multiply(fade);
+
+            let rect = ctx.screen.world_to_screen_rect(e.world_rect);
+
+            let text_pos = pos2(rect.left(), rect.bottom() + 5.0);
+
+            let gal = WidgetText::from(e.text.clone()).into_galley(
+                ui,
+                None,
+                f32::INFINITY,
+                FontSelection::Default,
+            );
+
+            let text_rect = Rect::from_min_size(text_pos, gal.size());
+
+            if ctx.screen.screen_rect.intersects(text_rect) {
+                ctx.add(TextShape::new(text_pos, gal, color));
+            }
+
+            if ctx.screen.screen_rect.intersects(rect.expand(1.0)) {
+                ctx.rect_stroke(rect, 1.0, Stroke::new(2.0, color), StrokeKind::Middle);
+            }
+
+            true
+        });
     }
 }
 
@@ -1529,7 +1907,12 @@ fn draw_pin_labels(
         let pos = ctx.screen.world_to_screen(pos.convert(|v| v as f32 + 0.5));
 
         let text = WidgetText::from(name);
-        let galley = text.into_galley(ctx.ui, Some(TextWrapMode::Truncate), f32::INFINITY, font.clone());
+        let galley = text.into_galley(
+            ctx.ui,
+            Some(TextWrapMode::Truncate),
+            f32::INFINITY,
+            font.clone(),
+        );
 
         let (text_pos, angle) = match dir {
             None => (

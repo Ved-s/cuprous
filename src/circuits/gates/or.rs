@@ -12,7 +12,7 @@ use crate::{
 
 use super::{GateImpl, GateOutput};
 
-pub const EGUI_BEZIER_OVERDRAW_HACK: bool = false;
+pub const EGUI_BEZIER_OVERDRAW_HACK: bool = true;
 
 #[derive(Clone)]
 pub struct Or;

@@ -282,7 +282,7 @@ impl<'a> PaintContext<'a> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, SmolReadWrite)]
 pub enum Direction8 {
     Up,
     UpRight,
@@ -589,7 +589,7 @@ impl Direction4 {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SmolReadWrite)]
 pub enum Direction4Half {
     Left,
     UpLeft,

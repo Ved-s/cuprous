@@ -22,3 +22,5 @@ egui_extras = "0.31.1"
 
 traitbox = { path = "crates/traitbox" }
 smoldata = { git = "https://github.com/Ved-s/smoldata.git", rev = "8d0f8572713f66e389598a61611e08c880500b70" }
+base64 = "0.22.1"
+flate2 = "1.1.2"

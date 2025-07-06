@@ -1,21 +1,23 @@
-use std::{fs::File, path::PathBuf, sync::Arc};
+use std::{fs::File, ops::Not, path::PathBuf, sync::Arc};
 
-use eframe::{
-    egui,
-    CreationContext,
-};
+use eframe::{egui, CreationContext};
 use egui_dock::{DockArea, DockState, NodeIndex};
-use eyre::Context as _;
+use eyre::{eyre, Context as _};
 use parking_lot::RwLock;
+use smoldata::raw::RawValue;
 
 use crate::{
     circuits::CircuitBlueprint,
+    io::copystate,
     simulation::SimulationCtx,
     tabs::{SafeTabType, Tab, TabSerde, TabType, TabViewer},
+    vector::{Vec2isize, Vec2usize},
     Style,
 };
 
 pub const APP_NAME: &str = "cuprous-dev";
+
+pub const COPY_PASTE_BOARD_ITEMS_PREFIX: &str = "cuprousbrditms:";
 
 pub struct ErrorStrings {
     main: String,
@@ -89,7 +91,7 @@ impl App {
                     .wrap_err("loading simulation state"),
             )
         });
-        
+
         let sim = sim.unwrap_or_else(|| Ok(SimulationCtx::new()));
 
         let sim = match sim {
@@ -110,6 +112,129 @@ impl App {
 
             data_dir,
             errors,
+        }
+    }
+
+    fn update(&mut self, ctx: &egui::Context) {
+        let paste = ctx
+            .wants_keyboard_input()
+            .not()
+            .then(|| {
+                ctx.input(|input| {
+                    input.events.iter().find_map(|e| match e {
+                        eframe::egui::Event::Paste(s) => Some(s.clone()),
+                        _ => None,
+                    })
+                })
+            })
+            .flatten();
+
+        'trypaste: {
+            let Some(paste) = paste else {
+                break 'trypaste;
+            };
+
+            if paste.is_empty() {
+                self.errors.push(eyre!("Clipboard is empty").into());
+                break 'trypaste;
+            }
+
+            let data = match paste.strip_prefix(COPY_PASTE_BOARD_ITEMS_PREFIX) {
+                Some(d) => d,
+                None => {
+                    self.errors.push(eyre!("Clipboard is empty").into());
+                    break 'trypaste;
+                }
+            };
+
+            let cur = std::io::Cursor::new(data.as_bytes());
+            let base64 = base64::read::DecoderReader::new(
+                cur,
+                &base64::engine::general_purpose::STANDARD_NO_PAD,
+            );
+            let flate = flate2::read::DeflateDecoder::new(base64);
+            let paste: copystate::CopyState = match smoldata::read_from(flate) {
+                Ok(p) => p,
+                Err(e) => {
+                    self.errors
+                        .push(eyre::Report::new(e).wrap_err("reading paste").into());
+                    break 'trypaste;
+                }
+            };
+
+            let pasted_circuits: Vec<_> = paste
+                .circuits
+                .into_iter()
+                .filter_map(|c| {
+                    let blueprint = self.blueprints.iter().find_map(|b| {
+                        let b = b.read();
+                        b.id.eq(&c.id).then(|| b.clone())
+                    });
+
+                    let Some(mut blueprint) = blueprint else {
+                        self.errors
+                            .push(eyre!("unknown circuit id \"{}\"", c.id).into());
+                        return None;
+                    };
+
+                    blueprint.transform.dir = c.dir;
+                    blueprint.transform.flip = c.flip;
+
+                    if let Some(config) = c.config {
+                        if let Err(e) = blueprint.imp.load_config(&config) {
+                            self.errors.push(
+                                e.wrap_err(format!(
+                                    "loading circuit config for \"{}\" ({})",
+                                    blueprint.display_name, blueprint.id
+                                ))
+                                .into(),
+                            );
+                        }
+                    }
+
+                    blueprint.recalculate();
+
+                    Some(PasteCircuit {
+                        pos: c.pos,
+                        blueprint,
+                        instance: c.instance,
+                        state: c.state,
+                    })
+                })
+                .collect();
+
+            let mut size = Vec2usize::single_value(0);
+
+            for c in &pasted_circuits {
+                let max = c.pos + c.blueprint.transformed_size;
+                size = [max.x.max(size.x), max.y.max(size.y)].into();
+            }
+
+            for p in &paste.wire_points {
+                let max = *p + 1;
+                size = [max.x.max(size.x), max.y.max(size.y)].into();
+            }
+
+            for p in &paste.wire_parts {
+                let pos2 = p.pos.convert(|v| v as isize) + p.dir.into_dir_isize() * p.len as isize;
+                
+                let max = Vec2isize::new(pos2.x.max(p.pos.x as isize), pos2.y.max(p.pos.y as isize)) + 1;
+                if max.x > 0 {
+                    size.x = size.x.max(max.x as usize);
+                }
+                if max.y > 0 {
+                    size.y = size.y.max(max.y as usize);
+                }
+            }
+
+            let paste = Paste {
+                wire_parts: paste.wire_parts,
+                wire_points: paste.wire_points,
+                circuits: pasted_circuits,
+                size,
+            };
+
+            self.selected_item = Some(SelectedItem::Paste(paste));
         }
     }
 }
@@ -183,6 +308,8 @@ impl eframe::App for DockedApp {
             .find_active_focused()
             .and_then(|(_, tab)| tab.loaded_ty());
 
+        self.app.update(ctx);
+
         DockArea::new(&mut self.dock).show(ctx, &mut TabViewer(&mut self.app));
 
         if !self.app.errors.is_empty() {
@@ -231,7 +358,9 @@ impl eframe::App for DockedApp {
                             }
 
                             let bottom_size = child_ui.min_size();
-                            ui.data_mut(|data| *data.get_temp_mut_or_default(bottom_size_id) = bottom_size);
+                            ui.data_mut(|data| {
+                                *data.get_temp_mut_or_default(bottom_size_id) = bottom_size
+                            });
                         })
                     })
             });
@@ -276,8 +405,23 @@ impl eframe::App for DockedApp {
     }
 }
 
+pub struct PasteCircuit {
+    pub pos: Vec2usize,
+    pub blueprint: CircuitBlueprint,
+    pub instance: Option<RawValue>,
+    pub state: Option<RawValue>,
+}
+
+pub struct Paste {
+    pub wire_parts: Vec<copystate::WirePart>,
+    pub wire_points: Vec<Vec2usize>,
+    pub circuits: Vec<PasteCircuit>,
+    pub size: Vec2usize,
+}
+
 pub enum SelectedItem {
     Wires,
     Selection,
     Circuit(Arc<RwLock<CircuitBlueprint>>),
+    Paste(Paste),
 }

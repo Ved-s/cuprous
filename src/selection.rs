@@ -147,6 +147,17 @@ impl<I: SelectionImpl> Selection<I> {
         self.selection.clear();
         self.change.clear();
     }
+    
+    pub fn is_empty(&self) -> bool {
+        if self.selection.is_empty() && self.change.is_empty() {
+            return true;
+        }
+
+        match self.exclude {
+            true => self.selection == self.change,
+            false => false,
+        }
+    }
 }
 
 impl<I: SelectionImpl> Default for Selection<I> {

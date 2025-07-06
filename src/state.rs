@@ -11,11 +11,7 @@ use parking_lot::RwLock;
 use smoldata::{reader::ReadError, SmolRead, SmolReadWrite, SmolWrite};
 
 use crate::{
-    board::{Board, Wire},
-    circuits::{CircuitPin, PinType, UntypedCircuitCtx},
-    containers::FixedVec,
-    pool::get_pooled,
-    Style,
+    board::{Board, Wire}, circuits::{CircuitPin, PinType, UntypedCircuitCtx}, containers::FixedVec, io::savestate, pool::get_pooled, Style
 };
 
 #[derive(Clone, Default, PartialEq, Eq)]
@@ -133,11 +129,11 @@ impl BoardState {
         &self.board
     }
 
-    pub fn save(&self) -> crate::io::BoardState {
+    pub fn save(&self) -> savestate::BoardState {
         let wires = self.board.wires().read();
         let circuits = self.board.circuits().read();
 
-        crate::io::BoardState {
+        savestate::BoardState {
             wires: self
                 .wires
                 .read()
@@ -157,7 +153,7 @@ impl BoardState {
                     let circuit = circuits.get(i)?;
                     let pins = circuit.pins.read();
 
-                    Some(crate::io::CircuitState {
+                    Some(savestate::CircuitState {
                         pins: v
                             .pins
                             .iter()
@@ -179,13 +175,13 @@ impl BoardState {
         }
     }
 
-    fn load_stage1_shallow(&self, data: &crate::io::BoardState) {
+    fn load_stage1_shallow(&self, data: &savestate::BoardState) {
         self.wires.write().clone_from(&data.wires);
 
         self.sim.write().load(&data.sim);
     }
 
-    fn load_stage2_circuits(&self, data: &crate::io::BoardState) {
+    fn load_stage2_circuits(&self, data: &savestate::BoardState) {
         let board_circuits = self.board.circuits();
         let board_circuits = board_circuits.read();
         let mut circuits = self.circuits.write();
@@ -209,7 +205,7 @@ impl BoardState {
         };
     }
 
-    fn load_stage3_circuit_states(&self, data: &crate::io::BoardState) {
+    fn load_stage3_circuit_states(&self, data: &savestate::BoardState) {
         let board_circuits = self.board.circuits();
         let board_circuits = board_circuits.read();
         let circuits = self.circuits.read();
@@ -539,8 +535,8 @@ type InternalCircuitStateLock = Arc<RwLock<Option<Box<dyn Any + Send + Sync>>>>;
 
 #[derive(Default)]
 pub struct CircuitState {
-    pins: Vec<WireState>,
-    internal: InternalCircuitStateLock,
+    pub pins: Vec<WireState>,
+    pub internal: InternalCircuitStateLock,
 }
 
 #[derive(Default)]
@@ -664,14 +660,14 @@ pub struct BoardStateSimulationCtx {
 }
 
 impl BoardStateSimulationCtx {
-    fn save(&self) -> crate::io::BoardStateSimulation {
-        crate::io::BoardStateSimulation {
+    fn save(&self) -> savestate::BoardStateSimulation {
+        savestate::BoardStateSimulation {
             wires: self.wires.iter().cloned().collect(),
             circuits: self.circuits.iter().cloned().collect(),
         }
     }
 
-    fn load(&mut self, data: &crate::io::BoardStateSimulation) {
+    fn load(&mut self, data: &savestate::BoardStateSimulation) {
         self.wires = data.wires.iter().cloned().collect();
         self.circuits = data.circuits.iter().cloned().collect();
     }
@@ -741,8 +737,8 @@ impl BoardStateCollection {
         }
     }
 
-    pub fn save(&self) -> crate::io::BoardStates {
-        crate::io::BoardStates {
+    pub fn save(&self) -> savestate::BoardStates {
+        savestate::BoardStates {
             main: self.main_state().save(),
             states: self
                 .states
@@ -753,7 +749,7 @@ impl BoardStateCollection {
         }
     }
 
-    pub fn preload(&mut self, data: &crate::io::BoardStates, board: Arc<Board>) {
+    pub fn preload(&mut self, data: &savestate::BoardStates, board: Arc<Board>) {
         self.main = Some(BoardState::new(board.clone(), 0));
         self.states = FixedVec::from_option_vec(
             data.states
@@ -764,7 +760,7 @@ impl BoardStateCollection {
         );
     }
 
-    pub fn load_stage1_shallow(&self, data: &crate::io::BoardStates) {
+    pub fn load_stage1_shallow(&self, data: &savestate::BoardStates) {
         self.main
             .as_ref()
             .expect("preloaded state collection")
@@ -779,7 +775,7 @@ impl BoardStateCollection {
         }
     }
 
-    pub fn load_stage2_circuits(&self, data: &crate::io::BoardStates) {
+    pub fn load_stage2_circuits(&self, data: &savestate::BoardStates) {
         for (i, state_data) in data.iter().enumerate() {
             let Some(state_data) = state_data else {
                 continue;
@@ -790,7 +786,7 @@ impl BoardStateCollection {
         }
     }
 
-    pub fn load_stage3_circuit_states(&self, data: &crate::io::BoardStates) {
+    pub fn load_stage3_circuit_states(&self, data: &savestate::BoardStates) {
         for (i, state_data) in data.iter().enumerate() {
             let Some(state_data) = state_data else {
                 continue;
