@@ -71,6 +71,7 @@ impl App {
             Arc::new(RwLock::new(crate::circuits::gates::Gate::nor().into())),
             Arc::new(RwLock::new(crate::circuits::gates::Gate::xor().into())),
             Arc::new(RwLock::new(crate::circuits::gates::Gate::xnor().into())),
+            Arc::new(RwLock::new(crate::circuits::gates::not::Not.into())),
         ];
 
         let data_dir = directories_next::ProjectDirs::from("", "", APP_NAME)

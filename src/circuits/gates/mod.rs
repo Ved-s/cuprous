@@ -12,6 +12,7 @@ pub mod or;
 pub mod nor;
 pub mod xor;
 pub mod xnor;
+pub mod not;
 
 struct GateOutput {
     out: bool,

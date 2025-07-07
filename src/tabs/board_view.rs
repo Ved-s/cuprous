@@ -9,8 +9,8 @@ use std::{
 
 use eframe::{
     egui::{
-        pos2, remap_clamp, vec2, Align, Color32, FontId, FontSelection, Key, PointerButton,
-        Rect, Response, Sense, Stroke, StrokeKind, TextStyle, TextWrapMode, Ui, WidgetText,
+        pos2, remap_clamp, vec2, Align, Color32, FontId, FontSelection, Key, PointerButton, Rect,
+        Response, Sense, Stroke, StrokeKind, TextStyle, TextWrapMode, Ui, WidgetText,
     },
     epaint::{CornerRadiusF32, PathStroke, TextShape},
 };
@@ -1407,39 +1407,6 @@ impl BoardView {
             self.camera_move_velocity.x += speedup;
         }
 
-        if ui.input(|input| input.key_pressed(Key::Delete))
-            && self.selection.iter().next().is_some()
-        {
-            let mut editor = self.editor.write();
-            for item in self.selection.iter() {
-                match item {
-                    SelectedBoardItem::WirePart { pos, dir } => {
-                        let dir = Direction8::from(*dir);
-                        let dist = editor.wires().get(*pos).and_then(|n| {
-                            n.wire.is_some().then(|| *n.directions.get(dir)).flatten()
-                        });
-                        if let Some(dist) = dist {
-                            editor.remove_wire(*pos, dir, dist);
-                        }
-                    }
-                    SelectedBoardItem::WirePoint { pos } => {
-                        editor.remove_wire_point_with_parts(*pos);
-                    }
-                    SelectedBoardItem::Circuit { id, pos } => {
-                        let Some(circuit) = editor.board().circuits().read().get(*id).cloned()
-                        else {
-                            continue;
-                        };
-
-                        if circuit.info.read().pos == *pos {
-                            editor.remove_circuit(&circuit);
-                        }
-                    }
-                }
-            }
-            self.selection.clear();
-        }
-
         if ui.input(|input| input.key_pressed(Key::F9)) {
             match (self.wire_debug, self.circuit_debug) {
                 (false, false) => self.wire_debug = true,
@@ -1479,9 +1446,24 @@ impl BoardView {
             }
         }
 
-        if ui.input(|input| input.events.contains(&eframe::egui::Event::Copy))
-            && !self.selection.is_empty()
-        {
+        let mut copy = false;
+        let mut cut = false;
+
+        ui.input(|input| {
+            for e in &input.events {
+                match e {
+                    eframe::egui::Event::Copy => {
+                        copy = true;
+                    }
+                    eframe::egui::Event::Cut => {
+                        cut = true;
+                    }
+                    _ => {}
+                };
+            }
+        });
+
+        if (cut | copy) && !self.selection.is_empty() {
             let copy = self.copy_selection();
 
             let buf = Vec::from(COPY_PASTE_BOARD_ITEMS_PREFIX.as_bytes());
@@ -1506,19 +1488,66 @@ impl BoardView {
                     });
                 }
                 Err(_) => {
+                    cut = false;
                     // todo: error handling
                 }
             };
         }
+
+        if (cut | ui.input(|input| input.key_pressed(Key::Delete)))
+            && self.selection.iter().next().is_some()
+        {
+            let mut editor = self.editor.write();
+            for item in self.selection.iter() {
+                match item {
+                    SelectedBoardItem::WirePart { pos, dir } => {
+                        let dir = Direction8::from(*dir);
+                        let dist = editor.wires().get(*pos).and_then(|n| {
+                            n.wire.is_some().then(|| *n.directions.get(dir)).flatten()
+                        });
+                        if let Some(dist) = dist {
+                            editor.remove_wire(*pos, dir, dist);
+                        }
+                    }
+                    SelectedBoardItem::WirePoint { pos } => {
+                        editor.remove_wire_point_with_parts(*pos);
+                    }
+                    SelectedBoardItem::Circuit { id, pos } => {
+                        let Some(circuit) = editor.board().circuits().read().get(*id).cloned()
+                        else {
+                            continue;
+                        };
+
+                        if circuit.info.read().pos == *pos {
+                            editor.remove_circuit(&circuit);
+                        }
+                    }
+                }
+            }
+            self.selection.clear();
+        }
     }
 
     fn copy_selection(&self) -> copystate::CopyState {
+        // iMIN .. iMAX -> 0 .. uMAX
+
+        fn offset_range(v: isize) -> usize {
+            let offset = isize::MIN.unsigned_abs();
+            if v >= 0 {
+                v as usize + offset
+            } else {
+                offset - (-v as usize)
+            }
+        }
+
         let editor = self.editor.read();
         let circuits = editor.board().circuits().read();
         let circuit_states = self.state.circuits().read();
 
-        let mut min_pos = Vec2isize::single_value(isize::MAX);
-        for &selected in self.selection.iter() {
+        let mut min_pos = Vec2usize::single_value(usize::MAX);
+        let mut data = copystate::CopyState::default();
+
+        'selection: for &selected in self.selection.iter() {
             let min = match selected {
                 SelectedBoardItem::WirePart { pos, dir } => {
                     let Some(node) = editor.wires().get(pos) else {
@@ -1531,7 +1560,16 @@ impl BoardView {
 
                     let pos2 = pos + dir.into_dir_isize() * dist.get() as isize;
 
-                    let min = [pos.x.min(pos2.x), pos.y.min(pos2.y)];
+                    let min = [
+                        offset_range(pos.x.min(pos2.x)),
+                        offset_range(pos.y.min(pos2.y)),
+                    ];
+
+                    data.wire_parts.push(copystate::WirePart {
+                        pos: pos.convert(offset_range),
+                        dir,
+                        len: dist.get(),
+                    });
 
                     min.into()
                 }
@@ -1544,49 +1582,39 @@ impl BoardView {
                         continue;
                     }
 
-                    pos
-                }
-                SelectedBoardItem::Circuit { id, pos } => {
-                    if circuits.get(id).is_none() {
-                        continue;
-                    };
+                    let mut any = false;
 
-                    pos
-                }
-            };
+                    for d in Direction4Half::ALL {
+                        let a = Direction8::from(d);
+                        let b = a.inverted();
 
-            min_pos = [min.x.min(min_pos.x), min.y.min(min_pos.y)].into();
-        }
+                        let a = self
+                            .selection
+                            .contains(&SelectedBoardItem::WirePart { pos, dir: d });
+                        let b_dist = *node.directions.get(b);
+                        let b = b_dist
+                            .map(|dist| {
+                                self.selection.contains(&SelectedBoardItem::WirePart {
+                                    pos: b.into_dir_isize() * dist.get() as isize + pos,
+                                    dir: d,
+                                })
+                            })
+                            .unwrap_or(false);
 
-        let mut data = copystate::CopyState::default();
-        for &selected in self.selection.iter() {
-            match selected {
-                SelectedBoardItem::WirePart { pos, dir } => {
-                    let Some(node) = editor.wires().get(pos) else {
-                        continue;
-                    };
+                        if a != b {
+                            continue 'selection;
+                        }
 
-                    let Some(dist) = node.directions.get(dir.into()) else {
-                        continue;
-                    };
+                        any |= a;
+                    }
 
-                    data.wire_parts.push(copystate::WirePart {
-                        pos: (pos - min_pos).convert(|v| v as usize),
-                        dir,
-                        len: dist.get(),
-                    });
-                }
-                SelectedBoardItem::WirePoint { pos } => {
-                    let Some(node) = editor.wires().get(pos) else {
-                        continue;
-                    };
-
-                    if node.wire.is_none() {
+                    if any {
                         continue;
                     }
 
-                    data.wire_points
-                        .push((pos - min_pos).convert(|v| v as usize));
+                    data.wire_points.push(pos.convert(offset_range));
+
+                    pos.convert(offset_range)
                 }
                 SelectedBoardItem::Circuit { id, pos } => {
                     let Some(circuit) = circuits.get(id) else {
@@ -1602,15 +1630,31 @@ impl BoardView {
 
                     data.circuits.push(copystate::Circuit {
                         id: imp.imp.id(),
-                        pos: (pos - min_pos).convert(|v| v as usize),
+                        pos: pos.convert(offset_range),
                         dir: info.transform.dir,
                         flip: info.transform.flip,
                         config: imp.imp.save_config(),
                         instance: imp.imp.save_instance(circuit, &imp.instance),
                         state: state.and_then(|s| imp.imp.save_state(circuit, &imp.instance, s)),
                     });
+
+                    pos.convert(offset_range)
                 }
-            }
+            };
+
+            min_pos = [min.x.min(min_pos.x), min.y.min(min_pos.y)].into();
+        }
+
+        for p in &mut data.wire_parts {
+            p.pos -= min_pos;
+        }
+
+        for p in &mut data.wire_points {
+            *p -= min_pos;
+        }
+
+        for c in &mut data.circuits {
+            c.pos -= min_pos;
         }
 
         data
