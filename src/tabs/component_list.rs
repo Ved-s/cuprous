@@ -8,7 +8,7 @@ use eframe::{
 };
 
 use crate::{
-    app::SelectedItem, circuits::CircuitRenderingContext, vector::Vec2f, PaintContext, Screen,
+    app::SelectedItem, circuits::{CircuitRenderPurpose, CircuitRenderingContext}, vector::Vec2f, PaintContext, Screen,
     Style,
 };
 
@@ -77,6 +77,7 @@ impl TabImpl for ComponentList {
                             blueprint.inner_size,
                             None,
                             blueprint.transform,
+                            CircuitRenderPurpose::Icon,
                         );
 
                         blueprint.imp.draw(None, &ctx);

@@ -21,8 +21,8 @@ use crate::{
     app::{App, SelectedItem, COPY_PASTE_BOARD_ITEMS_PREFIX},
     board::CircuitCreationOverrides,
     circuits::{
-        CircuitBlueprint, CircuitRenderingContext, CircuitSelectionRenderingContext,
-        TransformSupport, UntypedCircuitCtx,
+        CircuitBlueprint, CircuitRenderPurpose, CircuitRenderingContext,
+        CircuitSelectionRenderingContext, TransformSupport, UntypedCircuitCtx,
     },
     drawing::{self, rotated_rect},
     editor::{BoardEditor, BoardSelectionImpl, QuarterPos, SelectedBoardItem},
@@ -764,6 +764,7 @@ impl BoardView {
                     info.render_size,
                     selection,
                     info.transform,
+                    CircuitRenderPurpose::InWorld,
                 );
 
                 let mut update_tasks = get_pooled::<UpdateTaskPool>();
@@ -1232,53 +1233,56 @@ impl BoardView {
             blueprint.inner_size,
             None,
             blueprint.transform,
+            CircuitRenderPurpose::PlacementPreview,
         );
         blueprint.imp.draw(None, &circuit_ctx);
 
-        let mut blueprint_pins = get_pooled::<ColoredTriangleBuffer>();
-        blueprint_pins.clear();
+        if blueprint.imp.draw_blueprint_pins() {
+            let mut blueprint_pins = get_pooled::<ColoredTriangleBuffer>();
+            blueprint_pins.clear();
 
-        for pin in blueprint.pins.iter() {
-            let pos = pin.pos.convert(|v| v as isize) + pos;
-            let pos = ctx.screen.world_to_screen(pos.convert(|v| v as f32 + 0.5));
+            for pin in blueprint.pins.iter() {
+                let pos = pin.pos.convert(|v| v as isize) + pos;
+                let pos = ctx.screen.world_to_screen(pos.convert(|v| v as f32 + 0.5));
 
-            let has_quarters = QuarterPos::ALL.iter().copied().any(|q| {
-                let quarter_pos = pin.pos * 2 + q.into_position();
-                let quarter_pos = blueprint.transform.backtransform_pos(
-                    blueprint.inner_size * 2,
-                    quarter_pos,
-                    Some(TransformSupport::Automatic),
+                let has_quarters = QuarterPos::ALL.iter().copied().any(|q| {
+                    let quarter_pos = pin.pos * 2 + q.into_position();
+                    let quarter_pos = blueprint.transform.backtransform_pos(
+                        blueprint.inner_size * 2,
+                        quarter_pos,
+                        Some(TransformSupport::Automatic),
+                    );
+                    blueprint
+                        .imp
+                        .occupies_quarter(blueprint.transform, quarter_pos)
+                });
+
+                let color = if has_quarters {
+                    ctx.style.wire_colors.r#false
+                } else {
+                    Color32::RED // TODO: style.wires.error_color
+                };
+
+                drawing::pin(
+                    pos,
+                    (WIRE_WIDTH / 2.0) * ctx.screen.scale,
+                    &ctx.style.pins,
+                    pin.dir,
+                    color,
+                    blueprint_pins.deref_mut(),
                 );
-                blueprint
-                    .imp
-                    .occupies_quarter(blueprint.transform, quarter_pos)
+            }
+
+            ctx.custom_draw(move |ctx| {
+                let mut vertexes = ColoredVertexRenderer::global(ctx.painter.gl());
+
+                vertexes.draw(
+                    ctx.painter.gl(),
+                    ctx.paint_info.screen_size_px,
+                    blueprint_pins.deref(),
+                );
             });
-
-            let color = if has_quarters {
-                Color32::DARK_GREEN // TODO: style.wires.false_color
-            } else {
-                Color32::RED // TODO: style.wires.error_color
-            };
-
-            drawing::pin(
-                pos,
-                (WIRE_WIDTH / 2.0) * ctx.screen.scale,
-                &ctx.style.pins,
-                pin.dir,
-                color,
-                blueprint_pins.deref_mut(),
-            );
         }
-
-        ctx.custom_draw(move |ctx| {
-            let mut vertexes = ColoredVertexRenderer::global(ctx.painter.gl());
-
-            vertexes.draw(
-                ctx.painter.gl(),
-                ctx.paint_info.screen_size_px,
-                blueprint_pins.deref(),
-            );
-        });
     }
 
     fn handle_circuit_placement(
@@ -1948,6 +1952,10 @@ fn draw_pin_labels(
     let distance = 20.0 * text_scale;
 
     for (pos, name, dir) in pins {
+        if name.is_empty() {
+            continue;
+        }
+
         let pos = ctx.screen.world_to_screen(pos.convert(|v| v as f32 + 0.5));
 
         let text = WidgetText::from(name);

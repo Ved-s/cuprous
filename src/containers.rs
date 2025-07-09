@@ -643,7 +643,7 @@ impl<const CHUNK_SIZE: usize, T: Default> Chunks2D<CHUNK_SIZE, T> {
         &self,
         pos: Vec2isize,
         size: Vec2usize,
-    ) -> impl Iterator<Item = (Vec2isize, ChunksLookaround<CHUNK_SIZE, T>, &T)> {
+    ) -> impl Iterator<Item = (Vec2isize, ChunksLookaround<'_, CHUNK_SIZE, T>, &T)> {
         let size = size.convert(|v| v as isize);
 
         let tl = pos;

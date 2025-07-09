@@ -544,7 +544,7 @@ impl Direction4 {
     }
 
     pub const fn inverted(self) -> Self {
-        Self::from_index(self.into_index() + 4)
+        Self::from_index(self.into_index() + 2)
     }
 
     // UpRight (1), Up (0) / Down (4) -> UpLeft (7)

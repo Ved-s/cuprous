@@ -11,6 +11,7 @@ use crate::{
 pub mod button;
 pub mod gates;
 pub mod test;
+pub mod constant;
 
 pub struct Circuit {
     pub id: usize,
@@ -246,11 +247,19 @@ pub struct CircuitSelectionRenderingContext<'a> {
     pub custom_selection: &'a mut bool,
 }
 
+#[derive(Clone, Copy)]
+pub enum CircuitRenderPurpose {
+    Icon,
+    PlacementPreview,
+    InWorld,
+}
+
 pub struct CircuitRenderingContext<'a> {
     pub paint: &'a PaintContext<'a>,
     pub screen_rect: Rect,
     pub selection: Option<CircuitSelectionRenderingContext<'a>>,
     pub transform: CircuitTransform,
+    pub purpose: CircuitRenderPurpose,
 
     // internal for transform_pos
     world_size: Vec2usize,
@@ -265,6 +274,7 @@ impl<'a> CircuitRenderingContext<'a> {
         render_size: Vec2usize,
         selection: Option<CircuitSelectionRenderingContext<'a>>,
         transform: CircuitTransform,
+        purpose: CircuitRenderPurpose,
     ) -> Self {
         let flip = transform
             .flip
@@ -290,6 +300,7 @@ impl<'a> CircuitRenderingContext<'a> {
             world_size: render_size,
             selection,
             transform,
+            purpose,
             angle,
             flip,
         }
@@ -671,6 +682,10 @@ pub trait CircuitImpl: Clone + Send + Sync {
 
         Ok(Self::State::default())
     }
+
+    fn draw_blueprint_pins(&self) -> bool {
+        true
+    }
 }
 
 traitbox::traitbox! {
@@ -684,6 +699,7 @@ traitbox::traitbox! {
         fn occupies_quarter(&self, transform: CircuitTransform, qpos: Vec2usize) -> bool;
         fn describe_pins(&self, transform: CircuitTransform) -> Box<[PinDescription]>;
         fn transform_support(&self) -> CircuitTransformSupport;
+        fn draw_blueprint_pins(&self) -> bool;
     }
 
     impl {

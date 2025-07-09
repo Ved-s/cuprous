@@ -7,12 +7,7 @@ use parking_lot::RwLock;
 use smoldata::raw::RawValue;
 
 use crate::{
-    circuits::CircuitBlueprint,
-    io::copystate,
-    simulation::SimulationCtx,
-    tabs::{SafeTabType, Tab, TabSerde, TabType, TabViewer},
-    vector::{Vec2isize, Vec2usize},
-    Style,
+    circuits::CircuitBlueprint, io::copystate, simulation::SimulationCtx, state::WireState, tabs::{SafeTabType, Tab, TabSerde, TabType, TabViewer}, vector::{Vec2isize, Vec2usize}, Style
 };
 
 pub const APP_NAME: &str = "cuprous-dev";
@@ -72,6 +67,8 @@ impl App {
             Arc::new(RwLock::new(crate::circuits::gates::Gate::xor().into())),
             Arc::new(RwLock::new(crate::circuits::gates::Gate::xnor().into())),
             Arc::new(RwLock::new(crate::circuits::gates::not::Not.into())),
+            Arc::new(RwLock::new(crate::circuits::constant::Constant::new(WireState::Bool(false)).into())),
+            Arc::new(RwLock::new(crate::circuits::constant::Constant::new(WireState::Bool(true)).into())),
         ];
 
         let data_dir = directories_next::ProjectDirs::from("", "", APP_NAME)

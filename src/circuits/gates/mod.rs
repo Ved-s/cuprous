@@ -2,17 +2,26 @@ use std::sync::Arc;
 
 use traitbox::traitbox;
 
-use crate::{state::WireState, str::ArcStaticStr, vector::Vec2usize, Direction8};
+use crate::{
+    circuits::{CircuitFlipSupport, CircuitRotationSupport, CircuitTransformSupport, FlipType, TransformSupport},
+    state::WireState,
+    str::ArcStaticStr,
+    vector::Vec2usize,
+    Direction4, Direction8,
+};
 
-use super::{Circuit, CircuitCtx, CircuitImpl, CircuitPin, CircuitRenderingContext, CircuitTransform, PinDescription, PinType};
+use super::{
+    Circuit, CircuitCtx, CircuitImpl, CircuitPin, CircuitRenderingContext, CircuitTransform,
+    PinDescription, PinType,
+};
 
 pub mod and;
 pub mod nand;
-pub mod or;
 pub mod nor;
-pub mod xor;
-pub mod xnor;
 pub mod not;
+pub mod or;
+pub mod xnor;
+pub mod xor;
 
 struct GateOutput {
     out: bool,
@@ -55,27 +64,39 @@ pub struct Gate {
 
 impl Gate {
     pub fn and() -> Self {
-        Self { imp: GateImplBox::new(and::And) }
+        Self {
+            imp: GateImplBox::new(and::And),
+        }
     }
 
     pub fn nand() -> Self {
-        Self { imp: GateImplBox::new(nand::Nand) }
+        Self {
+            imp: GateImplBox::new(nand::Nand),
+        }
     }
 
     pub fn or() -> Self {
-        Self { imp: GateImplBox::new(or::Or) }
+        Self {
+            imp: GateImplBox::new(or::Or),
+        }
     }
 
     pub fn nor() -> Self {
-        Self { imp: GateImplBox::new(nor::Nor) }
+        Self {
+            imp: GateImplBox::new(nor::Nor),
+        }
     }
 
     pub fn xor() -> Self {
-        Self { imp: GateImplBox::new(xor::Xor) }
+        Self {
+            imp: GateImplBox::new(xor::Xor),
+        }
     }
 
     pub fn xnor() -> Self {
-        Self { imp: GateImplBox::new(xnor::Xnor) }
+        Self {
+            imp: GateImplBox::new(xnor::Xnor),
+        }
     }
 }
 
@@ -106,6 +127,19 @@ impl CircuitImpl for Gate {
         qpos.x != 0 && qpos.x != 7
     }
 
+    fn transform_support(&self) -> CircuitTransformSupport {
+        CircuitTransformSupport {
+            rotation: Some(CircuitRotationSupport {
+                support: TransformSupport::Automatic,
+                default_dir: Direction4::Up,
+            }),
+            flip: Some(CircuitFlipSupport {
+                support: TransformSupport::Automatic,
+                ty: FlipType::Horizontal,
+            }),
+        }
+    }
+
     fn describe_pins(&self, _: CircuitTransform) -> Box<[PinDescription]> {
         [
             PinDescription {
@@ -128,8 +162,9 @@ impl CircuitImpl for Gate {
                 display_name: "Out".into(),
                 dir: Some(Direction8::Right),
                 ty: PinType::Outside,
-            }
-        ].into()
+            },
+        ]
+        .into()
     }
 
     fn draw(&self, _: Option<CircuitCtx<Self>>, render: &CircuitRenderingContext) {
@@ -140,19 +175,20 @@ impl CircuitImpl for Gate {
         let pins = circuit.pins.read();
 
         GateInstance {
-            inputs: pins[..pins.len()-1].iter().map(|p| p.pin.clone()).collect(),
-            output: pins[pins.len()-1].pin.clone(),
+            inputs: pins[..pins.len() - 1]
+                .iter()
+                .map(|p| p.pin.clone())
+                .collect(),
+            output: pins[pins.len() - 1].pin.clone(),
         }
     }
 
     // TODO: let user select what to do with None inputs
 
     fn update_signals(&self, mut ctx: CircuitCtx<Self>, _: Option<usize>) {
-
         let inputs = &ctx.instance.inputs;
 
         let output = 'compute: {
-
             let mut gate_state = self.imp.init_state();
 
             let mut out = false;
@@ -172,11 +208,10 @@ impl CircuitImpl for Gate {
                         out = res.out;
                         fin = res.fin;
                         any = true;
-
-                    },
+                    }
                     WireState::Error => {
                         break 'compute WireState::Error;
-                    },
+                    }
                 }
             }
 
@@ -190,4 +225,3 @@ impl CircuitImpl for Gate {
         ctx.set_pin_output(&ctx.instance.output, output);
     }
 }
-
