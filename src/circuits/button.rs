@@ -3,7 +3,7 @@ use std::sync::Arc;
 use eframe::egui::{Color32, CursorIcon, PointerButton, Sense, Stroke, StrokeKind};
 use smoldata::{raw::RawValue, SmolReadWrite};
 
-use crate::{state::WireState, str::ArcStaticStr, vector::Vec2usize, Direction4, Direction8};
+use crate::{state::wires::WireState, str::ArcStaticStr, vector::Vec2usize, Direction4, Direction8};
 
 use super::{
     Circuit, CircuitCtx, CircuitImpl, CircuitPin, CircuitRenderingContext, CircuitRotationSupport,
@@ -78,7 +78,7 @@ impl CircuitImpl for Button {
         let color_mul = if semi_transparent { 0.5 } else { 1.0 };
         let state = circuit
             .as_ref()
-            .and_then(|c| c.read_internal_state(|s| s.state))
+            .and_then(|c| c.read_internal_state().map(|s| s.state))
             .unwrap_or_default();
         let color = if state {
             let c = color.linear_multiply(0.77);
@@ -136,11 +136,10 @@ impl CircuitImpl for Button {
             if interaction.drag_started_by(PointerButton::Primary)
                 || !shift && interaction.drag_stopped_by(PointerButton::Primary)
             {
-                let new_state = cir.write_internal_state(|s| {
-                    s.state = !s.state;
-                    s.state
-                });
-                cir.set_pin_output(&cir.instance.pin, WireState::Bool(new_state));
+                let state = cir.write_internal_state();
+                state.state = !state.state;
+                let state = state.state;
+                cir.set_pin_output(&cir.instance.pin, WireState::Bool(state));
             }
         }
     }
@@ -153,7 +152,7 @@ impl CircuitImpl for Button {
     }
 
     fn update_signals(&self, mut circuit: CircuitCtx<Self>, _: Option<usize>) {
-        let state = circuit.read_internal_state(|s| s.state).unwrap_or(false);
+        let state = circuit.read_internal_state().map(|s| s.state).unwrap_or(false);
         circuit.set_pin_output(&circuit.instance.pin, WireState::Bool(state));
     }
 

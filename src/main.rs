@@ -7,8 +7,9 @@ use eframe::{
 };
 use serde::{Deserialize, Serialize};
 use smoldata::SmolReadWrite;
-use state::WireState;
 use vector::{Vec2f, Vec2isize, Vec2usize};
+
+use crate::state::wires::WireState;
 
 pub mod app;
 pub mod board;

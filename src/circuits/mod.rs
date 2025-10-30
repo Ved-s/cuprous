@@ -5,13 +5,15 @@ use parking_lot::{Mutex, RwLock};
 use smoldata::raw::RawValue;
 
 use crate::{
-    board::{Board, Wire}, io::savestate, selection::SelectionRenderer, state::{BoardState, UpdateTaskPool, WireState}, str::ArcStaticStr, vector::{Vec2f, Vec2isize, Vec2usize}, Direction4, Direction8, PaintContext
+    board::{Board, Wire}, io::savestate, selection::SelectionRenderer, state::{circuits::BoardCircuitsState, sim::UpdateTaskPool, wires::WireState}, str::ArcStaticStr, vector::{Vec2f, Vec2isize, Vec2usize}, Direction4, Direction8, PaintContext
 };
 
 pub mod button;
 pub mod gates;
 pub mod test;
 pub mod constant;
+pub mod buffer;
+pub mod error_filter;
 
 pub struct Circuit {
     pub id: usize,
@@ -164,7 +166,7 @@ pub struct CircuitPin {
 impl CircuitPin {
     pub fn set_output(
         &self,
-        board_state: &BoardState,
+        board_state: &mut BoardCircuitsState,
         tasks: &mut UpdateTaskPool,
         state: WireState,
     ) {
@@ -176,7 +178,7 @@ impl CircuitPin {
         }
     }
 
-    pub fn get_state(&self, state: &BoardState) -> WireState {
+    pub fn get_state(&self, state: &BoardCircuitsState) -> WireState {
         state.get_pin(self.circuit.id, self.id)
     }
 
@@ -211,10 +213,7 @@ impl CircuitPin {
         match self.ty {
             PinType::Custom => todo!(),
             PinType::Inside => {
-                tasks.add_circuit_task(self.circuit.id, Some(self.id));
-                for state in self.circuit.board.states().read().iter() {
-                    state.set_pin(self.circuit.id, self.id, WireState::default());
-                }
+                tasks.add_update_input_task(self.circuit.id, self.id, true);
             }
             PinType::Outside => {
                 tasks.add_wire_task(old_wire, true);
@@ -228,10 +227,7 @@ impl CircuitPin {
                 tasks.add_wire_task(wire, true);
             }
             PinType::Inside => {
-                tasks.add_circuit_task(self.circuit.id, Some(self.id));
-                for state in self.circuit.board.states().read().iter() {
-                    state.set_pin(self.circuit.id, self.id, state.get_wire(wire));
-                }
+                tasks.add_update_input_task(self.circuit.id, self.id, true);
             }
         }
     }
@@ -556,8 +552,10 @@ impl CircuitTransform {
     }
 }
 
+
+// TODO: read-only state for draws
 pub struct UntypedCircuitCtx<'a> {
-    pub state: &'a Arc<BoardState>,
+    pub state: &'a mut BoardCircuitsState,
     pub circuit: &'a Arc<Circuit>,
     pub tasks: &'a mut UpdateTaskPool,
     pub instance: &'a dyn Any,
@@ -578,7 +576,7 @@ impl<'a> UntypedCircuitCtx<'a> {
 }
 
 pub struct CircuitCtx<'a, C: CircuitImpl> {
-    pub state: &'a Arc<BoardState>,
+    pub state: &'a mut BoardCircuitsState,
     pub circuit: &'a Arc<Circuit>,
     pub tasks: &'a mut UpdateTaskPool,
     pub instance: &'a C::Instance,
@@ -593,14 +591,14 @@ impl<C: CircuitImpl> CircuitCtx<'_, C> {
         pin.get_state(self.state)
     }
 
-    fn read_internal_state<R>(&self, reader: impl FnOnce(&C::State) -> R) -> Option<R> {
+    fn read_internal_state(&self) -> Option<&C::State> {
         self.state
-            .read_internal_circuit_state(self.circuit.id, reader)
+            .read_internal_circuit_state(self.circuit.id)
     }
 
-    fn write_internal_state<R>(&self, writer: impl FnOnce(&mut C::State) -> R) -> R {
+    fn write_internal_state(&mut self) -> &mut C::State {
         self.state
-            .write_internal_circuit_state(self.circuit.id, writer)
+            .write_internal_circuit_state(self.circuit.id)
     }
 }
 

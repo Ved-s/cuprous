@@ -1,32 +1,36 @@
 use std::sync::Arc;
 
-use eframe::{egui::{Color32, Pos2, Stroke}, epaint::{PathShape, PathStroke}};
+use eframe::{
+    egui::{Color32, Pos2, Rect, Stroke},
+    epaint::{PathShape, PathStroke},
+};
 
 use crate::{
     circuits::{
-        Circuit, CircuitCtx, CircuitImpl, CircuitPin, CircuitRenderingContext, CircuitTransform, PinDescription, PinType
-    }, state::wires::WireState, str::ArcStaticStr, vector::Vec2usize, Direction8
+        Circuit, CircuitCtx, CircuitImpl, CircuitPin, CircuitRenderingContext, CircuitTransform,
+        PinDescription, PinType,
+    }, state::wires::WireState, str::ArcStaticStr, vector::{Vec2f, Vec2usize}, Direction8
 };
 
 #[derive(Clone)]
-pub struct Not;
+pub struct ErrorFilter;
 
-pub struct NotInstance {
+pub struct ErrorFilterInstance {
     input: Arc<CircuitPin>,
     output: Arc<CircuitPin>,
 }
 
-impl CircuitImpl for Not {
+impl CircuitImpl for ErrorFilter {
     type State = ();
 
-    type Instance = NotInstance;
+    type Instance = ErrorFilterInstance;
 
     fn id(&self) -> ArcStaticStr {
-        "gate_not".into()
+        "error_filter".into()
     }
 
     fn display_name(&self) -> ArcStaticStr {
-        "NOT gate".into()
+        "Error filter".into()
     }
 
     fn size(&self, _transform: CircuitTransform) -> Vec2usize {
@@ -67,25 +71,33 @@ impl CircuitImpl for Not {
             ctx.transform_pos([0.5, 0.9].into()).into(),
         ];
 
-        ctx.paint.add(PathShape {
+        let tl = ctx.transform_pos([0.0, -0.1].into());
+        let br = ctx.transform_pos([1.5 + 0.075, 1.1].into());
+
+        let min = Vec2f::new(tl.x.min(br.x), tl.y.min(br.y));
+        let max = Vec2f::new(tl.x.max(br.x), tl.y.max(br.y));
+
+        let clip = Rect::from_min_max(min.into(), max.into());
+
+        ctx.paint.with_clip_rect(clip).add(PathShape {
             points: triangle_points,
             closed: true,
             fill: fill_color,
             stroke: PathStroke::new(0.15 * ctx.paint.screen.scale, border_color),
         });
 
-        let circle_pos = ctx.transform_pos([1.32, 0.5].into());
-        ctx.paint.circle(
-            circle_pos.into(),
-            0.2 * ctx.paint.screen.scale,
-            fill_color,
+        let a = ctx.transform_pos([1.5, 0.1].into());
+        let b = ctx.transform_pos([1.5, 0.9].into());
+
+        ctx.paint.line_segment(
+            [a.into(), b.into()],
             Stroke::new(0.15 * ctx.paint.screen.scale, border_color),
         );
     }
 
     fn create_instance(&self, circuit: &Arc<Circuit>) -> Self::Instance {
         let pins = circuit.pins.read();
-        NotInstance {
+        ErrorFilterInstance {
             input: pins[0].pin.clone(),
             output: pins[1].pin.clone(),
         }
@@ -93,11 +105,15 @@ impl CircuitImpl for Not {
 
     fn update_signals(&self, ctx: CircuitCtx<Self>, _changed_pin: Option<usize>) {
         let val = ctx.instance.input.get_state(ctx.state);
+
         let out = match val {
             WireState::None => WireState::None,
-            WireState::Bool(b) => WireState::Bool(!b),
-            WireState::Error => WireState::Error,
+            WireState::Bool(v) => WireState::Bool(v),
+            WireState::Error => {
+                return;
+            }
         };
+
         ctx.instance.output.set_output(ctx.state, ctx.tasks, out);
     }
 }

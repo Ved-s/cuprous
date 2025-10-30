@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use smoldata::{raw::RawValue, SmolReadWrite};
 
-use crate::{state::{CircuitUpdateTask, WireState, WireUpdateTask}, str::ArcStaticStr, vector::Vec2isize, Direction4};
+use crate::{state::{sim::{CircuitUpdateTask, WireUpdateTask}, wires::WireState}, str::ArcStaticStr, vector::Vec2isize, Direction4};
 
 
 #[derive(SmolReadWrite)]

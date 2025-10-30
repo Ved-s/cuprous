@@ -3,14 +3,13 @@ use std::{
     f32::consts::{PI, SQRT_2, TAU},
     num::NonZeroU32,
     ops::{Deref, DerefMut, Not},
-    sync::Arc,
+    sync::{atomic::Ordering, Arc, Weak},
     time::{Duration, Instant},
 };
 
 use eframe::{
     egui::{
-        pos2, remap_clamp, vec2, Align, Color32, FontId, FontSelection, Key, PointerButton, Rect,
-        Response, Sense, Stroke, StrokeKind, TextStyle, TextWrapMode, Ui, WidgetText,
+        pos2, remap_clamp, vec2, Align, Color32, FontId, FontSelection, Key, PointerButton, Rect, Response, RichText, Sense, Stroke, StrokeKind, TextStyle, TextWrapMode, Ui, UiBuilder, WidgetText
     },
     epaint::{CornerRadiusF32, PathStroke, TextShape},
 };
@@ -30,7 +29,8 @@ use crate::{
     io::copystate,
     pool::get_pooled,
     selection::{Selection, SelectionRenderer},
-    state::{BoardState, UpdateTaskPool},
+    simulation::SimulationStateData,
+    state::{sim::UpdateTaskPool, BoardState},
     vector::{Vec2f, Vec2isize, Vec2usize, Vector2},
     vertex_renderer::{ColoredLineBuffer, ColoredTriangleBuffer, ColoredVertexRenderer},
     CustomPaintContext, Direction4Half, Direction8, Direction8Array, PaintContext, Screen,
@@ -53,7 +53,7 @@ pub struct BoardView {
     wire_draw_start: Option<Vec2isize>,
 
     editor: Arc<RwLock<BoardEditor>>,
-    state: Arc<BoardState>,
+    state: Arc<SimulationStateData>,
 
     fixed_screen_pos: Option<(Rect, PanAndZoom)>,
     wire_debug: bool,
@@ -84,13 +84,22 @@ impl TabCreation for BoardView {
             .next()
             .cloned()
             .expect("at least one board");
-        let state = board.states().write().main_state().clone();
+
+        let state = board
+            .states()
+            .read()
+            .iter()
+            .filter_map(Weak::upgrade)
+            .next()
+            .expect("at least one state");
+
+        let editor = app.get_board_editor(&state);
 
         Self {
             pan_zoom: Default::default(),
             wire_draw_start: None,
 
-            editor: board.make_editor(),
+            editor,
             state,
 
             fixed_screen_pos: None,
@@ -115,6 +124,9 @@ impl TabCreation for BoardView {
 
 impl TabImpl for BoardView {
     fn update(&mut self, app: &mut App, ui: &mut Ui) {
+
+        ui.ctx().request_repaint();
+
         let screen_rect = ui.max_rect();
         let interaction = ui.interact(
             screen_rect,
@@ -122,10 +134,25 @@ impl TabImpl for BoardView {
             Sense::click_and_drag(),
         );
 
-        if interaction.hovered() && ui.input(|input| input.key_pressed(Key::F8)) {
-            let mut editor = self.editor.write();
-            let board = editor.board().clone();
-            *editor = BoardEditor::new(board);
+        if interaction.hovered() {
+            if ui.input(|input| input.key_pressed(Key::F8)) {
+                let mut editor = self.editor.write();
+                let board = editor.board().clone();
+                *editor = BoardEditor::new(board);
+            } else if ui.input(|input| input.key_pressed(Key::F7)) {
+                self.state.reset();
+
+                let board = self.editor.read().board().clone();
+                let circuits = board.circuits().read();
+                let mut tasks = get_pooled::<UpdateTaskPool>();
+                for c in circuits.iter() {
+                    tasks.add_circuit_task(c.id, None);
+                }
+
+                self.state.add_tasks(&mut tasks.drain());
+            } else if ui.input(|input| input.key_pressed(Key::F9)) {
+                app.sim.paused.fetch_not(Ordering::Relaxed);
+            }
         }
 
         let dragged = app.selected_item.is_none() && interaction.dragged_by(PointerButton::Primary)
@@ -216,14 +243,21 @@ impl TabImpl for BoardView {
 
         self.selection_renderer.lock().clear_draw();
 
-        self.prepare_wire_draw(&ctx);
-        self.draw_selection(&ctx);
+        {
+            let state = self.state.state().clone();
+            let mut state = state.upgradable_read();
 
-        self.draw_wires(&ctx);
+            self.prepare_wire_draw(&state, &ctx);
+            self.draw_selection(&ctx);
 
-        self.draw_pins(&ctx);
+            self.draw_wires(&ctx);
 
-        self.draw_circuits(&ctx);
+            self.draw_pins(&ctx);
+
+            state.with_upgraded(|state| {
+                self.draw_circuits(state, &ctx);
+            })
+        }
 
         if self.wire_debug {
             self.draw_wire_debug(&ctx);
@@ -248,6 +282,10 @@ impl TabImpl for BoardView {
         self.handle_paste(&interaction, &ctx, app);
 
         self.draw_in_world_errors(ui, &ctx);
+
+        let mut overlay_ui = ui.new_child(UiBuilder::new().max_rect(screen_rect));
+
+        self.draw_overlay(&mut overlay_ui, app);
     }
 
     fn tab_style_override(&self, global: &egui_dock::TabStyle) -> Option<egui_dock::TabStyle> {
@@ -368,7 +406,7 @@ impl BoardView {
         });
     }
 
-    fn prepare_wire_draw(&mut self, ctx: &PaintContext) {
+    fn prepare_wire_draw(&mut self, state: &BoardState, ctx: &PaintContext) {
         fn node_has_135_deg_turns(dirs: &Direction8Array<Option<NonZeroU32>>) -> bool {
             for (dir, dist) in dirs.iter() {
                 if dist.is_none() {
@@ -554,7 +592,7 @@ impl BoardView {
                 let color = self
                     .wire_colors
                     .entry(wire.id)
-                    .or_insert_with(|| self.state.wire_color(wire, &ctx.style));
+                    .or_insert_with(|| state.wires.wire_color(wire, &ctx.style));
 
                 part_buffer.add_quad_line(pos1, pos2, line_width, color.to_normalized_gamma_f32());
             }
@@ -629,7 +667,7 @@ impl BoardView {
                 let color = self
                     .wire_colors
                     .entry(wire.id)
-                    .or_insert_with(|| self.state.wire_color(wire, &ctx.style));
+                    .or_insert_with(|| state.wires.wire_color(wire, &ctx.style));
                 let point_size = remap_clamp(
                     all as f32,
                     4.0..=8.0,
@@ -700,7 +738,7 @@ impl BoardView {
         });
     }
 
-    fn draw_circuits(&mut self, ctx: &PaintContext) {
+    fn draw_circuits(&mut self, state: &mut BoardState, ctx: &PaintContext) {
         self.circuits_drawn.clear();
 
         let editor = self.editor.read();
@@ -730,7 +768,7 @@ impl BoardView {
                         (WIRE_WIDTH / 2.0) * ctx.screen.scale,
                         &ctx.style.pins,
                         dir,
-                        self.state.pin_color(pin, &ctx.style),
+                        state.pin_color(pin, &ctx.style),
                         pin_buffer.deref_mut(),
                     );
                 }
@@ -770,7 +808,7 @@ impl BoardView {
                 let mut update_tasks = get_pooled::<UpdateTaskPool>();
 
                 let circuit_ctx = UntypedCircuitCtx {
-                    state: &self.state,
+                    state: &mut state.circuits,
                     circuit,
                     tasks: &mut update_tasks,
                     instance: imp.instance.deref(),
@@ -781,7 +819,7 @@ impl BoardView {
                 drop(imp);
 
                 if !update_tasks.is_empty() {
-                    self.state.add_tasks(&mut update_tasks.drain(), true);
+                    state.add_tasks(&mut update_tasks.drain());
                 }
                 drop(update_tasks);
 
@@ -1546,7 +1584,7 @@ impl BoardView {
 
         let editor = self.editor.read();
         let circuits = editor.board().circuits().read();
-        let circuit_states = self.state.circuits().read();
+        let state = self.state.state().read();
 
         let mut min_pos = Vec2usize::single_value(usize::MAX);
         let mut data = copystate::CopyState::default();
@@ -1628,9 +1666,11 @@ impl BoardView {
                     let info = circuit.info.read();
                     let imp = circuit.imp.read();
 
-                    let state = circuit_states.get(id);
-                    let state = state.map(|s| s.internal.read_arc());
-                    let state = state.as_ref().and_then(|s| s.as_ref());
+                    let state = state
+                        .circuits
+                        .inner
+                        .get(id)
+                        .and_then(|s| s.internal.as_ref());
 
                     data.circuits.push(copystate::Circuit {
                         id: imp.imp.id(),
@@ -1798,6 +1838,7 @@ impl BoardView {
             return;
         }
 
+        // TODO: block all states before placing anything
         if interaction.clicked() {
             let mut editor = self.editor.write();
             let mut tasks = get_pooled();
@@ -1848,6 +1889,9 @@ impl BoardView {
                         if let Some(state_data) = &c.state {
                             let imp = circuit.imp.read();
                             for state in editor.board().states().read().iter() {
+                                let Some(state) = state.upgrade() else {
+                                    continue;
+                                };
                                 match imp.imp.load_state(&circuit, &imp.instance, state_data) {
                                     Err(e) => {
                                         let rect = Rect::from_min_size(
@@ -1864,10 +1908,12 @@ impl BoardView {
                                         });
                                     }
                                     Ok(s) => {
-                                        let mut circuits = state.circuits().write();
-                                        let circuit_state = circuits
+                                        let mut state = state.state().write();
+                                        let circuit_state = state
+                                            .circuits
+                                            .inner
                                             .get_or_create_mut(circuit.id, Default::default);
-                                        *circuit_state.internal.write() = Some(s);
+                                        circuit_state.internal = Some(s);
                                     }
                                 }
                             }
@@ -1876,7 +1922,7 @@ impl BoardView {
                 }
             }
 
-            editor.board().states().read().add_tasks(&tasks);
+            editor.board().add_tasks(&tasks);
         }
     }
 
@@ -1920,6 +1966,12 @@ impl BoardView {
 
             true
         });
+    }
+    
+    fn draw_overlay(&mut self, ui: &mut Ui, app: &mut App) {
+        if app.sim.paused.load(Ordering::Relaxed) {
+            ui.label(RichText::new("Simulation paused!").color(Color32::YELLOW));
+        }
     }
 }
 

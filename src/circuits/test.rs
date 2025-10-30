@@ -2,7 +2,7 @@ use std::{ops::Deref, sync::Arc};
 
 use eframe::egui::{Color32, FontId, Rect};
 
-use crate::{editor::QuarterPos, ext::IteratorProduct, pool::get_pooled, state::WireState, str::ArcStaticStr, vector::Vec2usize, vertex_renderer::{ColoredTriangleBuffer, ColoredVertexRenderer}, Direction4, Direction8};
+use crate::{editor::QuarterPos, ext::IteratorProduct, pool::get_pooled, state::wires::WireState, str::ArcStaticStr, vector::Vec2usize, vertex_renderer::{ColoredTriangleBuffer, ColoredVertexRenderer}, Direction4, Direction8};
 
 use super::{Circuit, CircuitCtx, CircuitFlipSupport, CircuitImpl, CircuitPin, CircuitRenderingContext, CircuitRotationSupport, CircuitTransform, CircuitTransformSupport, FlipType, PinDescription, PinType, TransformSupport};
 
@@ -92,7 +92,7 @@ impl CircuitImpl for TestCircuit {
 
         let count = circuit
             .as_ref()
-            .and_then(|c| c.read_internal_state(|s| s.count));
+            .and_then(|c| c.read_internal_state().map(|s| s.count));
 
         if let Some(count) = count {
             let font = FontId {
@@ -183,7 +183,7 @@ impl CircuitImpl for TestCircuit {
     }
     fn update_signals(&self, mut ctx: CircuitCtx<Self>, changed_pin: Option<usize>) {
         if changed_pin.is_some_and(|c| c < 4) {
-            ctx.write_internal_state(|s| s.count += 1);
+            ctx.write_internal_state().count += 1;
         }
 
         ctx.set_pin_output(&ctx.instance.pin_e, WireState::Bool(true));

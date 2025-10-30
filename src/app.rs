@@ -1,13 +1,13 @@
-use std::{fs::File, ops::Not, path::PathBuf, sync::Arc};
+use std::{ops::Not, path::PathBuf, sync::{Arc, Weak}};
 
-use eframe::{egui, CreationContext};
+use eframe::{egui::{self, ahash::HashMap}, CreationContext};
 use egui_dock::{DockArea, DockState, NodeIndex};
-use eyre::{eyre, Context as _};
-use parking_lot::RwLock;
+use eyre::eyre;
+use parking_lot::{Mutex, RwLock};
 use smoldata::raw::RawValue;
 
 use crate::{
-    circuits::CircuitBlueprint, io::copystate, simulation::SimulationCtx, state::WireState, tabs::{SafeTabType, Tab, TabSerde, TabType, TabViewer}, vector::{Vec2isize, Vec2usize}, Style
+    circuits::CircuitBlueprint, editor::BoardEditor, io::copystate, simulation::{SimulationCtx, SimulationStateData}, state::wires::WireState, tabs::{SafeTabType, Tab, TabSerde, TabType, TabViewer}, vector::{Vec2isize, Vec2usize}, Style
 };
 
 pub const APP_NAME: &str = "cuprous-dev";
@@ -51,6 +51,8 @@ pub struct App {
     pub style: Arc<Style>,
     pub sim: Arc<SimulationCtx>,
 
+    pub editors: Mutex<HashMap<u128, Weak<RwLock<BoardEditor>>>>,
+
     pub data_dir: Option<PathBuf>,
     pub errors: Vec<ErrorStrings>,
 }
@@ -67,38 +69,50 @@ impl App {
             Arc::new(RwLock::new(crate::circuits::gates::Gate::xor().into())),
             Arc::new(RwLock::new(crate::circuits::gates::Gate::xnor().into())),
             Arc::new(RwLock::new(crate::circuits::gates::not::Not.into())),
-            Arc::new(RwLock::new(crate::circuits::constant::Constant::new(WireState::Bool(false)).into())),
-            Arc::new(RwLock::new(crate::circuits::constant::Constant::new(WireState::Bool(true)).into())),
+            Arc::new(RwLock::new(
+                crate::circuits::constant::Constant::new(WireState::Bool(false)).into(),
+            )),
+            Arc::new(RwLock::new(
+                crate::circuits::constant::Constant::new(WireState::Bool(true)).into(),
+            )),
+            Arc::new(RwLock::new(crate::circuits::buffer::Buffer.into())),
+            Arc::new(RwLock::new(
+                crate::circuits::error_filter::ErrorFilter.into(),
+            )),
         ];
 
         let data_dir = directories_next::ProjectDirs::from("", "", APP_NAME)
             .map(|proj_dirs| proj_dirs.data_dir().to_path_buf());
 
-        let sim = data_dir.as_ref().and_then(|d| {
-            let autosave = d.join("autosave");
+        // let sim = data_dir.as_ref().and_then(|d| {
+        //     let autosave = d.join("autosave");
 
-            let file = match File::open(autosave) {
-                Ok(f) => f,
-                Err(e) if matches!(e.kind(), std::io::ErrorKind::NotFound) => return None,
-                Err(e) => return Some(Err(eyre::Report::new(e).wrap_err("opening autosave"))),
-            };
+        //     let file = match File::open(autosave) {
+        //         Ok(f) => f,
+        //         Err(e) if matches!(e.kind(), std::io::ErrorKind::NotFound) => return None,
+        //         Err(e) => return Some(Err(eyre::Report::new(e).wrap_err("opening autosave"))),
+        //     };
 
-            Some(
-                smoldata::read_from(file)
-                    .map(|d| SimulationCtx::load(&d, &blueprints))
-                    .wrap_err("loading simulation state"),
-            )
-        });
+        //     Some(
+        //         smoldata::read_from(file)
+        //             .map(|d| SimulationCtx::load(&d, &blueprints))
+        //             .wrap_err("loading simulation state"),
+        //     )
+        // });
 
-        let sim = sim.unwrap_or_else(|| Ok(SimulationCtx::new()));
+        // let sim = None;
 
-        let sim = match sim {
-            Ok(s) => s,
-            Err(e) => {
-                errors.push(e.into());
-                SimulationCtx::new()
-            }
-        };
+        // let sim = sim.unwrap_or_else(|| Ok(SimulationCtx::new()));
+
+        // let sim = match sim {
+        //     Ok(s) => s,
+        //     Err(e) => {
+        //         errors.push(e.into());
+        //         SimulationCtx::new()
+        //     }
+        // };
+
+        let sim = SimulationCtx::new();
 
         Self {
             gl: cc.gl.clone().expect("started in OpenGL context"),
@@ -107,6 +121,7 @@ impl App {
             blueprints,
             style: Arc::new(Style::default()),
             sim,
+            editors: Default::default(),
 
             data_dir,
             errors,
@@ -215,8 +230,9 @@ impl App {
 
             for p in &paste.wire_parts {
                 let pos2 = p.pos.convert(|v| v as isize) + p.dir.into_dir_isize() * p.len as isize;
-                
-                let max = Vec2isize::new(pos2.x.max(p.pos.x as isize), pos2.y.max(p.pos.y as isize)) + 1;
+
+                let max =
+                    Vec2isize::new(pos2.x.max(p.pos.x as isize), pos2.y.max(p.pos.y as isize)) + 1;
                 if max.x > 0 {
                     size.x = size.x.max(max.x as usize);
                 }
@@ -234,6 +250,18 @@ impl App {
 
             self.selected_item = Some(SelectedItem::Paste(paste));
         }
+    }
+    
+    pub fn get_board_editor(&self, state: &SimulationStateData) -> Arc<RwLock<BoardEditor>> {
+        let mut editors = self.editors.lock();
+        editors.retain(|_, v| v.upgrade().is_some());
+        if let Some(editor) = editors.get(&state.uid()).and_then(|w| w.upgrade()) {
+            return editor;
+        }
+
+        let ed = Arc::new(RwLock::new(BoardEditor::new(state.board())));
+        editors.insert(state.uid(), Arc::downgrade(&ed));
+        ed
     }
 }
 
@@ -376,30 +404,30 @@ impl eframe::App for DockedApp {
             storage.set_string("dock", dock);
         }
 
-        if let Some(data_dir) = self.app.data_dir.as_ref().filter(|_| !self.sim_no_save) {
-            let autosave_path = data_dir.join("autosave");
-            let savestate = self.app.sim.save();
+        // if let Some(data_dir) = self.app.data_dir.as_ref().filter(|_| !self.sim_no_save) {
+        //     let autosave_path = data_dir.join("autosave");
+        //     let savestate = self.app.sim.save();
 
-            let res = 'save: {
-                let file = match File::create(autosave_path) {
-                    Ok(v) => v,
-                    Err(e) => break 'save Err(e),
-                };
+        //     let res = 'save: {
+        //         let file = match File::create(autosave_path) {
+        //             Ok(v) => v,
+        //             Err(e) => break 'save Err(e),
+        //         };
 
-                if let Err(e) = smoldata::write_into(&savestate, file) {
-                    break 'save Err(e);
-                }
+        //         if let Err(e) = smoldata::write_into(&savestate, file) {
+        //             break 'save Err(e);
+        //         }
 
-                Ok(())
-            };
-            if let Err(e) = res {
-                self.app.errors.push(
-                    eyre::Report::new(e)
-                        .wrap_err("saving simulation state")
-                        .into(),
-                );
-            }
-        }
+        //         Ok(())
+        //     };
+        //     if let Err(e) = res {
+        //         self.app.errors.push(
+        //             eyre::Report::new(e)
+        //                 .wrap_err("saving simulation state")
+        //                 .into(),
+        //         );
+        //     }
+        // }
     }
 }
 

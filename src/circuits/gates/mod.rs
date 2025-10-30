@@ -3,11 +3,7 @@ use std::sync::Arc;
 use traitbox::traitbox;
 
 use crate::{
-    circuits::{CircuitFlipSupport, CircuitRotationSupport, CircuitTransformSupport, FlipType, TransformSupport},
-    state::WireState,
-    str::ArcStaticStr,
-    vector::Vec2usize,
-    Direction4, Direction8,
+    circuits::{CircuitFlipSupport, CircuitRotationSupport, CircuitTransformSupport, FlipType, TransformSupport}, state::wires::WireState, str::ArcStaticStr, vector::Vec2usize, Direction4, Direction8
 };
 
 use super::{

@@ -10,13 +10,7 @@ use crate::{
         Circuit, CircuitCtx, CircuitImpl, CircuitPin, CircuitRenderPurpose,
         CircuitRenderingContext, CircuitRotationSupport, CircuitTransform, CircuitTransformSupport,
         PinDescription, PinType, TransformSupport,
-    },
-    pool::get_pooled,
-    state::WireState,
-    str::ArcStaticStr,
-    vector::{Vec2f, Vec2usize},
-    vertex_renderer::{ColoredTriangleBuffer, ColoredVertexRenderer},
-    Direction4, Direction8, Style, WIRE_WIDTH,
+    }, pool::get_pooled, state::wires::WireState, str::ArcStaticStr, vector::{Vec2f, Vec2usize}, vertex_renderer::{ColoredTriangleBuffer, ColoredVertexRenderer}, Direction4, Direction8, Style, WIRE_WIDTH
 };
 
 #[derive(Clone, SmolReadWrite)]

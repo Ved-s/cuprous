@@ -3,11 +3,14 @@ use std::{
     sync::{Arc, Weak},
 };
 
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 use smoldata::raw::RawValue;
 
 use crate::{
-    circuits::{Circuit, CircuitBlueprint, CircuitImplData, CircuitInfo, CircuitPin, CircuitTransform, RealizedPin, TransformSupport}, containers::FixedVec, editor::BoardEditor, io::savestate, simulation::SimulationCtx, state::BoardStateCollection, vector::Vec2isize, Direction4, Direction4HalfArray
+    circuits::{
+        Circuit, CircuitBlueprint, CircuitImplData, CircuitInfo, CircuitPin, CircuitTransform,
+        RealizedPin, TransformSupport,
+    }, containers::FixedVec, io::savestate, simulation::{SimulationCtx, SimulationStateData}, state::sim::UpdateTaskPool, vector::Vec2isize, Direction4, Direction4HalfArray
 };
 
 pub struct Board {
@@ -15,9 +18,8 @@ pub struct Board {
     wires: RwLock<FixedVec<Arc<Wire>>>,
     circuits: RwLock<FixedVec<Arc<Circuit>>>,
 
-    simulation: Arc<SimulationCtx>,
-    editor: Mutex<Option<Weak<RwLock<BoardEditor>>>>,
-    states: RwLock<BoardStateCollection>,
+    simulation: Weak<SimulationCtx>,
+    states: RwLock<Vec<Weak<SimulationStateData>>>,
 }
 
 impl Board {
@@ -33,14 +35,26 @@ impl Board {
         &self.circuits
     }
 
-    pub fn simulation(&self) -> &Arc<SimulationCtx> {
-        &self.simulation
+    pub fn simulation(&self) -> Arc<SimulationCtx> {
+        self.simulation.upgrade().expect("simulation state dropped")
     }
 
-    pub fn states(&self) -> &RwLock<BoardStateCollection> {
+    pub fn add_tasks(&self, tasks: &UpdateTaskPool) {
+        let states = self.states.read();
+        for state in states.iter() {
+            let Some(state) = state.upgrade() else {
+                continue;
+            };
+
+            state.add_tasks(&mut tasks.iter());
+        }
+    }
+
+    pub fn states(&self) -> &RwLock<Vec<Weak<SimulationStateData>>> {
         &self.states
     }
-
+    
+    /*
     pub fn save(&self) -> savestate::Board {
         savestate::Board {
             uid: self.uid,
@@ -173,41 +187,25 @@ impl Board {
     pub fn load_stage3_circuit_states(&self, data: &savestate::Board) {
         self.states.read().load_stage3_circuit_states(&data.states);
     }
+    */
 }
 
 // TODO: properly drop cyclic references on circuit/board removal!
 
 impl Board {
-    pub fn new(simulation: Arc<SimulationCtx>) -> Arc<Self> {
+    pub fn new(simulation: &Arc<SimulationCtx>) -> Self {
         let mut uid_buf = [0u8; 16];
         if let Err(e) = getrandom::getrandom(&mut uid_buf) {
             panic!("Could not generate a new board uid: {e}")
         }
 
-        let this = Arc::new(Self {
+        Self {
             uid: u128::from_ne_bytes(uid_buf),
             wires: RwLock::new(vec![].into()),
             circuits: RwLock::new(vec![].into()),
-            simulation,
-            editor: Mutex::new(None),
-            states: RwLock::new(BoardStateCollection::uninitialized()),
-        });
-
-        this.states.write().initialize(this.clone());
-
-        this
-    }
-
-    pub fn make_editor(self: &Arc<Self>) -> Arc<RwLock<BoardEditor>> {
-        let mut lock = self.editor.lock();
-        let existing = lock.as_ref().and_then(|w| w.upgrade());
-        if let Some(existing) = existing {
-            return existing;
+            simulation: Arc::downgrade(simulation),
+            states:  RwLock::new(vec![])
         }
-
-        let editor = Arc::new(RwLock::new(BoardEditor::new(self.clone())));
-        *lock = Some(Arc::downgrade(&editor));
-        editor
     }
 
     pub fn create_wire(&self) -> Arc<Wire> {

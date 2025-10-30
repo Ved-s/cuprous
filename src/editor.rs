@@ -13,7 +13,7 @@ use crate::{
     containers::Chunks2D,
     pool::get_pooled,
     selection::SelectionImpl,
-    state::UpdateTaskPool,
+    state::sim::UpdateTaskPool,
     vector::{Vec2f, Vec2isize, Vec2usize},
     Direction4Half, Direction4HalfArray, Direction8, Direction8Array, BIG_WIRE_POINT_WIDTH,
     CHUNK_SIZE, WIRE_POINT_WIDTH, WIRE_WIDTH,
@@ -24,20 +24,6 @@ pub struct BoardEditor {
     circuits: Chunks2D<CHUNK_SIZE, CircuitNode>,
 
     board: Arc<Board>,
-}
-
-impl BoardEditor {
-    pub fn board(&self) -> &Arc<Board> {
-        &self.board
-    }
-
-    pub fn wires(&self) -> &Chunks2D<CHUNK_SIZE, WireNode> {
-        &self.wires
-    }
-
-    pub fn circuits(&self) -> &Chunks2D<CHUNK_SIZE, CircuitNode> {
-        &self.circuits
-    }
 }
 
 impl BoardEditor {
@@ -191,16 +177,30 @@ impl BoardEditor {
         drop((board_wires, board_circuits));
 
         Self {
-            board,
             wires,
             circuits,
+            board
         }
     }
 
+    pub fn board(&self) -> &Arc<Board> {
+        &self.board
+    }
+
+    pub fn wires(&self) -> &Chunks2D<CHUNK_SIZE, WireNode> {
+        &self.wires
+    }
+
+    pub fn circuits(&self) -> &Chunks2D<CHUNK_SIZE, CircuitNode> {
+        &self.circuits
+    }
+}
+
+impl BoardEditor {
     pub fn place_wire(&mut self, pos: Vec2isize, dir: Direction8, length: NonZeroU32) {
         let mut tasks = get_pooled::<UpdateTaskPool>();
         self.place_wire_manual(pos, dir, length, tasks.deref_mut());
-        self.board.states().read().add_tasks(&tasks);
+        self.board.add_tasks(&tasks);
     }
     pub fn place_wire_manual(
         &mut self,
@@ -324,12 +324,12 @@ impl BoardEditor {
             self.unmerge_wire(wire.clone(), tasks.deref_mut());
         }
 
-        self.board.states().read().add_tasks(&tasks);
+        self.board.add_tasks(&tasks);
     }
     pub fn toggle_wire_point(&mut self, pos: Vec2isize) {
         let mut tasks = get_pooled::<UpdateTaskPool>();
         self.toggle_wire_point_manual(pos, tasks.deref_mut());
-        self.board.states().read().add_tasks(&tasks);
+        self.board.add_tasks(&tasks);
     }
 
     pub fn toggle_wire_point_manual(&mut self, pos: Vec2isize, tasks: &mut UpdateTaskPool) {
@@ -366,7 +366,7 @@ impl BoardEditor {
         let mut tasks = get_pooled::<UpdateTaskPool>();
         self.remove_wire_point(pos, true, true, tasks.deref_mut());
 
-        self.board.states().read().add_tasks(&tasks);
+        self.board.add_tasks(&tasks);
     }
 
     pub fn place_circuit(
@@ -383,7 +383,7 @@ impl BoardEditor {
             tasks.deref_mut(),
         )?;
 
-        self.board.states().read().add_tasks(&tasks);
+        self.board.add_tasks(&tasks);
 
         Ok(res)
     }
@@ -482,9 +482,7 @@ impl BoardEditor {
             if let Some(wire) = pin.pin.wire.read().as_ref().map(|w| w.id) {
                 match pin.pin.ty {
                     PinType::Inside => {
-                        for state in self.board.states().read().iter() {
-                            state.set_pin(circuit.id, pin.pin.id, state.get_wire(wire));
-                        }
+                        tasks.add_update_input_task(circuit.id, pin.pin.id, false);
                     }
                     PinType::Custom => {
                         tasks.add_wire_task(wire, true);
@@ -498,8 +496,6 @@ impl BoardEditor {
 
         tasks.add_circuit_task(circuit.id, None);
 
-        self.board.states().read().add_tasks(tasks);
-
         Ok(circuit)
     }
 
@@ -507,7 +503,7 @@ impl BoardEditor {
         let mut tasks = get_pooled::<UpdateTaskPool>();
         self.remove_circuit_internal(circuit, tasks.deref_mut());
 
-        self.board.states().read().add_tasks(&tasks);
+        self.board.add_tasks(&tasks);
     }
     fn remove_circuit_internal(&mut self, circuit: &Arc<Circuit>, tasks: &mut UpdateTaskPool) {
         let info = circuit.info.read();
@@ -554,10 +550,8 @@ impl BoardEditor {
             self.remove_needless_wire_point(world_pos, tasks);
         }
 
-        let states = self.board.states().read();
-        for state in states.iter() {
-            state.circuits().write().remove(circuit.id);
-        }
+
+        tasks.add_drop_circuit_task(circuit.id);
 
         self.board.free_circuit(circuit);
     }

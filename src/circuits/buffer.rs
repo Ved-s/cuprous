@@ -1,32 +1,32 @@
 use std::sync::Arc;
 
-use eframe::{egui::{Color32, Pos2, Stroke}, epaint::{PathShape, PathStroke}};
+use eframe::{egui::{Color32, Pos2}, epaint::{PathShape, PathStroke}};
 
 use crate::{
     circuits::{
         Circuit, CircuitCtx, CircuitImpl, CircuitPin, CircuitRenderingContext, CircuitTransform, PinDescription, PinType
-    }, state::wires::WireState, str::ArcStaticStr, vector::Vec2usize, Direction8
+    }, str::ArcStaticStr, vector::Vec2usize, Direction8
 };
 
 #[derive(Clone)]
-pub struct Not;
+pub struct Buffer;
 
-pub struct NotInstance {
+pub struct BufferInstance {
     input: Arc<CircuitPin>,
     output: Arc<CircuitPin>,
 }
 
-impl CircuitImpl for Not {
+impl CircuitImpl for Buffer {
     type State = ();
 
-    type Instance = NotInstance;
+    type Instance = BufferInstance;
 
     fn id(&self) -> ArcStaticStr {
-        "gate_not".into()
+        "buffer".into()
     }
 
     fn display_name(&self) -> ArcStaticStr {
-        "NOT gate".into()
+        "Buffer".into()
     }
 
     fn size(&self, _transform: CircuitTransform) -> Vec2usize {
@@ -73,31 +73,17 @@ impl CircuitImpl for Not {
             fill: fill_color,
             stroke: PathStroke::new(0.15 * ctx.paint.screen.scale, border_color),
         });
-
-        let circle_pos = ctx.transform_pos([1.32, 0.5].into());
-        ctx.paint.circle(
-            circle_pos.into(),
-            0.2 * ctx.paint.screen.scale,
-            fill_color,
-            Stroke::new(0.15 * ctx.paint.screen.scale, border_color),
-        );
     }
 
     fn create_instance(&self, circuit: &Arc<Circuit>) -> Self::Instance {
         let pins = circuit.pins.read();
-        NotInstance {
+        BufferInstance {
             input: pins[0].pin.clone(),
             output: pins[1].pin.clone(),
         }
     }
 
     fn update_signals(&self, ctx: CircuitCtx<Self>, _changed_pin: Option<usize>) {
-        let val = ctx.instance.input.get_state(ctx.state);
-        let out = match val {
-            WireState::None => WireState::None,
-            WireState::Bool(b) => WireState::Bool(!b),
-            WireState::Error => WireState::Error,
-        };
-        ctx.instance.output.set_output(ctx.state, ctx.tasks, out);
+        ctx.instance.output.set_output(ctx.state, ctx.tasks, ctx.instance.input.get_state(ctx.state));
     }
 }
