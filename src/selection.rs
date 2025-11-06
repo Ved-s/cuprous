@@ -36,6 +36,7 @@ impl<I: SelectionImpl> Selection<I> {
         }
     }
 
+    /// returns true if something cchanged
     pub fn update(
         &mut self,
         pass: &I::Pass,
@@ -43,7 +44,8 @@ impl<I: SelectionImpl> Selection<I> {
         ui: &Ui,
         screen: Screen,
         active: bool,
-    ) {
+    ) -> bool {
+        let mut selection_changed = false;
         if active
             && self.selection_start.is_none()
             && interaction.hovered()
@@ -57,11 +59,12 @@ impl<I: SelectionImpl> Selection<I> {
                 if !ui.input(|input| input.modifiers.ctrl || input.modifiers.shift) {
                     self.selection.clear();
                 }
+                selection_changed = true;
             }
         }
 
         let Some(start) = self.selection_start else {
-            return;
+            return selection_changed;
         };
 
         self.exclude = ui.input(|input| input.modifiers.ctrl);
@@ -91,14 +94,14 @@ impl<I: SelectionImpl> Selection<I> {
                 }
             };
 
-            return;
+            return selection_changed;
         };
 
         let changed = ui.input(|input| {
             input.pointer.primary_pressed() || input.pointer.delta().length_sq() > 0.01
         });
         if !changed {
-            return;
+            return selection_changed;
         }
 
         let b = screen.screen_to_world(interaction);
@@ -106,6 +109,7 @@ impl<I: SelectionImpl> Selection<I> {
 
         self.change.clear();
         I::include_area(pass, &mut self.change, rect);
+        true
     }
 
     pub fn contains(&self, item: &I::Item) -> bool {

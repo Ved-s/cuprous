@@ -1,23 +1,37 @@
-use std::{any::Any, f32::consts::TAU, ops::Deref, sync::Arc};
+use std::{
+    any::Any,
+    f32::consts::TAU,
+    ops::Deref,
+    sync::{Arc, Weak},
+};
 
 use eframe::egui::Rect;
 use parking_lot::{Mutex, RwLock};
 use smoldata::raw::RawValue;
 
 use crate::{
-    board::{Board, Wire}, io::savestate, selection::SelectionRenderer, state::{circuits::BoardCircuitsState, sim::UpdateTaskPool, wires::WireState}, str::ArcStaticStr, vector::{Vec2f, Vec2isize, Vec2usize}, Direction4, Direction8, PaintContext
+    board::{Board, Wire},
+    circuits::props::{PropertyInfo, PropertyValue},
+    io::savestate,
+    selection::SelectionRenderer,
+    state::{circuits::BoardCircuitsState, sim::UpdateTaskPool, wires::WireState},
+    str::ArcStaticStr,
+    vector::{Vec2f, Vec2isize, Vec2usize},
+    Direction4, Direction8, PaintContext,
 };
 
+pub mod buffer;
 pub mod button;
+pub mod constant;
+pub mod error_filter;
 pub mod gates;
 pub mod test;
-pub mod constant;
-pub mod buffer;
-pub mod error_filter;
+
+pub mod props;
 
 pub struct Circuit {
     pub id: usize,
-    pub board: Arc<Board>,
+    pub board: Weak<Board>,
     pub info: RwLock<CircuitInfo>,
     pub imp: RwLock<CircuitImplData>,
     pub pins: RwLock<Box<[RealizedPin]>>,
@@ -40,7 +54,7 @@ impl Circuit {
 
     pub fn preload(
         id: usize,
-        board: Arc<Board>,
+        board: &Arc<Board>,
         circuit_data: &savestate::Circuit,
         blueprints: &[Arc<RwLock<CircuitBlueprint>>],
     ) -> Circuit {
@@ -69,7 +83,7 @@ impl Circuit {
 
         Self {
             id,
-            board,
+            board: Arc::downgrade(board),
             info: RwLock::new(info),
             imp: RwLock::new(imp),
             pins: RwLock::new(Box::new([])), // loaded later
@@ -80,9 +94,7 @@ impl Circuit {
         let mut imp = self.imp.write();
         let mut info = self.info.write();
 
-
         if let Some(config) = &data.config {
-
             // todo: error handling
             imp.imp.load_config(config).ok();
         }
@@ -100,16 +112,21 @@ impl Circuit {
             &mut pins.iter_mut().map(|p| p.pos_dir_mut()),
             Some(TransformSupport::Automatic),
         );
-        
-        *self.pins.write() = pins.into_vec().into_iter().enumerate().map(|(id, desc)| RealizedPin {
-            pin: Arc::new(CircuitPin {
-                id,
-                ty: desc.ty,
-                circuit: self.clone(),
-                wire: RwLock::new(None),
-            }),
-            desc,
-        }).collect();
+
+        *self.pins.write() = pins
+            .into_vec()
+            .into_iter()
+            .enumerate()
+            .map(|(id, desc)| RealizedPin {
+                pin: Arc::new(CircuitPin {
+                    id,
+                    ty: desc.ty,
+                    circuit: self.clone(),
+                    wire: RwLock::new(None),
+                }),
+                desc,
+            })
+            .collect();
 
         // todo: error reporting
         imp.instance = data
@@ -552,7 +569,6 @@ impl CircuitTransform {
     }
 }
 
-
 // TODO: read-only state for draws
 pub struct UntypedCircuitCtx<'a> {
     pub state: &'a mut BoardCircuitsState,
@@ -575,6 +591,18 @@ impl<'a> UntypedCircuitCtx<'a> {
     }
 }
 
+pub struct PropertyChangedParams {
+    pub trigger_signal_update: bool,
+}
+
+impl Default for PropertyChangedParams {
+    fn default() -> Self {
+        Self {
+            trigger_signal_update: true,
+        }
+    }
+}
+
 pub struct CircuitCtx<'a, C: CircuitImpl> {
     pub state: &'a mut BoardCircuitsState,
     pub circuit: &'a Arc<Circuit>,
@@ -592,13 +620,11 @@ impl<C: CircuitImpl> CircuitCtx<'_, C> {
     }
 
     fn read_internal_state(&self) -> Option<&C::State> {
-        self.state
-            .read_internal_circuit_state(self.circuit.id)
+        self.state.read_internal_circuit_state(self.circuit.id)
     }
 
     fn write_internal_state(&mut self) -> &mut C::State {
-        self.state
-            .write_internal_circuit_state(self.circuit.id)
+        self.state.write_internal_circuit_state(self.circuit.id)
     }
 }
 
@@ -684,6 +710,25 @@ pub trait CircuitImpl: Clone + Send + Sync {
     fn draw_blueprint_pins(&self) -> bool {
         true
     }
+
+    fn enum_properties(&self, f: &mut dyn FnMut(&PropertyInfo)) {
+        let _ = f;
+    }
+
+    fn get_property_value<'a>(&'a mut self, id: &str) -> Option<&'a mut dyn PropertyValue> {
+        let _ = id;
+        None
+    }
+
+    fn property_changed(
+        &self,
+        circuit: &Circuit,
+        instance: Option<&mut Self::Instance>,
+        prop: &str,
+        params: &mut PropertyChangedParams,
+    ) {
+        let _ = (circuit, instance, prop, params);
+    }
 }
 
 traitbox::traitbox! {
@@ -698,6 +743,8 @@ traitbox::traitbox! {
         fn describe_pins(&self, transform: CircuitTransform) -> Box<[PinDescription]>;
         fn transform_support(&self) -> CircuitTransformSupport;
         fn draw_blueprint_pins(&self) -> bool;
+        fn enum_properties(&self, f: &mut dyn FnMut(&PropertyInfo));
+        fn get_property_value<'a>(&'a mut self, id: &str) -> Option<&'a mut dyn PropertyValue>;
     }
 
     impl {
@@ -734,7 +781,11 @@ traitbox::traitbox! {
         }
 
         fn load_state<C: CircuitImpl>(this: &C, circuit: &Arc<Circuit>, instance: &Box<dyn Any + Send + Sync>, data: &RawValue) -> Result<Box<dyn Any + Send + Sync>, eyre::Report> {
-            this.load_state(circuit, instance.downcast_ref().expect("correct circuit instance"), data).map(|i| Box::new(i) as Box<_>)
+            this.load_state(circuit, instance.downcast_ref().expect("incorrect circuit instance"), data).map(|i| Box::new(i) as Box<_>)
+        }
+
+        fn property_changed<C: CircuitImpl>(this: &C, circuit: &Circuit, instance: Option<&mut Box<dyn Any + Send + Sync>>, prop: &str, params: &mut PropertyChangedParams) {
+            this.property_changed(circuit, instance.map(|i| i.downcast_mut().expect("incorrect circuit instance")), prop, params)
         }
     }
 

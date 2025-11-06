@@ -4,10 +4,10 @@ use smoldata::{raw::RawValue, SmolReadWrite};
 
 use crate::{state::{sim::{CircuitUpdateTask, WireUpdateTask}, wires::WireState}, str::ArcStaticStr, vector::Vec2isize, Direction4};
 
-
 #[derive(SmolReadWrite)]
 pub struct Simulation {
-    pub boards: Vec<Board>
+    pub boards: Vec<Board>,
+    pub states: Vec<BoardState>,
 }
 
 #[derive(SmolReadWrite)]
@@ -15,7 +15,7 @@ pub struct Board {
     pub uid: u128,
     pub wires: Vec<Option<Wire>>,
     pub circuits: Vec<Option<Circuit>>,
-    pub states: BoardStates,
+    pub states: Vec<u128>,
 }
 
 #[derive(SmolReadWrite)]
@@ -38,18 +38,6 @@ pub struct Circuit {
     pub flip: bool,
     pub config: Option<RawValue>,
     pub instance: Option<RawValue>,
-}
-
-#[derive(SmolReadWrite)]
-pub struct BoardStates {
-    pub main: BoardState,
-    pub states: Vec<Option<BoardState>>,
-}
-
-impl BoardStates {
-    pub fn iter(&self) -> impl Iterator<Item = Option<&BoardState>> {
-        Some(Some(&self.main)).into_iter().chain(self.states.iter().map(|v| v.as_ref()))
-    }
 }
 
 #[derive(SmolReadWrite)]

@@ -1,4 +1,4 @@
-use std::{ops::Deref, sync::Arc};
+use std::{any::TypeId, ops::Deref, sync::Arc};
 
 use eframe::egui::{text::LayoutJob, Color32, FontFamily, FontId, TextFormat};
 use eyre::Context;
@@ -7,15 +7,40 @@ use smoldata::SmolReadWrite;
 
 use crate::{
     circuits::{
+        props::{PropertyInfo, PropertyValue},
         Circuit, CircuitCtx, CircuitImpl, CircuitPin, CircuitRenderPurpose,
         CircuitRenderingContext, CircuitRotationSupport, CircuitTransform, CircuitTransformSupport,
         PinDescription, PinType, TransformSupport,
-    }, pool::get_pooled, state::wires::WireState, str::ArcStaticStr, vector::{Vec2f, Vec2usize}, vertex_renderer::{ColoredTriangleBuffer, ColoredVertexRenderer}, Direction4, Direction8, Style, WIRE_WIDTH
+    },
+    pool::get_pooled,
+    state::wires::WireState,
+    str::{ArcRefStr, ArcStaticStr},
+    vector::{Vec2f, Vec2usize},
+    vertex_renderer::{ColoredTriangleBuffer, ColoredVertexRenderer},
+    Direction4, Direction8, Style, WIRE_WIDTH,
 };
 
 #[derive(Clone, SmolReadWrite)]
 pub struct ConstantConfig {
     value: WireState,
+}
+
+impl ConstantConfig {
+    fn iter_properties(&self, f: &mut dyn FnMut(&PropertyInfo)) {
+        f(&PropertyInfo {
+            id: ArcRefStr::Ref("value"),
+            display_name: ArcRefStr::Ref("Value"),
+            type_id: TypeId::of::<WireState>(),
+            affects_geometry_or_pins: false,
+        })
+    }
+
+    fn get_property_value(&mut self, id: &str) -> Option<&mut dyn PropertyValue> {
+        match id {
+            "value" => Some(&mut self.value),
+            _ => None,
+        }
+    }
 }
 
 pub struct Constant {
@@ -40,7 +65,13 @@ impl Constant {
         }
     }
 
-    fn append_state_text(state: &WireState, _short: bool, layout: &mut LayoutJob, style: &Style, font: &FontId) {
+    fn append_state_text(
+        state: &WireState,
+        _short: bool,
+        layout: &mut LayoutJob,
+        style: &Style,
+        font: &FontId,
+    ) {
         match state {
             WireState::None => {
                 layout.append(
@@ -177,12 +208,19 @@ impl CircuitImpl for Constant {
             return;
         }
 
-        Self::append_state_text(&self.config.value, icon, &mut layout, &render.paint.style, &font);
+        Self::append_state_text(
+            &self.config.value,
+            icon,
+            &mut layout,
+            &render.paint.style,
+            &font,
+        );
 
         let galley = render.paint.ui.fonts(|f| f.layout_job(layout));
-        
+
         if icon {
-            let text_pos = render.screen_rect.left_top() + (render.screen_rect.size() - galley.size()) / 2.0;
+            let text_pos =
+                render.screen_rect.left_top() + (render.screen_rect.size() - galley.size()) / 2.0;
             render.paint.galley(text_pos, galley, Color32::WHITE);
         } else {
             let offset = 0.2 * render.paint.screen.scale;
@@ -223,5 +261,26 @@ impl CircuitImpl for Constant {
     fn load_config(&mut self, data: &smoldata::raw::RawValue) -> Result<(), eyre::Report> {
         self.config = data.read_object().wrap_err("reading ConstantInstance")?;
         Ok(())
+    }
+
+    fn enum_properties(&self, f: &mut dyn FnMut(&PropertyInfo)) {
+        self.config.iter_properties(f);
+    }
+
+    fn get_property_value(&mut self, id: &str) -> Option<&mut dyn PropertyValue> {
+        self.config.get_property_value(id)
+    }
+
+    fn property_changed(
+        &self,
+        _circuit: &Circuit,
+        _instance: Option<&mut Self::Instance>,
+        prop: &str,
+        params: &mut super::PropertyChangedParams,
+    ) {
+
+        if prop == "value" {
+            params.trigger_signal_update = true;
+        }
     }
 }

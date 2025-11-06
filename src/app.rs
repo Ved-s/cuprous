@@ -1,6 +1,6 @@
-use std::{ops::Not, path::PathBuf, sync::{Arc, Weak}};
+use std::{collections::{HashMap, HashSet}, ops::Not, path::PathBuf, sync::{Arc, Weak}};
 
-use eframe::{egui::{self, ahash::HashMap}, CreationContext};
+use eframe::{egui, CreationContext};
 use egui_dock::{DockArea, DockState, NodeIndex};
 use eyre::eyre;
 use parking_lot::{Mutex, RwLock};
@@ -55,6 +55,7 @@ pub struct App {
 
     pub data_dir: Option<PathBuf>,
     pub errors: Vec<ErrorStrings>,
+    pub last_active_editor: Option<LastEditorData>,
 }
 
 impl App {
@@ -122,6 +123,7 @@ impl App {
             style: Arc::new(Style::default()),
             sim,
             editors: Default::default(),
+            last_active_editor: None,
 
             data_dir,
             errors,
@@ -315,6 +317,20 @@ impl eframe::App for DockedApp {
 
         'b: {
             for tab in self.dock.iter_all_tabs() {
+                if matches!(tab.1.ty(), SafeTabType::Loaded(TabType::CircuitProps)) {
+                    break 'b;
+                }
+            }
+
+            let tab = Tab::new(TabType::CircuitProps, &self.app);
+
+            let surface = self.dock.main_surface_mut();
+
+            surface.split_right(NodeIndex::root(), 0.2, vec![tab]);
+        }
+
+        'b: {
+            for tab in self.dock.iter_all_tabs() {
                 if matches!(tab.1.ty(), SafeTabType::Loaded(TabType::ComponentList)) {
                     break 'b;
                 }
@@ -429,6 +445,13 @@ impl eframe::App for DockedApp {
         //     }
         // }
     }
+}
+
+pub struct LastEditorData {
+    pub editor: Weak<RwLock<BoardEditor>>,
+    pub boardview_id: usize,
+    pub selected_circuits: HashSet<usize>,
+    pub selection_update_counter: usize,
 }
 
 pub struct PasteCircuit {

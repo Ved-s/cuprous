@@ -1,6 +1,3 @@
-mod board_view;
-mod component_list;
-
 use std::{
     error::Error,
     sync::{
@@ -13,6 +10,10 @@ use eframe::egui::{Id, Ui, WidgetText};
 use serde::{Deserialize, Serialize};
 
 use crate::{app::App, define_tab_type, str::ArcStaticStr};
+
+mod board_view;
+mod component_list;
+mod circuit_props;
 
 define_tab_type! {
     #[derive(Clone, Copy)]
@@ -28,6 +29,12 @@ define_tab_type! {
         #[title = "Board view"]
         #[closeable = false]
         BoardView,
+
+        #[id = "circuit_props"]
+        #[impl = circuit_props::CircuitProps, loadable = false]
+        #[title = "Circuit properties"]
+        #[closeable = false]
+        CircuitProps,
     }
 }
 

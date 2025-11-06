@@ -10,8 +10,7 @@ use std::{
 use parking_lot::RwLock;
 
 use crate::{
-    board::Board,
-    state::{sim::UpdateTask, BoardState},
+    board::Board, state::{sim::UpdateTask, BoardState}
 };
 
 pub struct SimulationStateData {

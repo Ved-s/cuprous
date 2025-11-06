@@ -190,8 +190,6 @@ impl Board {
     */
 }
 
-// TODO: properly drop cyclic references on circuit/board removal!
-
 impl Board {
     pub fn new(simulation: &Arc<SimulationCtx>) -> Self {
         let mut uid_buf = [0u8; 16];
@@ -244,7 +242,7 @@ impl Board {
 
         let circuit = Circuit {
             id,
-            board: self.clone(),
+            board: Arc::downgrade(self),
             info: RwLock::new(CircuitInfo {
                 pos,
                 render_size: blueprint.inner_size,

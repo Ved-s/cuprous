@@ -3,13 +3,18 @@ use std::{
     f32::consts::{PI, SQRT_2, TAU},
     num::NonZeroU32,
     ops::{Deref, DerefMut, Not},
-    sync::{atomic::Ordering, Arc, Weak},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Weak,
+    },
     time::{Duration, Instant},
 };
 
 use eframe::{
     egui::{
-        pos2, remap_clamp, vec2, Align, Color32, FontId, FontSelection, Key, PointerButton, Rect, Response, RichText, Sense, Stroke, StrokeKind, TextStyle, TextWrapMode, Ui, UiBuilder, WidgetText
+        pos2, remap_clamp, vec2, Align, Color32, FontId, FontSelection, Key, PointerButton, Rect,
+        Response, RichText, Sense, Stroke, StrokeKind, TextStyle, TextWrapMode, Ui, UiBuilder,
+        WidgetText,
     },
     epaint::{CornerRadiusF32, PathStroke, TextShape},
 };
@@ -17,7 +22,7 @@ use num_traits::Zero;
 use parking_lot::{Mutex, RwLock};
 
 use crate::{
-    app::{App, SelectedItem, COPY_PASTE_BOARD_ITEMS_PREFIX},
+    app::{App, LastEditorData, SelectedItem, COPY_PASTE_BOARD_ITEMS_PREFIX},
     board::CircuitCreationOverrides,
     circuits::{
         CircuitBlueprint, CircuitRenderPurpose, CircuitRenderingContext,
@@ -41,6 +46,8 @@ use super::{TabCreation, TabImpl};
 
 const INWORLD_ERROR_FADE_TIME: Duration = Duration::from_millis(400);
 
+static BOARDVIEW_NEXT_ID: AtomicUsize = AtomicUsize::new(0);
+
 pub struct InWorldError {
     world_rect: Rect,
     deadline: Instant,
@@ -48,6 +55,7 @@ pub struct InWorldError {
 }
 
 pub struct BoardView {
+    id: usize,
     pan_zoom: PanAndZoom,
 
     wire_draw_start: Option<Vec2isize>,
@@ -96,6 +104,7 @@ impl TabCreation for BoardView {
         let editor = app.get_board_editor(&state);
 
         Self {
+            id: BOARDVIEW_NEXT_ID.fetch_add(1, Ordering::Relaxed),
             pan_zoom: Default::default(),
             wire_draw_start: None,
 
@@ -124,7 +133,6 @@ impl TabCreation for BoardView {
 
 impl TabImpl for BoardView {
     fn update(&mut self, app: &mut App, ui: &mut Ui) {
-
         ui.ctx().request_repaint();
 
         let screen_rect = ui.max_rect();
@@ -225,7 +233,7 @@ impl TabImpl for BoardView {
             );
         }
 
-        self.selection.update(
+        let mut selection_changed = self.selection.update(
             self.editor.read().deref(),
             &interaction,
             ui,
@@ -234,7 +242,37 @@ impl TabImpl for BoardView {
         );
 
         if !ui.ctx().wants_keyboard_input() {
-            self.handle_keyboard(ui, app);
+            self.handle_keyboard(ui, app, &mut selection_changed);
+        }
+
+        let interacted =
+            interaction.clicked() || interaction.secondary_clicked() || interaction.drag_started();
+        if selection_changed
+            || interacted
+                && app
+                    .last_active_editor
+                    .as_ref()
+                    .is_none_or(|e| e.boardview_id != self.id)
+        {
+            let mut old_data = app.last_active_editor.take();
+            let mut selected_circuits = old_data
+                .as_mut()
+                .map(|d| std::mem::take(&mut d.selected_circuits))
+                .unwrap_or_default();
+            selected_circuits.clear();
+            selected_circuits.extend(self.selection.iter().filter_map(|i| match i {
+                SelectedBoardItem::Circuit { id, .. } => Some(id),
+                _ => None,
+            }));
+            app.last_active_editor = Some(LastEditorData {
+                editor: Arc::downgrade(&self.editor),
+                boardview_id: self.id,
+                selected_circuits,
+                selection_update_counter: old_data
+                    .as_ref()
+                    .map(|d| d.selection_update_counter + 1)
+                    .unwrap_or(0),
+            });
         }
 
         let ctx = PaintContext::new(ui, screen, app.gl.clone(), app.style.clone());
@@ -1428,7 +1466,7 @@ impl BoardView {
         }
     }
 
-    fn handle_keyboard(&mut self, ui: &mut Ui, app: &mut App) {
+    fn handle_keyboard(&mut self, ui: &mut Ui, app: &mut App, selection_changed: &mut bool) {
         // TODO: adjustable
 
         let speedup = 4.0;
@@ -1567,6 +1605,7 @@ impl BoardView {
                 }
             }
             self.selection.clear();
+            *selection_changed = true;
         }
     }
 
@@ -1967,7 +2006,7 @@ impl BoardView {
             true
         });
     }
-    
+
     fn draw_overlay(&mut self, ui: &mut Ui, app: &mut App) {
         if app.sim.paused.load(Ordering::Relaxed) {
             ui.label(RichText::new("Simulation paused!").color(Color32::YELLOW));

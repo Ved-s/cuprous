@@ -288,23 +288,42 @@ impl ParsedContainer {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum ValuePassType {
-    Ref,
-    Mut,
+    Ref(Option<syn::Lifetime>),
+    Mut(Option<syn::Lifetime>),
     Owned,
 }
 
 impl ValuePassType {
     pub fn parse(r: &syn::Receiver) -> Self {
+        let lifetime = r.reference.as_ref().and_then(|r| r.1.clone());
         if r.reference.is_some() {
             if r.mutability.is_some() {
-                Self::Mut
+                Self::Mut(lifetime)
             } else {
-                Self::Ref
+                Self::Ref(lifetime)
             }
         } else {
             Self::Owned
+        }
+    }
+
+    fn lifetime(&self) -> Option<&syn::Lifetime> {
+        match self {
+            ValuePassType::Ref(lifetime) => lifetime.as_ref(),
+            ValuePassType::Mut(lifetime) => lifetime.as_ref(),
+            ValuePassType::Owned => None,
+        }
+    }
+
+    fn make_lifetime_hack_type(&self) -> Option<TokenStream> {
+        match self {
+            ValuePassType::Ref(Some(lifetime)) => Some(generate_self_lifetime_hack_type(lifetime, false)),
+            ValuePassType::Mut(Some(lifetime)) => Some(generate_self_lifetime_hack_type(lifetime, true)),
+            ValuePassType::Ref(None) => None,
+            ValuePassType::Mut(None) => None,
+            ValuePassType::Owned => None,
         }
     }
 }
@@ -313,8 +332,8 @@ impl quote::ToTokens for ValuePassType {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         match self {
             ValuePassType::Owned => {}
-            ValuePassType::Ref => tokens.extend(quote!(&)),
-            ValuePassType::Mut => tokens.extend(quote!(&mut)),
+            ValuePassType::Ref(lifetime) => tokens.extend(quote!(& #lifetime )),
+            ValuePassType::Mut(lifetime) => tokens.extend(quote!(& #lifetime mut)),
         }
     }
 }
@@ -384,9 +403,9 @@ impl ParsedFnArgType {
                     if p.path.segments.first().is_some_and(|s| s.ident == "Self") =>
                 {
                     let pass = if r.mutability.is_some() {
-                        ValuePassType::Mut
+                        ValuePassType::Mut(r.lifetime)
                     } else {
-                        ValuePassType::Ref
+                        ValuePassType::Ref(r.lifetime)
                     };
 
                     Self::TraitType(
@@ -478,6 +497,7 @@ impl ParsedFnRet {
 struct ParsedTraitFn {
     name: String,
     name_ident: syn::Ident,
+    lifetimes: Vec<syn::LifetimeParam>,
     self_pass: Option<ValuePassType>,
     args: Vec<ParsedFnArg>,
     ret: Option<ParsedFnRet>,
@@ -545,9 +565,12 @@ impl ParsedTraitFn {
             }
         }
 
+        let lifetimes = input.sig.generics.lifetimes().cloned().collect();
+
         Ok(Self {
             name: input.sig.ident.to_string(),
             name_ident: input.sig.ident.clone(),
+            lifetimes,
             self_pass: recv.map(ValuePassType::parse),
             args,
             ret,
@@ -753,6 +776,7 @@ impl ParsedImplFnTypeBound {
 struct ParsedImplFn {
     name: String,
     name_ident: syn::Ident,
+    lifetimes: Vec<syn::LifetimeParam>,
     self_pass: Option<ValuePassType>,
     first_arg_self: bool,
     type_bounds: syn::TypeParam,
@@ -814,6 +838,8 @@ impl ParsedImplFn {
             }
         }
 
+        let lifetimes = input.sig.generics.lifetimes().cloned().collect();
+
         let mut generics = input.sig.generics.params.into_iter();
         let generic = generics.next().filter(|_| generics.next().is_none());
         let type_bounds = generic.and_then(|generic| match generic {
@@ -847,9 +873,9 @@ impl ParsedImplFn {
                         if ident == type_bounds.ident.to_string().as_str() {
                             first_arg_self = true;
                             if r.mutability.is_some() {
-                                self_pass = Some(ValuePassType::Mut);
+                                self_pass = Some(ValuePassType::Mut(r.lifetime.clone()));
                             } else {
-                                self_pass = Some(ValuePassType::Ref);
+                                self_pass = Some(ValuePassType::Ref(r.lifetime.clone()));
                             }
                         }
                     }
@@ -860,6 +886,7 @@ impl ParsedImplFn {
         Ok(Self {
             name: input.sig.ident.to_string(),
             name_ident: input.sig.ident.clone(),
+            lifetimes,
             self_pass,
             first_arg_self,
             args,
@@ -875,7 +902,8 @@ impl ParsedImplFn {
 trait ParsedFn {
     fn name(&self) -> &str;
     fn name_ident(&self) -> &syn::Ident;
-    fn self_pass(&self) -> Option<ValuePassType>;
+    fn lifetimes(&self) -> &[syn::LifetimeParam];
+    fn self_pass(&self) -> Option<&ValuePassType>;
     fn args(&self) -> &[ParsedFnArg];
     fn ret(&self) -> Option<&ParsedFnRet>;
 }
@@ -887,8 +915,11 @@ impl ParsedFn for ParsedTraitFn {
     fn name_ident(&self) -> &syn::Ident {
         &self.name_ident
     }
-    fn self_pass(&self) -> Option<ValuePassType> {
-        self.self_pass
+    fn lifetimes(&self) -> &[syn::LifetimeParam] {
+        &self.lifetimes
+    }
+    fn self_pass(&self) -> Option<&ValuePassType> {
+        self.self_pass.as_ref()
     }
     fn args(&self) -> &[ParsedFnArg] {
         &self.args
@@ -905,8 +936,11 @@ impl ParsedFn for ParsedImplFn {
     fn name_ident(&self) -> &syn::Ident {
         &self.name_ident
     }
-    fn self_pass(&self) -> Option<ValuePassType> {
-        self.self_pass
+    fn lifetimes(&self) -> &[syn::LifetimeParam] {
+        &self.lifetimes
+    }
+    fn self_pass(&self) -> Option<&ValuePassType> {
+        self.self_pass.as_ref()
     }
     fn args(&self) -> &[ParsedFnArg] {
         if self.first_arg_self {
@@ -1049,7 +1083,7 @@ fn parse_input(input: syn::parse::ParseStream) -> syn::Result<Vec<MacroInputItem
 
 fn generate_vtable(c: &ParsedContainer, parsed: &ParsedMacroInput) -> TokenStream {
     let make_vtable_fn =
-        |name: &str, has_self: bool, args: &[ParsedFnArg], ret: Option<&ParsedFnRet>| {
+        |name: &str, self_pass: Option<&ValuePassType>, lifetimes: &[syn::LifetimeParam], args: &[ParsedFnArg], ret: Option<&ParsedFnRet>| {
             let args = args.iter().map(|a| match &a.ty {
                 ParsedFnArgType::Type(ty) => ty.to_token_stream(),
                 ParsedFnArgType::TraitType(pass, _) => quote!(#pass Box<dyn std::any::Any>),
@@ -1066,19 +1100,27 @@ fn generate_vtable(c: &ParsedContainer, parsed: &ParsedMacroInput) -> TokenStrea
                 })
                 .map(|r| quote! { -> #r });
 
-            let s = has_self.then(|| quote! { std::ptr::NonNull<()>, });
+            let this = self_pass.is_some().then(|| quote! { std::ptr::NonNull<()>, });
+
+            let lifetime_hack = self_pass.and_then(|s| s.make_lifetime_hack_type()).map(|t| quote!(, #t));
 
             let name = Ident::new(name, Span::call_site());
 
+            let lifetimes = lifetimes.is_empty().not().then(|| {
+                quote! {
+                    for<#(#lifetimes),*>
+                }
+            });
+
             quote! {
-                pub #name: fn(#s #(#args),*) #return_type
+                pub #name: #lifetimes fn(#this #(#args),* #lifetime_hack) #return_type
             }
         };
 
     let trait_fns = parsed.traits.iter().flat_map(|t| {
         t.fns.iter().map(|f| {
             let name = format!("trait_{}_{}", t.lowercase_name, f.name);
-            make_vtable_fn(&name, f.self_pass.is_some(), &f.args, f.ret.as_ref())
+            make_vtable_fn(&name, f.self_pass.as_ref(), &f.lifetimes, &f.args, f.ret.as_ref())
         })
     });
 
@@ -1092,7 +1134,7 @@ fn generate_vtable(c: &ParsedContainer, parsed: &ParsedMacroInput) -> TokenStrea
                 &f.args[..]
             };
 
-            make_vtable_fn(&name, f.self_pass.is_some(), args, f.ret.as_ref())
+            make_vtable_fn(&name, f.self_pass.as_ref(), &f.lifetimes, args, f.ret.as_ref())
         })
     });
 
@@ -1129,9 +1171,10 @@ fn generate_new(c: &ParsedContainer, parsed: &ParsedMacroInput) -> TokenStream {
     struct Intermediate<'a> {
         name: Ident,
         vtable_name: Ident,
+        lifetimes: &'a [syn::LifetimeParam],
         args: &'a [ParsedFnArg],
         ret: Option<&'a ParsedFnRet>,
-        self_pass: Option<ValuePassType>,
+        self_pass: Option<&'a ValuePassType>,
         on_cast_fail: Option<&'a CastFailBehavior>,
         bounds: TokenStream,
         call_prefix: Option<TokenStream>,
@@ -1156,10 +1199,11 @@ fn generate_new(c: &ParsedContainer, parsed: &ParsedMacroInput) -> TokenStream {
 
             Intermediate {
                 name: f.name_ident.clone(),
+                lifetimes: &f.lifetimes,
                 vtable_name,
                 args: &f.args,
                 ret: f.ret.as_ref(),
-                self_pass: f.self_pass,
+                self_pass: f.self_pass(),
                 on_cast_fail,
                 bounds,
                 call_prefix: Some(quote! { Tinner:: }),
@@ -1209,7 +1253,7 @@ fn generate_new(c: &ParsedContainer, parsed: &ParsedMacroInput) -> TokenStream {
             let self_pass = f
                 .first_arg_self
                 .not()
-                .then_some(f.self_pass)
+                .then_some(f.self_pass.as_ref())
                 .flatten()
                 .map(|p| quote! { #p self, });
 
@@ -1226,10 +1270,11 @@ fn generate_new(c: &ParsedContainer, parsed: &ParsedMacroInput) -> TokenStream {
 
             Intermediate {
                 name: f.name_ident.clone(),
+                lifetimes: &f.lifetimes,
                 vtable_name,
                 args,
                 ret: f.ret.as_ref(),
-                self_pass: f.self_pass,
+                self_pass: f.self_pass(),
                 on_cast_fail,
                 bounds: parsed.all_value_bounds.clone(),
                 call_prefix: None,
@@ -1260,9 +1305,9 @@ fn generate_new(c: &ParsedContainer, parsed: &ParsedMacroInput) -> TokenStream {
             })
             .map(|r| quote! { -> #r });
 
-        let deref_this = i.self_pass.as_ref().map(|p| match p {
-            ValuePassType::Ref => quote! { let this = unsafe { this.cast::<Tinner>().as_ref() }; },
-            ValuePassType::Mut => quote! { let this = unsafe { this.cast::<Tinner>().as_mut() }; },
+        let deref_this = i.self_pass.map(|p: &ValuePassType| match p {
+            ValuePassType::Ref(_) => quote! { let this = unsafe { this.cast::<Tinner>().as_ref() }; },
+            ValuePassType::Mut(_) => quote! { let this = unsafe { this.cast::<Tinner>().as_mut() }; },
             ValuePassType::Owned => quote! { let this = unsafe { this.cast::<Tinner>().read() }; },
         });
 
@@ -1272,8 +1317,8 @@ fn generate_new(c: &ParsedContainer, parsed: &ParsedMacroInput) -> TokenStream {
             };
 
             let downcast = match pass {
-                ValuePassType::Ref => quote! { .downcast_ref::<Tinner:: #ty>() },
-                ValuePassType::Mut => quote! { .downcast_mut::<Tinner:: #ty>() },
+                ValuePassType::Ref(_) => quote! { .downcast_ref::<Tinner:: #ty>() },
+                ValuePassType::Mut(_) => quote! { .downcast_mut::<Tinner:: #ty>() },
                 ValuePassType::Owned => quote! { .downcast::<Tinner:: #ty>().ok().map(|b| *b) },
             };
 
@@ -1353,8 +1398,21 @@ fn generate_new(c: &ParsedContainer, parsed: &ParsedMacroInput) -> TokenStream {
         let bounds = i.bounds;
         let extra_defs = &i.extra_defs;
 
+        let lifetimes = i.lifetimes.is_empty().not().then(|| {
+            let lifetimes = i.lifetimes;
+            quote! {
+                #(#lifetimes),*,
+            }
+        });
+
+        let this_arg_lifetime = i.self_pass.and_then(|p| p.lifetime()).map(|l| {
+            quote! { + #l }
+        });
+
+        let lifetime_hack = i.self_pass.and_then(|s| s.make_lifetime_hack_type()).map(|t| quote!(, _: #t));
+
         quote! {
-            fn #vtable_name<Tinner: #bounds>(#this_arg #(#args),*) #return_type #static_bounds {
+            fn #vtable_name<#lifetimes Tinner: #bounds #this_arg_lifetime>(#this_arg #(#args),* #lifetime_hack) #return_type #static_bounds {
                 #extra_defs
                 #(#arg_proc)*
                 #deref_this
@@ -1369,23 +1427,33 @@ fn generate_new(c: &ParsedContainer, parsed: &ParsedMacroInput) -> TokenStream {
         }
     });
 
-    let vtable_impl_names = parsed.impls.iter().flat_map(|i| {
+    let vtable_impl_fns = parsed.impls.iter().flat_map(|i| {
         i.fns.iter().map(|f| {
             let vtable_name = format!("impl_{}", f.name);
-            syn::Ident::new(&vtable_name, f.name_ident.span())
+            (f as &dyn ParsedFn, syn::Ident::new(&vtable_name, f.name_ident.span()))
         })
     });
 
-    let vtable_trait_names = parsed.traits.iter().flat_map(|t| {
+    let vtable_trait_fns = parsed.traits.iter().flat_map(|t| {
         t.fns.iter().map(|f| {
             let vtable_name = format!("trait_{}_{}", t.lowercase_name, f.name);
-            syn::Ident::new(&vtable_name, f.name_ident.span())
+            (f as &dyn ParsedFn, syn::Ident::new(&vtable_name, f.name_ident.span()))
         })
     });
 
-    let vtable_constructs = vtable_impl_names.chain(vtable_trait_names).map(|n| {
-        quote! {
-            #n: #n::<T>,
+    let vtable_constructs = vtable_impl_fns.chain(vtable_trait_fns).map(|(f, n)| {
+        if f.self_pass().is_some_and(|s| s.lifetime().is_some()) {
+            let argnames = f.args().iter().map(|a| &a.name);
+            let argnames2 = argnames.clone();
+
+            quote! {
+                #n: |this #(,#argnames)*, _| #n::<T>(this #(,#argnames2)*, []),
+            }
+        }
+        else {
+            quote! {
+                #n: #n::<T>,
+            }
         }
     });
 
@@ -1558,15 +1626,23 @@ fn generate_impl_fns<F: ParsedFn>(
             }
         } else {
             let data_pass = f.self_pass().is_some().then(|| quote! { self.data, });
-            quote! { (self.vtable.#vtable_name)(#data_pass #(#arg_names,)*) }
+            let lifetime_hack = f.self_pass().is_some_and(|s| s.lifetime().is_some()).then(|| quote! {,[]});
+            quote! { (self.vtable.#vtable_name)(#data_pass #(#arg_names),* #lifetime_hack) }
         };
 
-        let self_pass = f.self_pass().unwrap_or(ValuePassType::Ref);
+        let self_pass = f.self_pass().unwrap_or(&ValuePassType::Ref(None));
 
         let vis = t.is_some_and(|t| !t.as_impl).not().then(|| quote!(pub));
 
+        let lifetimes = f.lifetimes().is_empty().not().then(|| {
+            let lifetimes = f.lifetimes();
+            quote! {
+                <#(#lifetimes),*>
+            }
+        });
+
         quote! {
-            #vis fn #name(#self_pass self #(,#args)*) #return_type {
+            #vis fn #name #lifetimes (#self_pass self #(,#args)*) #return_type {
                 #call
             }
         }
@@ -1640,6 +1716,16 @@ fn generate_container(c: &ParsedContainer, parsed: &ParsedMacroInput) -> TokenSt
         }
 
         #(#trait_impls)*
+    }
+}
+
+/// Makes sure &'a self preserves its lifetime in the vtable fn pointer, otherwise compiler gets angry,
+/// "lifetime is not constrained by input types"
+fn generate_self_lifetime_hack_type(lt: &syn::Lifetime, mutable: bool) -> TokenStream {
+    if mutable {
+        quote! { [&#lt mut (); 0] }
+    } else {
+        quote! { [&#lt (); 0] }
     }
 }
 
