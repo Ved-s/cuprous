@@ -536,7 +536,7 @@ impl BoardView {
 
         let force_draw_points = ctx.ui.input(|input| input.modifiers.shift);
 
-        for (pos, lookaround, node) in editor.wires().iter_area_with_lookaround(tl, size) {
+        for (pos, lookaround, node) in editor.tiles.wires().iter_area_with_lookaround(tl, size) {
             for dir in Direction4Half::ALL {
                 let dist = node.directions.get(dir.into());
                 let Some(dist) = dist else {
@@ -784,6 +784,7 @@ impl BoardView {
         pin_buffer.clear();
 
         for (pos, node) in editor
+            .tiles
             .circuits()
             .iter_area(ctx.tile_bounds_tl, ctx.tile_bounds_size)
         {
@@ -864,7 +865,7 @@ impl BoardView {
                 if selected && !custom_selection {
                     let mut renderer = self.selection_renderer.lock();
 
-                    for (pos, node) in editor.circuits().iter_area(circuit_pos, info.size) {
+                    for (pos, node) in editor.tiles.circuits().iter_area(circuit_pos, info.size) {
                         for qpos in QuarterPos::ALL {
                             if node
                                 .quarters
@@ -911,7 +912,7 @@ impl BoardView {
 
     fn draw_wire_debug(&self, ctx: &PaintContext) {
         let editor = self.editor.read();
-        for (pos, lookaround, node) in editor
+        for (pos, lookaround, node) in editor.tiles
             .wires()
             .iter_area_with_lookaround(ctx.tile_bounds_tl, ctx.tile_bounds_size)
         {
@@ -1039,7 +1040,7 @@ impl BoardView {
 
     fn draw_circuit_debug(&self, ctx: &PaintContext) {
         let editor = self.editor.read();
-        for (pos, node) in editor
+        for (pos, node) in editor.tiles
             .circuits()
             .iter_area(ctx.tile_bounds_tl, ctx.tile_bounds_size)
         {
@@ -1127,7 +1128,7 @@ impl BoardView {
                         TextStyle::Monospace,
                     );
 
-                    let wire_point = editor.wires().get(pos).and_then(|n| n.wire.clone());
+                    let wire_point = editor.tiles.wires().get(pos).and_then(|n| n.wire.clone());
 
                     let properly_connected_wire_point = (wire.is_none() && wire_point.is_none())
                         || wire.as_ref().is_some_and(|w| {
@@ -1404,7 +1405,7 @@ impl BoardView {
 
             let world_pos = pos.convert(|v| v as isize) + world_place_tile;
 
-            let Some(node) = editor.circuits().get(world_pos) else {
+            let Some(node) = editor.tiles.circuits().get(world_pos) else {
                 continue;
             };
 
@@ -1582,7 +1583,7 @@ impl BoardView {
                 match item {
                     SelectedBoardItem::WirePart { pos, dir } => {
                         let dir = Direction8::from(*dir);
-                        let dist = editor.wires().get(*pos).and_then(|n| {
+                        let dist = editor.tiles.wires().get(*pos).and_then(|n| {
                             n.wire.is_some().then(|| *n.directions.get(dir)).flatten()
                         });
                         if let Some(dist) = dist {
@@ -1631,7 +1632,7 @@ impl BoardView {
         'selection: for &selected in self.selection.iter() {
             let min = match selected {
                 SelectedBoardItem::WirePart { pos, dir } => {
-                    let Some(node) = editor.wires().get(pos) else {
+                    let Some(node) = editor.tiles.wires().get(pos) else {
                         continue;
                     };
 
@@ -1655,7 +1656,7 @@ impl BoardView {
                     min.into()
                 }
                 SelectedBoardItem::WirePoint { pos } => {
-                    let Some(node) = editor.wires().get(pos) else {
+                    let Some(node) = editor.tiles.wires().get(pos) else {
                         continue;
                     };
 
@@ -1826,7 +1827,7 @@ impl BoardView {
             {
                 let world_pos = circuit_pos + [x as isize, y as isize];
 
-                let Some(node) = editor.circuits().get(world_pos) else {
+                let Some(node) = editor.tiles.circuits().get(world_pos) else {
                     continue;
                 };
 
@@ -1893,7 +1894,12 @@ impl BoardView {
             for p in &paste.wire_points {
                 let pos = world_place_tile + p.convert(|v| v as isize);
 
-                if editor.wires().get(pos).is_some_and(|n| n.wire.is_some()) {
+                if editor
+                    .tiles
+                    .wires()
+                    .get(pos)
+                    .is_some_and(|n| n.wire.is_some())
+                {
                     continue;
                 }
 
