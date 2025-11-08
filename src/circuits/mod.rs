@@ -140,6 +140,8 @@ impl Circuit {
 #[derive(Clone)]
 pub struct CircuitInfo {
     pub pos: Vec2isize,
+
+    /// Size before transformations
     pub render_size: Vec2usize,
     pub size: Vec2usize,
     pub transform: CircuitTransform,
@@ -150,9 +152,8 @@ pub struct CircuitImplData {
     pub instance: Box<dyn Any + Send + Sync>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum PinType {
-    Custom,
     Inside,
     Outside,
 }
@@ -170,6 +171,23 @@ impl PinDescription {
         PosDirMut {
             pos: &mut self.pos,
             dir: self.dir.as_mut(),
+        }
+    }
+
+    /// True if pin descriptions are equal, ignoring visual differences
+    pub fn functionally_equals(&self, other: &Self) -> bool {
+        self.id == other.id && self.pos == other.pos && self.ty == other.ty
+    }
+
+    pub fn into_realized(self, circuit: Arc<Circuit>, id: usize) -> RealizedPin {
+        RealizedPin {
+            pin: Arc::new(CircuitPin {
+                id,
+                wire: RwLock::new(None),
+                ty: self.ty,
+                circuit,
+            }),
+            desc: self,
         }
     }
 }
@@ -228,7 +246,6 @@ impl CircuitPin {
 
     fn handle_disconnect(&self, old_wire: usize, tasks: &mut UpdateTaskPool) {
         match self.ty {
-            PinType::Custom => todo!(),
             PinType::Inside => {
                 tasks.add_update_input_task(self.circuit.id, self.id, true);
             }
@@ -240,7 +257,7 @@ impl CircuitPin {
 
     fn handle_connect(&self, wire: usize, tasks: &mut UpdateTaskPool) {
         match self.ty {
-            PinType::Custom | PinType::Outside => {
+            PinType::Outside => {
                 tasks.add_wire_task(wire, true);
             }
             PinType::Inside => {
@@ -722,12 +739,11 @@ pub trait CircuitImpl: Clone + Send + Sync {
 
     fn property_changed(
         &self,
-        circuit: &Circuit,
-        instance: Option<&mut Self::Instance>,
+        circuit_instance: Option<(&Circuit, &mut Self::Instance)>,
         prop: &str,
         params: &mut PropertyChangedParams,
     ) {
-        let _ = (circuit, instance, prop, params);
+        let _ = (circuit_instance, prop, params);
     }
 }
 
@@ -784,8 +800,8 @@ traitbox::traitbox! {
             this.load_state(circuit, instance.downcast_ref().expect("incorrect circuit instance"), data).map(|i| Box::new(i) as Box<_>)
         }
 
-        fn property_changed<C: CircuitImpl>(this: &C, circuit: &Circuit, instance: Option<&mut Box<dyn Any + Send + Sync>>, prop: &str, params: &mut PropertyChangedParams) {
-            this.property_changed(circuit, instance.map(|i| i.downcast_mut().expect("incorrect circuit instance")), prop, params)
+        fn property_changed<C: CircuitImpl>(this: &C, circuit_instance: Option<(&Circuit, &mut Box<dyn Any + Send + Sync>)>, prop: &str, params: &mut PropertyChangedParams) {
+            this.property_changed(circuit_instance.map(|(c, i)| (c, i.downcast_mut().expect("incorrect circuit instance"))), prop, params)
         }
     }
 

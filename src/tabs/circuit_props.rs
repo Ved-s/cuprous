@@ -1,23 +1,24 @@
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     ops::{Deref, DerefMut},
     sync::Weak,
     time::{Duration, Instant},
 };
 
-use eframe::egui::{
-    Color32, Grid, RichText, Ui,
-};
+use eframe::egui::{Color32, Grid, RichText, Ui};
 use parking_lot::{RwLock, RwLockWriteGuard};
 
 use crate::{
     app::App,
-    circuits::{props::PropertyInfo, CircuitImplData, PropertyChangedParams},
+    circuits::{
+        props::PropertyInfo, CircuitImplData, PinType, PropertyChangedParams, TransformSupport,
+    },
     editor::BoardEditor,
     pool::get_pooled,
     state::sim::UpdateTaskPool,
     str::ArcStaticStr,
     tabs::{TabCreation, TabImpl},
+    vector::Vec2usize,
 };
 
 const PROP_ERROR_FADE_TIME: Duration = Duration::from_millis(500);
@@ -35,14 +36,249 @@ pub struct CircuitProps {
     new_circuit_property_map: HashMap<ArcStaticStr, PropertyInfo>,
 }
 
+struct OldCircuitGeometryData {
+    /// None when size didn't change
+    size: Option<Vec2usize>,
+}
+
 impl CircuitProps {
     fn try_applying_geometry_and_pin_changes(
-        _editor: &mut BoardEditor,
+        editor: &mut BoardEditor,
         circuit_locks: &mut BTreeMap<usize, RwLockWriteGuard<'_, CircuitImplData>>,
         reset: impl FnOnce(&mut BTreeMap<usize, RwLockWriteGuard<'_, CircuitImplData>>),
     ) -> Result<(), String> {
-        reset(circuit_locks);
-        Err("not implemented".into())
+        let mut changed_geometry_circuits = BTreeMap::new();
+        let board = editor.board().clone();
+        let circuits = board.circuits().read();
+
+        // Find circuits with changed deometry, remove them
+        for (&id, circuit_imp) in circuit_locks.iter_mut() {
+            let mut circuit_info = circuits.get(id).unwrap().info.write();
+
+            let old_size = circuit_info.size;
+            let new_size = circuit_imp.imp.size(circuit_info.transform);
+
+            circuit_info.size = new_size;
+
+            if old_size != new_size {
+                editor.tiles.remove_circuit(id, circuit_info.pos, old_size);
+                changed_geometry_circuits.insert(
+                    id,
+                    OldCircuitGeometryData {
+                        size: Some(old_size),
+                    },
+                );
+                continue;
+            }
+
+            let valid = editor.tiles.validate_circuit_geometry(
+                id,
+                circuit_info.pos,
+                circuit_info.size,
+                circuit_info.transform,
+                &circuit_imp.imp,
+            );
+            if !valid {
+                editor.tiles.remove_circuit(id, circuit_info.pos, old_size);
+                changed_geometry_circuits.insert(id, OldCircuitGeometryData { size: None });
+            }
+        }
+
+        let mut old_circuit_pins = BTreeMap::new();
+
+        let mut fail = false;
+
+        let mut disconnected_wires = BTreeSet::new();
+
+        let mut tasks = get_pooled::<UpdateTaskPool>();
+
+        // Update pins, place circuits with changed geometry
+        for (&id, circuit_imp) in circuit_locks.iter_mut() {
+            let circuit = circuits.get(id).unwrap();
+            let circuit_info = circuit.info.read();
+            let new_pins = circuit_imp.imp.describe_pins(circuit_info.transform);
+            let mut circuit_pins = circuit.pins.write();
+
+            let pins_eq = circuit_pins.len() == new_pins.len()
+                && new_pins
+                    .iter()
+                    .zip(circuit_pins.iter())
+                    .all(|(n, o)| n.functionally_equals(&o.desc));
+
+            if !pins_eq {
+                for p in circuit_pins.iter() {
+                    let Some(wire) = p.pin.wire.write().take() else {
+                        continue;
+                    };
+
+                    wire.remove_pin(id, p.pin.id);
+
+                    editor.remove_needless_wire_point(
+                        circuit_info.pos + p.desc.pos.convert(|v| v as isize),
+                        &mut tasks,
+                    );
+                    tasks.clear(); // We do tasks manually in the correct order
+                    disconnected_wires.insert(wire.id);
+                }
+
+                let realized_pins = Vec::from(new_pins)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(id, pin)| pin.into_realized(circuit.clone(), id))
+                    .collect();
+
+                let old_pins = std::mem::replace(circuit_pins.deref_mut(), realized_pins);
+                old_circuit_pins.insert(id, old_pins);
+            }
+
+            if changed_geometry_circuits.contains_key(&id) {
+                let res = editor.tiles.place_circuit(
+                    board.circuits().read().get(id).unwrap(),
+                    circuit_info.pos,
+                    circuit_info.size,
+                    circuit_info.transform,
+                    &circuit_imp.imp,
+                    &circuit_pins,
+                    false,
+                );
+
+                if let Some(err) = res.get_placement_error() {
+                    fail = true;
+                }
+            } else if !pins_eq {
+                if let Err(err) = editor.tiles.replace_pins(
+                    id,
+                    circuit_info.pos,
+                    circuit_info.size,
+                    circuit_pins.deref(),
+                ) {
+                    fail = true;
+                }
+            };
+        }
+
+        // Roll everything back
+        if fail {
+            for (&id, data) in changed_geometry_circuits.iter() {
+                let mut circuit_info = circuits.get(id).unwrap().info.upgradable_read();
+
+                editor
+                    .tiles
+                    .remove_circuit(id, circuit_info.pos, circuit_info.size);
+
+                if let Some(old_size) = data.size {
+                    circuit_info.with_upgraded(|i| {
+                        i.size = old_size;
+                    });
+                }
+            }
+
+            for (&id, pins) in old_circuit_pins.iter_mut() {
+                if !changed_geometry_circuits.contains_key(&id) {
+                    let info = circuits.get(id).unwrap().info.read();
+                    editor.tiles.replace_pins(id, info.pos, info.size, pins).ok();
+                }
+
+                *circuits.get(id).unwrap().pins.write() = std::mem::take(pins);
+            }
+
+            reset(circuit_locks);
+
+            for &id in changed_geometry_circuits.keys() {
+                let circuit = circuits.get(id).unwrap();
+                let circuit_info = circuit.info.read();
+                let circuit_pins = circuit.pins.read();
+                let circuit_imp = circuit_locks.get(&id).unwrap();
+
+                editor.tiles.place_circuit(
+                    board.circuits().read().get(id).unwrap(),
+                    circuit_info.pos,
+                    circuit_info.size,
+                    circuit_info.transform,
+                    &circuit_imp.imp,
+                    &circuit_pins,
+                    true, // it worked before all of this so must be fine now!
+                );
+            }
+        }
+
+        // At this point everything is there but circuits with changed pins have them disconnected from the wires
+
+        let mut connected_wires = BTreeSet::new();
+
+        // Connect pins and place wires
+        for &id in circuit_locks.keys() {
+            if !old_circuit_pins.contains_key(&id) {
+                continue;
+            }
+
+            let circuit = circuits.get(id).unwrap();
+            let circuit_info = circuit.info.read();
+            let circuit_pins = circuit.pins.read();
+
+            for p in circuit_pins.iter() {
+                let pos = circuit_info.pos + p.desc.pos.convert(|v| v as isize);
+                if editor.tiles.should_pin_wire_point_exist(pos) {
+                    let wire = editor.set_wire_point(pos, None, true, &mut tasks);
+                    connected_wires.insert(wire.id);
+                    tasks.clear(); // Manual tasks
+                }
+            }
+        }
+
+        // Add relevant state tasks
+
+        // Update pin states
+        for &id in circuit_locks.keys() {
+            if !old_circuit_pins.contains_key(&id) {
+                continue;
+            }
+
+            let circuit = circuits.get(id).unwrap();
+            let circuit_pins = circuit.pins.read();
+
+            for p in circuit_pins.iter() {
+                let wire = p.pin.wire.read().clone();
+                match p.pin.ty {
+                    PinType::Inside => {
+                        if let Some(wire) = wire {
+                            // If wire won't be updated
+                            if !disconnected_wires.contains(&wire.id) {
+                                tasks.add_update_input_task(id, p.pin.id, false);
+                            }
+                        } else {
+                            tasks.add_drop_circuit_task(id, Some(p.pin.id));
+                        }
+                    }
+                    PinType::Outside => {
+                        // Circuit will be updated later, for now just drop it
+                        tasks.add_drop_circuit_task(id, Some(p.pin.id));
+                    }
+                }
+            }
+        }
+
+        // Update wires
+        for &w in disconnected_wires.union(&connected_wires) {
+            tasks.add_wire_task(w, false);
+        }
+
+        // Update circuits
+        for &id in old_circuit_pins.keys() {
+            tasks.add_circuit_task(id, None);
+        }
+
+        board.add_tasks(&tasks);
+
+        for &id in circuit_locks.keys() {
+
+            let circuit = circuits.get(id).unwrap();
+            let mut circuit_info = circuit.info.write();
+
+            circuit_info.render_size = circuit_info.transform.transform_size(circuit_info.size, Some(TransformSupport::Automatic));
+        }
+
+        Ok(())
     }
 }
 
@@ -229,14 +465,12 @@ impl TabImpl for CircuitProps {
                             Ok(()) => {
                                 self.value_errors.remove(id);
                                 for (&circuit_id, circuit) in circuit_locks.iter_mut() {
-
                                     let circuit = circuit.deref_mut();
 
                                     let mut params = PropertyChangedParams::default();
 
                                     circuit.imp.property_changed(
-                                        board_circuits.get(circuit_id).unwrap(),
-                                        Some(&mut circuit.instance),
+                                        Some((board_circuits.get(circuit_id).unwrap(), &mut circuit.instance)),
                                         id,
                                         &mut params,
                                     );
@@ -273,8 +507,8 @@ impl TabImpl for CircuitProps {
                         });
                     }
 
-                    ui.end_row();
                 });
+                ui.end_row();
             }
         });
 

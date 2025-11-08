@@ -209,11 +209,12 @@ impl BoardState {
                     self.update_input(i, &mut tasks, &mut queue_immediately);
                 }
                 UpdateTask::DropCircuit(d) => {
-                    self.circuits.drop_circuit(d.id);
+                    self.circuits.drop_circuit(d.id, d.pin_only);
                 }
             }
 
-            self.sim.add_tasks(&mut tasks.drain(), queue_immediately, Some(&meta));
+            self.sim
+                .add_tasks(&mut tasks.drain(), queue_immediately, Some(&meta));
         }
 
         None
@@ -236,7 +237,6 @@ impl BoardState {
                     PinType::Outside => {
                         state.combine(&this.circuits.get_pin(pin.circuit.id, pin.id));
                     }
-                    PinType::Custom => todo!(),
                 }
             }
 
@@ -262,7 +262,6 @@ impl BoardState {
                         }
                     }
                     PinType::Outside => {}
-                    PinType::Custom => todo!(),
                 }
             }
         }
@@ -273,21 +272,15 @@ impl BoardState {
 
         let pins = wire.connected_pins.read();
 
-        let any_custom = pins.iter().any(|p| matches!(p.ty, PinType::Custom));
+        update_wire_pins(
+            self,
+            wire.clone(),
+            task.force_pin_updates,
+            pins.as_slice(),
+            tasks,
+        );
 
-        if any_custom {
-            todo!()
-        } else {
-            update_wire_pins(
-                self,
-                wire.clone(),
-                task.force_pin_updates,
-                pins.as_slice(),
-                tasks,
-            );
-
-            tasks.shuffle();
-        }
+        tasks.shuffle();
     }
 
     fn update_circuit(&mut self, task: CircuitUpdateTask, tasks: &mut UpdateTaskPool) {
@@ -307,7 +300,12 @@ impl BoardState {
         imp.imp.update_signals(ctx, task.changed_pin);
     }
 
-    fn update_input(&mut self, task: InputUpdateTask, tasks: &mut UpdateTaskPool, queue_immediately: &mut bool) {
+    fn update_input(
+        &mut self,
+        task: InputUpdateTask,
+        tasks: &mut UpdateTaskPool,
+        queue_immediately: &mut bool,
+    ) {
         let pin_input_wire = self
             .board()
             .circuits()
@@ -325,9 +323,7 @@ impl BoardState {
         let state = match pin_input_wire {
             Err(()) => return,
             Ok(None) => WireState::None,
-            Ok(Some(wire)) => {
-                self.wires.get_wire(wire.id)
-            }
+            Ok(Some(wire)) => self.wires.get_wire(wire.id),
         };
 
         let changed = self.circuits.set_pin(task.circuit, task.pin, state);

@@ -1,17 +1,28 @@
-use std::sync::Arc;
+use std::{any::{Any, TypeId}, sync::Arc};
 
-use eframe::egui::{Color32, CursorIcon, PointerButton, Sense, Stroke, StrokeKind};
+use eframe::egui::{
+    vec2, Color32, CursorIcon, DragValue, PointerButton, Rect, Sense, Stroke, StrokeKind, Ui, Widget
+};
 use smoldata::{raw::RawValue, SmolReadWrite};
 
-use crate::{state::wires::WireState, str::ArcStaticStr, vector::Vec2usize, Direction4, Direction8};
+use crate::{
+    circuits::{props::{PropertyInfo, PropertyValue}, PropertyChangedParams},
+    state::wires::WireState,
+    str::{ArcRefStr, ArcStaticStr},
+    vector::Vec2usize,
+    Direction4, Direction8,
+};
 
 use super::{
     Circuit, CircuitCtx, CircuitImpl, CircuitPin, CircuitRenderingContext, CircuitRotationSupport,
     CircuitTransform, CircuitTransformSupport, PinDescription, PinType, TransformSupport,
 };
 
-#[derive(Clone)]
-pub struct Button;
+#[derive(Default, Clone)]
+pub struct Button {
+    width: ButtonSize,
+    height: ButtonSize,
+}
 
 #[derive(Default, SmolReadWrite)]
 pub struct ButtonState {
@@ -35,16 +46,16 @@ impl CircuitImpl for Button {
     }
 
     fn size(&self, _: CircuitTransform) -> Vec2usize {
-        [3, 3].into()
+        [self.width.0, self.height.0].into()
     }
 
     fn occupies_quarter(&self, _: CircuitTransform, qpos: Vec2usize) -> bool {
-        qpos.x >= 1 && qpos.x <= 4 && qpos.y >= 1 && qpos.y <= 4
+        qpos.x >= 1 && qpos.x <= (self.width.0 - 1) * 2 && qpos.y >= 1 && qpos.y <= (self.height.0 - 1) * 2
     }
 
     fn describe_pins(&self, _: CircuitTransform) -> Box<[PinDescription]> {
         [PinDescription {
-            pos: [2, 1].into(),
+            pos: [self.width.0 - 1, (self.height.0 - 1) / 2].into(),
             id: "out".into(),
             display_name: "Out".into(),
             dir: Some(Direction8::Right),
@@ -100,10 +111,12 @@ impl CircuitImpl for Button {
             color: Color32::from_gray(48),
         };
 
+        let diameter = self.width.0.min(self.height.0) as f32 - 1.5;
+
         // render.paint.rect(ctx.rect, rounding, color, stroke);
         render.paint.circle(
             render.screen_rect.center(),
-            0.75 * render.paint.screen.scale,
+            diameter * 0.5 * render.paint.screen.scale,
             color,
             stroke,
         );
@@ -119,14 +132,13 @@ impl CircuitImpl for Button {
         // );
 
         if let Some(cir) = &mut circuit {
-
             let ui = render.paint.ui;
 
             let id = ui.id().with("buttoninteraction").with(cir.circuit.id);
 
-            let shrink = 0.75 * render.paint.screen.scale;
+            let size = diameter * render.paint.screen.scale;
 
-            let rect = render.screen_rect.shrink(shrink);
+            let rect = Rect::from_center_size(render.screen_rect.center(), vec2(size, size));
 
             let interaction = ui.interact(rect, id, Sense::drag());
             if interaction.hovered() {
@@ -152,20 +164,105 @@ impl CircuitImpl for Button {
     }
 
     fn update_signals(&self, mut circuit: CircuitCtx<Self>, _: Option<usize>) {
-        let state = circuit.read_internal_state().map(|s| s.state).unwrap_or(false);
+        let state = circuit
+            .read_internal_state()
+            .map(|s| s.state)
+            .unwrap_or(false);
         circuit.set_pin_output(&circuit.instance.pin, WireState::Bool(state));
     }
 
-    fn save_state(&self, _circuit: &Circuit, _instance: &Self::Instance, state: &Self::State) -> Option<smoldata::raw::RawValue> {
+    fn save_config(&self) -> Option<RawValue> {
+        todo!()
+    }
+
+    fn save_state(
+        &self,
+        _circuit: &Circuit,
+        _instance: &Self::Instance,
+        state: &Self::State,
+    ) -> Option<smoldata::raw::RawValue> {
         RawValue::write_object(state).ok()
     }
 
     fn load_state(
-            &self,
-            _circuit: &Arc<Circuit>,
-            _instance: &Self::Instance,
-            data: &RawValue,
-        ) -> Result<Self::State, eyre::Report> {
+        &self,
+        _circuit: &Arc<Circuit>,
+        _instance: &Self::Instance,
+        data: &RawValue,
+    ) -> Result<Self::State, eyre::Report> {
         data.read_object().map_err(Into::into)
+    }
+
+    fn enum_properties(&self, f: &mut dyn FnMut(&PropertyInfo)) {
+        f(&PropertyInfo {
+            id: ArcRefStr::Ref("width"),
+            display_name: ArcRefStr::Ref("Width"),
+            type_id: TypeId::of::<ButtonSize>(),
+            affects_geometry_or_pins: true,
+        });
+        f(&PropertyInfo {
+            id: ArcRefStr::Ref("height"),
+            display_name: ArcRefStr::Ref("Height"),
+            type_id: TypeId::of::<ButtonSize>(),
+            affects_geometry_or_pins: true,
+        });
+    }
+
+    fn get_property_value<'a>(&'a mut self, id: &str) -> Option<&'a mut dyn PropertyValue> {
+        match id {
+            "width" => Some(&mut self.width),
+            "height" => Some(&mut self.height),
+            _ => None,
+        }
+    }
+
+    fn property_changed(
+            &self,
+            circuit_instance: Option<(&Circuit, &mut Self::Instance)>,
+            prop: &str,
+            params: &mut PropertyChangedParams,
+        ) {
+        if prop == "width" || prop == "height" {
+            params.trigger_signal_update = true;
+
+            if let Some((circuit, instance)) = circuit_instance {
+                instance.pin = circuit.pins.read()[0].pin.clone();
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ButtonSize(usize);
+
+impl Default for ButtonSize {
+    fn default() -> Self {
+        Self(3)
+    }
+}
+
+impl PropertyValue for ButtonSize {
+    fn clone_dyn(&self) -> Box<dyn PropertyValue> {
+        Box::new(*self)
+    }
+
+    fn clone_into_dyn(&self, other: &mut dyn PropertyValue) {
+        if let Some(other) = (other as &mut dyn Any).downcast_mut() {
+            self.clone_into(other);
+        }
+    }
+
+    fn ui(&self, ui: &mut Ui) -> Option<Box<dyn PropertyValue>> {
+        let mut value = self.0;
+        let res = DragValue::new(&mut value).ui(ui);
+        if !res.changed() {
+            return None;
+        }
+        value = value.max(3);
+        if value != self.0 {
+            Some(Box::new(Self(value)))
+        } else {
+            None
+        }
     }
 }

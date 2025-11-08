@@ -8,8 +8,7 @@ use smoldata::raw::RawValue;
 
 use crate::{
     circuits::{
-        Circuit, CircuitBlueprint, CircuitImplData, CircuitInfo, CircuitPin, CircuitTransform,
-        RealizedPin, TransformSupport,
+        Circuit, CircuitBlueprint, CircuitImplData, CircuitInfo, CircuitPin, CircuitTransform, TransformSupport,
     }, containers::FixedVec, io::savestate, simulation::{SimulationCtx, SimulationStateData}, state::sim::UpdateTaskPool, vector::Vec2isize, Direction4, Direction4HalfArray
 };
 
@@ -293,15 +292,7 @@ impl Board {
             .pins
             .iter()
             .enumerate()
-            .map(|(id, pin)| RealizedPin {
-                desc: pin.clone(),
-                pin: Arc::new(CircuitPin {
-                    id,
-                    wire: RwLock::new(None),
-                    ty: pin.ty,
-                    circuit: circuit.clone(),
-                }),
-            })
+            .map(|(id, pin)| pin.clone().into_realized(circuit.clone(), id))
             .collect();
 
         let loaded_instance = overrides.instance.and_then(|i| {

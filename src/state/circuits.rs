@@ -69,8 +69,16 @@ impl BoardCircuitsState {
         state.downcast_mut().unwrap()
     }
     
-    pub fn drop_circuit(&mut self, id: usize) {
-        self.inner.remove(id);
+    pub fn drop_circuit(&mut self, id: usize, pin: Option<usize>) {
+        match pin {
+            Some(p) => if let Some(circuit) = self.inner.get_mut(id) {
+                if let Some(pin) = circuit.pins.get_mut(p) {
+                    *pin = WireState::None;
+                }
+            },
+            None => { self.inner.remove(id); },
+        }
+        
     }
     
     pub fn reset(&mut self) {

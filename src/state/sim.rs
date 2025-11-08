@@ -38,8 +38,8 @@ impl UpdateTaskPool {
         });
     }
 
-    pub fn add_drop_circuit_task(&mut self, id: usize) {
-        self.add(DropCircuitTask { id });
+    pub fn add_drop_circuit_task(&mut self, id: usize, pin_only: Option<usize>) {
+        self.add(DropCircuitTask { id, pin_only });
     }
 
     pub fn add(&mut self, task: impl Into<UpdateTask>) {
@@ -124,6 +124,7 @@ impl UpdateTaskPool {
 #[derive(Clone, Copy, Hash, PartialEq, Eq, SmolReadWrite)]
 pub struct DropCircuitTask {
     pub id: usize,
+    pub pin_only: Option<usize>,
 }
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq, SmolReadWrite)]

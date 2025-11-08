@@ -273,12 +273,10 @@ impl CircuitImpl for Constant {
 
     fn property_changed(
         &self,
-        _circuit: &Circuit,
-        _instance: Option<&mut Self::Instance>,
+        _circuit_instance: Option<(&Circuit, &mut Self::Instance)>,
         prop: &str,
         params: &mut super::PropertyChangedParams,
     ) {
-
         if prop == "value" {
             params.trigger_signal_update = true;
         }

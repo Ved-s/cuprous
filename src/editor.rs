@@ -43,6 +43,24 @@ pub struct PlaceCircuitResult {
     any_disconnected_pins: bool,
 }
 
+impl PlaceCircuitResult {
+    pub fn get_placement_error(&self) -> Option<CircuitPlaceError> {
+        if self.any_overlapping_quarters || !self.placed_any_quarters || self.any_disconnected_pins
+        {
+            let err = if self.any_disconnected_pins && self.placed_any_quarters {
+                CircuitPlaceError::DisconnectedPins
+            } else if self.any_overlapping_quarters {
+                CircuitPlaceError::PlaceOccupied
+            } else {
+                CircuitPlaceError::OccupiesNoTiles
+            };
+            Some(err)
+        } else {
+            None
+        }
+    }
+}
+
 impl BoardEditorTiles {
     pub fn wires(&self) -> &Chunks2D<CHUNK_SIZE, WireNode> {
         &self.wires
@@ -378,9 +396,9 @@ impl BoardEditorTiles {
         }
     }
 
-    pub fn remove_circuit(&mut self, id: usize, pos: Vec2isize, transformed_size: Vec2usize) {
-        for y in 0..transformed_size.y {
-            for x in 0..transformed_size.x {
+    pub fn remove_circuit(&mut self, id: usize, pos: Vec2isize, size: Vec2usize) {
+        for y in 0..size.y {
+            for x in 0..size.x {
                 let world_pos = pos + [x as isize, y as isize];
 
                 let node = self.circuits.get_mut(world_pos);
@@ -424,6 +442,110 @@ impl BoardEditorTiles {
 
             let start = pos + dir.inverted().into_dir_isize() * backward_len as isize;
             self.set_wire_distances(start, dir, total_len, set, false, update_wire_points);
+        }
+    }
+
+    pub fn validate_circuit_geometry(
+        &self,
+        id: usize,
+        pos: Vec2isize,
+        size: Vec2usize,
+        transform: CircuitTransform,
+        imp: &CircuitImplBox,
+    ) -> bool {
+        let orig_size = transform.transform_size(size, Some(TransformSupport::Automatic));
+
+        for y in 0..size.y {
+            for x in 0..size.x {
+                let offset = Vec2usize::new(x, y);
+                let cell = self.circuits.get(pos + offset.convert(|v| v as isize));
+
+                for q in QuarterPos::ALL {
+                    let qpos = transform.backtransform_pos(
+                        orig_size * 2,
+                        q.into_position() + offset * 2,
+                        Some(TransformSupport::Automatic),
+                    );
+
+                    let should_occupy = !imp.occupies_quarter(transform, qpos);
+                    let actually_occupies = cell
+                        .and_then(|c| c.quarters.get(q).as_ref())
+                        .is_some_and(|q| q.circuit.id == id);
+
+                    if should_occupy != actually_occupies {
+                        return false;
+                    }
+                }
+            }
+        }
+
+        true
+    }
+
+    pub fn replace_pins(&mut self, id: usize, pos: Vec2isize, size: Vec2usize, pins: &[RealizedPin]) -> Result<(), DisconnectedPinsError> {
+        for y in 0..size.y {
+            for x in 0..size.x {
+                let world_pos = pos + [x as isize, y as isize];
+
+                let node = self.circuits.get_mut(world_pos);
+                let Some(node) = node else {
+                    continue;
+                };
+
+                for quarter in QuarterPos::ALL {
+                    let quarter = node.quarters.get_mut(quarter);
+
+                    let Some(quarter) = quarter else {
+                        continue;
+                    };
+
+                    if quarter.circuit.id != id {
+                        continue;
+                    }
+
+                    quarter.pin = None;
+                }
+            }
+        }
+
+        let mut disconnected_pins = false;
+
+        for pin in pins {
+            if pin.desc.pos.x >= size.x || pin.desc.pos.y >= size.y {
+                continue;
+            }
+
+            let world_pos = pos + pin.desc.pos.convert(|v| v as isize);
+            let Some(node) = self.circuits.get_mut(world_pos) else {
+                disconnected_pins = true;
+                continue;
+            };
+
+            let mut placed_any = false;
+            for q in QuarterPos::ALL {
+                let quarter = node.quarters.get_mut(q);
+                let Some(quarter) = quarter else {
+                    continue;
+                };
+
+                if quarter.circuit.id != id {
+                    continue;
+                }
+
+                quarter.pin = Some(pin.pin.clone());
+                placed_any = true;
+            }
+
+            if !placed_any {
+                disconnected_pins = true;
+            }
+        }
+
+        if disconnected_pins {
+            Err(DisconnectedPinsError)
+        }
+        else {
+            Ok(())
         }
     }
 }
@@ -656,17 +778,12 @@ impl BoardEditor {
 
         drop(imp);
 
-        if res.any_overlapping_quarters || !res.placed_any_quarters || res.any_disconnected_pins {
+        let err = res.get_placement_error();
+
+        if let Some(err) = err {
             drop(pins);
             self.remove_circuit_internal(&circuit, tasks);
-
-            if res.any_disconnected_pins && res.placed_any_quarters {
-                return Err(CircuitPlaceError::DisconnectedPins);
-            } else if res.any_overlapping_quarters {
-                return Err(CircuitPlaceError::PlaceOccupied);
-            } else {
-                return Err(CircuitPlaceError::OccupiesNoTiles);
-            }
+            return Err(err);
         }
 
         for pin in pins.iter() {
@@ -676,13 +793,10 @@ impl BoardEditor {
                 self.set_wire_point(world_pos, None, true, tasks);
             }
 
-            if let Some(wire) = pin.pin.wire.read().as_ref().map(|w| w.id) {
+            if pin.pin.wire.read().is_some() {
                 match pin.pin.ty {
                     PinType::Inside => {
                         tasks.add_update_input_task(circuit.id, pin.pin.id, false);
-                    }
-                    PinType::Custom => {
-                        tasks.add_wire_task(wire, true);
                     }
                     PinType::Outside => {}
                 }
@@ -715,7 +829,6 @@ impl BoardEditor {
             let mut wire = pin.pin.wire.write();
             if let Some(wire) = wire.deref() {
                 match pin.pin.ty {
-                    PinType::Custom => todo!(),
                     PinType::Inside => {}
                     PinType::Outside => {
                         tasks.add_wire_task(wire.id, true);
@@ -731,12 +844,13 @@ impl BoardEditor {
             self.remove_needless_wire_point(world_pos, tasks);
         }
 
-        tasks.add_drop_circuit_task(circuit.id);
+        tasks.add_drop_circuit_task(circuit.id, None);
 
         self.board.free_circuit(circuit);
     }
 
-    fn set_wire_point(
+
+    pub fn set_wire_point(
         &mut self,
         pos: Vec2isize,
         new_wire: Option<Arc<Wire>>,
@@ -812,7 +926,7 @@ impl BoardEditor {
     }
 
     /// No update tasks are added if `unmerge: false`
-    fn remove_wire_point(
+    pub fn remove_wire_point(
         &mut self,
         pos: Vec2isize,
         unmerge: bool,
@@ -1043,7 +1157,7 @@ impl BoardEditor {
         }
     }
 
-    fn remove_needless_wire_point(&mut self, pos: Vec2isize, tasks: &mut UpdateTaskPool) {
+    pub fn remove_needless_wire_point(&mut self, pos: Vec2isize, tasks: &mut UpdateTaskPool) {
         let Some(node) = self.tiles.wires().get(pos) else {
             return;
         };
@@ -1200,6 +1314,8 @@ pub struct CircuitNodeQuarter {
     pub offset: Vec2usize,
     pub pin: Option<Arc<CircuitPin>>,
 }
+
+pub struct DisconnectedPinsError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CircuitPlaceError {

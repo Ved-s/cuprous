@@ -62,7 +62,7 @@ impl App {
     pub fn create(cc: &CreationContext, mut errors: Vec<ErrorStrings>) -> Self {
         let blueprints = vec![
             Arc::new(RwLock::new(crate::circuits::test::TestCircuit.into())),
-            Arc::new(RwLock::new(crate::circuits::button::Button.into())),
+            Arc::new(RwLock::new(crate::circuits::button::Button::default().into())),
             Arc::new(RwLock::new(crate::circuits::gates::Gate::and().into())),
             Arc::new(RwLock::new(crate::circuits::gates::Gate::nand().into())),
             Arc::new(RwLock::new(crate::circuits::gates::Gate::or().into())),
