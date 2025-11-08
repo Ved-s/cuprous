@@ -4,17 +4,17 @@ use std::{
     num::NonZeroU32,
     ops::{Deref, DerefMut, Not},
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc, Weak,
+        atomic::{AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
 
 use eframe::{
     egui::{
-        pos2, remap_clamp, vec2, Align, Color32, FontId, FontSelection, Key, PointerButton, Rect,
-        Response, RichText, Sense, Stroke, StrokeKind, TextStyle, TextWrapMode, Ui, UiBuilder,
-        WidgetText,
+        Align, Color32, FontId, FontSelection, Key, PointerButton, Rect, Response, RichText, Sense,
+        Stroke, StrokeKind, TextStyle, TextWrapMode, Ui, UiBuilder, WidgetText, pos2, remap_clamp,
+        vec2,
     },
     epaint::{CornerRadiusF32, PathStroke, TextShape},
 };
@@ -22,7 +22,9 @@ use num_traits::Zero;
 use parking_lot::{Mutex, RwLock};
 
 use crate::{
-    app::{App, LastEditorData, SelectedItem, COPY_PASTE_BOARD_ITEMS_PREFIX},
+    BIG_WIRE_POINT_WIDTH, CHUNK_SIZE, CustomPaintContext, Direction4Half, Direction8,
+    Direction8Array, PaintContext, Screen, WIRE_POINT_WIDTH, WIRE_WIDTH,
+    app::{App, COPY_PASTE_BOARD_ITEMS_PREFIX, LastEditorData, SelectedItem},
     board::CircuitCreationOverrides,
     circuits::{
         CircuitBlueprint, CircuitRenderPurpose, CircuitRenderingContext,
@@ -35,11 +37,9 @@ use crate::{
     pool::get_pooled,
     selection::{Selection, SelectionRenderer},
     simulation::SimulationStateData,
-    state::{sim::UpdateTaskPool, BoardState},
+    state::{BoardState, sim::UpdateTaskPool},
     vector::{Vec2f, Vec2isize, Vec2usize, Vector2},
     vertex_renderer::{ColoredLineBuffer, ColoredTriangleBuffer, ColoredVertexRenderer},
-    CustomPaintContext, Direction4Half, Direction8, Direction8Array, PaintContext, Screen,
-    BIG_WIRE_POINT_WIDTH, CHUNK_SIZE, WIRE_POINT_WIDTH, WIRE_WIDTH,
 };
 
 use super::{TabCreation, TabImpl};
@@ -912,7 +912,8 @@ impl BoardView {
 
     fn draw_wire_debug(&self, ctx: &PaintContext) {
         let editor = self.editor.read();
-        for (pos, lookaround, node) in editor.tiles
+        for (pos, lookaround, node) in editor
+            .tiles
             .wires()
             .iter_area_with_lookaround(ctx.tile_bounds_tl, ctx.tile_bounds_size)
         {
@@ -1040,7 +1041,8 @@ impl BoardView {
 
     fn draw_circuit_debug(&self, ctx: &PaintContext) {
         let editor = self.editor.read();
-        for (pos, node) in editor.tiles
+        for (pos, node) in editor
+            .tiles
             .circuits()
             .iter_area(ctx.tile_bounds_tl, ctx.tile_bounds_size)
         {
@@ -1289,10 +1291,11 @@ impl BoardView {
             self.wire_draw_start = None;
         }
 
-        if let Some(world_mouse_tile) = world_mouse_tile {
-            if active && interaction.clicked_by(PointerButton::Primary) {
-                self.editor.write().toggle_wire_point(world_mouse_tile);
-            }
+        if let Some(world_mouse_tile) = world_mouse_tile
+            && active
+            && interaction.clicked_by(PointerButton::Primary)
+        {
+            self.editor.write().toggle_wire_point(world_mouse_tile);
         }
     }
 
@@ -1507,23 +1510,23 @@ impl BoardView {
             app.selected_item = None;
         }
 
-        if ui.input(|input| input.key_pressed(Key::R)) {
-            if let Some(SelectedItem::Circuit(blueprint)) = &app.selected_item {
-                let mut blueprint = blueprint.write();
-                if blueprint.transform.support.rotation.is_some() {
-                    blueprint.transform.dir = blueprint.transform.dir.rotated_clockwise();
-                    blueprint.recalculate();
-                }
+        if ui.input(|input| input.key_pressed(Key::R))
+            && let Some(SelectedItem::Circuit(blueprint)) = &app.selected_item
+        {
+            let mut blueprint = blueprint.write();
+            if blueprint.transform.support.rotation.is_some() {
+                blueprint.transform.dir = blueprint.transform.dir.rotated_clockwise();
+                blueprint.recalculate();
             }
         }
 
-        if ui.input(|input| input.key_pressed(Key::F)) {
-            if let Some(SelectedItem::Circuit(blueprint)) = &app.selected_item {
-                let mut blueprint = blueprint.write();
-                if blueprint.transform.support.flip.is_some() {
-                    blueprint.transform.flip = !blueprint.transform.flip;
-                    blueprint.recalculate();
-                }
+        if ui.input(|input| input.key_pressed(Key::F))
+            && let Some(SelectedItem::Circuit(blueprint)) = &app.selected_item
+        {
+            let mut blueprint = blueprint.write();
+            if blueprint.transform.support.flip.is_some() {
+                blueprint.transform.flip = !blueprint.transform.flip;
+                blueprint.recalculate();
             }
         }
 

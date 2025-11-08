@@ -5,9 +5,11 @@ use std::{
     sync::Arc,
 };
 
-use eframe::egui::{remap_clamp, vec2, Rect};
+use eframe::egui::{Rect, remap_clamp, vec2};
 
 use crate::{
+    BIG_WIRE_POINT_WIDTH, CHUNK_SIZE, Direction4Half, Direction4HalfArray, Direction8,
+    Direction8Array, WIRE_POINT_WIDTH, WIRE_WIDTH,
     board::{Board, CircuitCreationOverrides, Wire, WirePoint},
     circuits::{
         Circuit, CircuitBlueprint, CircuitImplBox, CircuitPin, CircuitTransform, PinType,
@@ -18,8 +20,6 @@ use crate::{
     selection::SelectionImpl,
     state::sim::UpdateTaskPool,
     vector::{Vec2f, Vec2isize, Vec2usize},
-    Direction4Half, Direction4HalfArray, Direction8, Direction8Array, BIG_WIRE_POINT_WIDTH,
-    CHUNK_SIZE, WIRE_POINT_WIDTH, WIRE_WIDTH,
 };
 
 #[derive(Default)]
@@ -243,18 +243,17 @@ impl BoardEditorTiles {
                 continue;
             }
 
-            if update_wire_points {
-                if let Some(wire) = &node.wire {
-                    if let Some(dir) = back_dir.into_half_option() {
-                        *wire
-                            .points
-                            .write()
-                            .entry(pos)
-                            .or_default()
-                            .directions
-                            .get_mut(dir) = node.directions.get(back_dir).is_some();
-                    }
-                }
+            if update_wire_points
+                && let Some(wire) = &node.wire
+                && let Some(dir) = back_dir.into_half_option()
+            {
+                *wire
+                    .points
+                    .write()
+                    .entry(pos)
+                    .or_default()
+                    .directions
+                    .get_mut(dir) = node.directions.get(back_dir).is_some();
             }
         }
     }
@@ -316,10 +315,10 @@ impl BoardEditorTiles {
         }
 
         let wire_node = self.wires.get(pos);
-        if let Some(wire_node) = wire_node {
-            if wire_node.directions.values().any(|v| v.is_some()) {
-                return true;
-            }
+        if let Some(wire_node) = wire_node
+            && wire_node.directions.values().any(|v| v.is_some())
+        {
+            return true;
         }
 
         false
@@ -482,7 +481,13 @@ impl BoardEditorTiles {
         true
     }
 
-    pub fn replace_pins(&mut self, id: usize, pos: Vec2isize, size: Vec2usize, pins: &[RealizedPin]) -> Result<(), DisconnectedPinsError> {
+    pub fn replace_pins(
+        &mut self,
+        id: usize,
+        pos: Vec2isize,
+        size: Vec2usize,
+        pins: &[RealizedPin],
+    ) -> Result<(), DisconnectedPinsError> {
         for y in 0..size.y {
             for x in 0..size.x {
                 let world_pos = pos + [x as isize, y as isize];
@@ -543,8 +548,7 @@ impl BoardEditorTiles {
 
         if disconnected_pins {
             Err(DisconnectedPinsError)
-        }
-        else {
+        } else {
             Ok(())
         }
     }
@@ -849,7 +853,6 @@ impl BoardEditor {
         self.board.free_circuit(circuit);
     }
 
-
     pub fn set_wire_point(
         &mut self,
         pos: Vec2isize,
@@ -983,10 +986,8 @@ impl BoardEditor {
             }
         }
 
-        if unmerge {
-            if let Some(wire) = wire.clone() {
-                self.unmerge_wire(wire, tasks);
-            }
+        if unmerge && let Some(wire) = wire.clone() {
+            self.unmerge_wire(wire, tasks);
         }
 
         wire

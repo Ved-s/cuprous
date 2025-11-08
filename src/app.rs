@@ -1,13 +1,25 @@
-use std::{collections::{HashMap, HashSet}, ops::Not, path::PathBuf, sync::{Arc, Weak}};
+use std::{
+    collections::{HashMap, HashSet},
+    ops::Not,
+    path::PathBuf,
+    sync::{Arc, Weak},
+};
 
-use eframe::{egui, CreationContext};
+use eframe::{CreationContext, egui};
 use egui_dock::{DockArea, DockState, NodeIndex};
 use eyre::eyre;
 use parking_lot::{Mutex, RwLock};
 use smoldata::raw::RawValue;
 
 use crate::{
-    circuits::CircuitBlueprint, editor::BoardEditor, io::copystate, simulation::{SimulationCtx, SimulationStateData}, state::wires::WireState, tabs::{SafeTabType, Tab, TabSerde, TabType, TabViewer}, vector::{Vec2isize, Vec2usize}, Style
+    Style,
+    circuits::CircuitBlueprint,
+    editor::BoardEditor,
+    io::copystate,
+    simulation::{SimulationCtx, SimulationStateData},
+    state::wires::WireState,
+    tabs::{SafeTabType, Tab, TabSerde, TabType, TabViewer},
+    vector::{Vec2isize, Vec2usize},
 };
 
 pub const APP_NAME: &str = "cuprous-dev";
@@ -62,7 +74,9 @@ impl App {
     pub fn create(cc: &CreationContext, mut errors: Vec<ErrorStrings>) -> Self {
         let blueprints = vec![
             Arc::new(RwLock::new(crate::circuits::test::TestCircuit.into())),
-            Arc::new(RwLock::new(crate::circuits::button::Button::default().into())),
+            Arc::new(RwLock::new(
+                crate::circuits::button::Button::default().into(),
+            )),
             Arc::new(RwLock::new(crate::circuits::gates::Gate::and().into())),
             Arc::new(RwLock::new(crate::circuits::gates::Gate::nand().into())),
             Arc::new(RwLock::new(crate::circuits::gates::Gate::or().into())),
@@ -195,16 +209,16 @@ impl App {
                     blueprint.transform.dir = c.dir;
                     blueprint.transform.flip = c.flip;
 
-                    if let Some(config) = c.config {
-                        if let Err(e) = blueprint.imp.load_config(&config) {
-                            self.errors.push(
-                                e.wrap_err(format!(
-                                    "loading circuit config for \"{}\" ({})",
-                                    blueprint.display_name, blueprint.id
-                                ))
-                                .into(),
-                            );
-                        }
+                    if let Some(config) = c.config
+                        && let Err(e) = blueprint.imp.load_config(&config)
+                    {
+                        self.errors.push(
+                            e.wrap_err(format!(
+                                "loading circuit config for \"{}\" ({})",
+                                blueprint.display_name, blueprint.id
+                            ))
+                            .into(),
+                        );
                     }
 
                     blueprint.recalculate();
@@ -253,7 +267,7 @@ impl App {
             self.selected_item = Some(SelectedItem::Paste(paste));
         }
     }
-    
+
     pub fn get_board_editor(&self, state: &SimulationStateData) -> Arc<RwLock<BoardEditor>> {
         let mut editors = self.editors.lock();
         editors.retain(|_, v| v.upgrade().is_some());

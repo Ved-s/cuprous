@@ -10,6 +10,7 @@ use parking_lot::{Mutex, RwLock};
 use smoldata::raw::RawValue;
 
 use crate::{
+    Direction4, Direction8, PaintContext,
     board::{Board, Wire},
     circuits::props::{PropertyInfo, PropertyValue},
     io::savestate,
@@ -17,7 +18,6 @@ use crate::{
     state::{circuits::BoardCircuitsState, sim::UpdateTaskPool, wires::WireState},
     str::ArcStaticStr,
     vector::{Vec2f, Vec2isize, Vec2usize},
-    Direction4, Direction8, PaintContext,
 };
 
 pub mod buffer;
@@ -206,10 +206,8 @@ impl CircuitPin {
         state: WireState,
     ) {
         let changed = board_state.set_pin(self.circuit.id, self.id, state);
-        if changed {
-            if let Some(wire) = self.wire.read().as_ref().map(|w| w.id) {
-                tasks.add_wire_task(wire, false);
-            }
+        if changed && let Some(wire) = self.wire.read().as_ref().map(|w| w.id) {
+            tasks.add_wire_task(wire, false);
         }
     }
 

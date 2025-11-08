@@ -60,7 +60,9 @@ impl BoardCircuitsState {
     {
         let existing = self.inner.get_or_create_mut(id, Default::default);
 
-        let state = existing.internal.get_or_insert_with(|| Box::new(<S as Default>::default()));
+        let state = existing
+            .internal
+            .get_or_insert_with(|| Box::new(<S as Default>::default()));
 
         if state.downcast_ref::<S>().is_none() {
             *state = Box::new(<S as Default>::default());
@@ -68,19 +70,22 @@ impl BoardCircuitsState {
 
         state.downcast_mut().unwrap()
     }
-    
+
     pub fn drop_circuit(&mut self, id: usize, pin: Option<usize>) {
         match pin {
-            Some(p) => if let Some(circuit) = self.inner.get_mut(id) {
-                if let Some(pin) = circuit.pins.get_mut(p) {
+            Some(p) => {
+                if let Some(circuit) = self.inner.get_mut(id)
+                    && let Some(pin) = circuit.pins.get_mut(p)
+                {
                     *pin = WireState::None;
                 }
-            },
-            None => { self.inner.remove(id); },
+            }
+            None => {
+                self.inner.remove(id);
+            }
         }
-        
     }
-    
+
     pub fn reset(&mut self) {
         self.inner.clear();
     }

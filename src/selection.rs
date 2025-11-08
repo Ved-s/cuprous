@@ -50,8 +50,7 @@ impl<I: SelectionImpl> Selection<I> {
             && self.selection_start.is_none()
             && interaction.hovered()
             && ui.input(|input| input.pointer.primary_pressed())
-        {
-            if let Some(hover) = interaction.hover_pos() {
+            && let Some(hover) = interaction.hover_pos() {
                 self.selection_start = Some(screen.screen_to_world(hover));
                 self.exclude = false;
                 self.change.clear();
@@ -61,7 +60,6 @@ impl<I: SelectionImpl> Selection<I> {
                 }
                 selection_changed = true;
             }
-        }
 
         let Some(start) = self.selection_start else {
             return selection_changed;

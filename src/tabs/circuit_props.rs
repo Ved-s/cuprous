@@ -11,7 +11,7 @@ use parking_lot::{RwLock, RwLockWriteGuard};
 use crate::{
     app::App,
     circuits::{
-        props::PropertyInfo, CircuitImplData, PinType, PropertyChangedParams, TransformSupport,
+        CircuitImplData, PinType, PropertyChangedParams, TransformSupport, props::PropertyInfo,
     },
     editor::BoardEditor,
     pool::get_pooled,
@@ -121,7 +121,7 @@ impl CircuitProps {
                     disconnected_wires.insert(wire.id);
                 }
 
-                let realized_pins = Vec::from(new_pins)
+                let realized_pins = new_pins
                     .into_iter()
                     .enumerate()
                     .map(|(id, pin)| pin.into_realized(circuit.clone(), id))
@@ -145,15 +145,15 @@ impl CircuitProps {
                 if let Some(err) = res.get_placement_error() {
                     fail = true;
                 }
-            } else if !pins_eq {
-                if let Err(err) = editor.tiles.replace_pins(
+            } else if !pins_eq
+                && let Err(err) = editor.tiles.replace_pins(
                     id,
                     circuit_info.pos,
                     circuit_info.size,
                     circuit_pins.deref(),
-                ) {
-                    fail = true;
-                }
+                )
+            {
+                fail = true;
             };
         }
 
@@ -176,7 +176,10 @@ impl CircuitProps {
             for (&id, pins) in old_circuit_pins.iter_mut() {
                 if !changed_geometry_circuits.contains_key(&id) {
                     let info = circuits.get(id).unwrap().info.read();
-                    editor.tiles.replace_pins(id, info.pos, info.size, pins).ok();
+                    editor
+                        .tiles
+                        .replace_pins(id, info.pos, info.size, pins)
+                        .ok();
                 }
 
                 *circuits.get(id).unwrap().pins.write() = std::mem::take(pins);
@@ -271,11 +274,12 @@ impl CircuitProps {
         board.add_tasks(&tasks);
 
         for &id in circuit_locks.keys() {
-
             let circuit = circuits.get(id).unwrap();
             let mut circuit_info = circuit.info.write();
 
-            circuit_info.render_size = circuit_info.transform.transform_size(circuit_info.size, Some(TransformSupport::Automatic));
+            circuit_info.render_size = circuit_info
+                .transform
+                .transform_size(circuit_info.size, Some(TransformSupport::Automatic));
         }
 
         Ok(())
@@ -470,7 +474,10 @@ impl TabImpl for CircuitProps {
                                     let mut params = PropertyChangedParams::default();
 
                                     circuit.imp.property_changed(
-                                        Some((board_circuits.get(circuit_id).unwrap(), &mut circuit.instance)),
+                                        Some((
+                                            board_circuits.get(circuit_id).unwrap(),
+                                            &mut circuit.instance,
+                                        )),
                                         id,
                                         &mut params,
                                     );
@@ -506,7 +513,6 @@ impl TabImpl for CircuitProps {
                             );
                         });
                     }
-
                 });
                 ui.end_row();
             }

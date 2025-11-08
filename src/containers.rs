@@ -155,10 +155,10 @@ impl<T> FixedVec<T> {
         if pos == self.inner.len() - 1 {
             self.inner.remove(pos);
             self.strip_inner();
-            if let Some(v) = self.first_free {
-                if v >= self.inner.len() {
-                    self.first_free = None;
-                }
+            if let Some(v) = self.first_free
+                && v >= self.inner.len()
+            {
+                self.first_free = None;
             }
         }
 
@@ -206,10 +206,10 @@ impl<T> FixedVec<T> {
     }
 
     fn update_first_free_set(&mut self, into: usize) {
-        if let Some(ff) = self.first_free {
-            if ff == into {
-                self.first_free = (ff + 1..self.inner.len()).find(|i| self.inner[*i].is_none());
-            }
+        if let Some(ff) = self.first_free
+            && ff == into
+        {
+            self.first_free = (ff + 1..self.inner.len()).find(|i| self.inner[*i].is_none());
         }
     }
 
