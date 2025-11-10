@@ -4,23 +4,30 @@ use std::{
     marker::PhantomData,
 };
 
-use eframe::egui::{CornerRadius, Rect, Response, Stroke, StrokeKind, Ui};
+use eframe::egui::{CornerRadius, Id, Rect, Response, Stroke, StrokeKind, Ui};
 use glow::{Context, HasContext, PixelUnpackData};
 
 use crate::{
+    CustomPaintContext, PaintContext, Screen,
     vector::Vec2f,
     vertex_renderer::{
         FullscreenQuadVertexBuffer, Shaders, SimpleVertex, TriangleBuffer, UvVertex, VertexRenderer,
     },
-    CustomPaintContext, PaintContext, Screen,
 };
+
+struct SelectionDragState {
+    start: Vec2f,
+    interaction_id: Id,
+    seen_this_frame: bool,
+}
 
 pub struct Selection<I: SelectionImpl> {
     selection: HashSet<I::Item>,
     change: HashSet<I::Item>,
     exclude: bool,
 
-    selection_start: Option<Vec2f>,
+    update_counter: usize,
+    drag_state: Option<SelectionDragState>,
 
     _phantom: PhantomData<I>,
 }
@@ -31,12 +38,12 @@ impl<I: SelectionImpl> Selection<I> {
             selection: HashSet::new(),
             change: HashSet::new(),
             exclude: false,
-            selection_start: None,
+            update_counter: 0,
+            drag_state: None,
             _phantom: PhantomData,
         }
     }
 
-    /// returns true if something cchanged
     pub fn update(
         &mut self,
         pass: &I::Pass,
@@ -44,26 +51,35 @@ impl<I: SelectionImpl> Selection<I> {
         ui: &Ui,
         screen: Screen,
         active: bool,
-    ) -> bool {
-        let mut selection_changed = false;
+    ) {
+        if let Some(drag) = &self.drag_state && interaction.id != drag.interaction_id {
+            return;
+        }
+
         if active
-            && self.selection_start.is_none()
+            && self.drag_state.is_none()
             && interaction.hovered()
             && ui.input(|input| input.pointer.primary_pressed())
-            && let Some(hover) = interaction.hover_pos() {
-                self.selection_start = Some(screen.screen_to_world(hover));
-                self.exclude = false;
-                self.change.clear();
+            && let Some(hover) = interaction.hover_pos()
+        {
+            self.drag_state = Some(SelectionDragState {
+                start: screen.screen_to_world(hover),
+                interaction_id: interaction.id,
+                seen_this_frame: true,
+            });
+            self.exclude = false;
+            self.change.clear();
 
-                if !ui.input(|input| input.modifiers.ctrl || input.modifiers.shift) {
-                    self.selection.clear();
-                }
-                selection_changed = true;
+            if !ui.input(|input| input.modifiers.ctrl || input.modifiers.shift) {
+                self.selection.clear();
             }
+            self.update_counter = self.update_counter.wrapping_add(1);
+        }
 
-        let Some(start) = self.selection_start else {
-            return selection_changed;
+        let Some(drag) = &mut self.drag_state else {
+            return;
         };
+        drag.seen_this_frame = true;
 
         self.exclude = ui.input(|input| input.modifiers.ctrl);
 
@@ -80,34 +96,45 @@ impl<I: SelectionImpl> Selection<I> {
             .flatten();
 
         let Some(interaction) = interaction else {
-            self.selection_start = None;
+            self.stop_drag();
 
-            match self.exclude {
-                true => {
-                    self.selection.retain(|i| !self.change.contains(i));
-                    self.change.clear();
-                }
-                false => {
-                    self.selection.extend(self.change.drain());
-                }
-            };
-
-            return selection_changed;
+            return;
         };
 
         let changed = ui.input(|input| {
             input.pointer.primary_pressed() || input.pointer.delta().length_sq() > 0.01
         });
         if !changed {
-            return selection_changed;
+            return;
         }
 
         let b = screen.screen_to_world(interaction);
-        let rect = Rect::from_two_pos(start.into(), b.into());
+        let rect = Rect::from_two_pos(drag.start.into(), b.into());
 
         self.change.clear();
         I::include_area(pass, &mut self.change, rect);
-        true
+
+        self.update_counter = self.update_counter.wrapping_add(1);
+    }
+
+    fn stop_drag(&mut self) {
+        self.drag_state = None;
+    
+        match self.exclude {
+            true => {
+                self.selection.retain(|i| !self.change.contains(i));
+                self.change.clear();
+            }
+            false => {
+                self.selection.extend(self.change.drain());
+            }
+        };
+    }
+    
+    pub fn end_of_frame(&mut self) {
+        if let Some(drag) = &mut self.drag_state && !drag.seen_this_frame {
+            self.stop_drag();
+        }
     }
 
     pub fn contains(&self, item: &I::Item) -> bool {
@@ -123,16 +150,20 @@ impl<I: SelectionImpl> Selection<I> {
         SelectionIterator::new(&self.selection, &self.change, self.exclude)
     }
 
-    pub fn draw_overlay(&self, ctx: &PaintContext) {
-        let Some(a) = self.selection_start else {
+    pub fn draw_overlay(&self, interaction: &Response, ctx: &PaintContext) {
+        let Some(drag) = &self.drag_state else {
             return;
         };
+
+        if drag.interaction_id != interaction.id {
+            return;
+        }
 
         let Some(b) = ctx.ui.input(|input| input.pointer.latest_pos()) else {
             return;
         };
 
-        let a = ctx.screen.world_to_screen(a).round();
+        let a = ctx.screen.world_to_screen(drag.start).round();
         let b = b.round();
         let rect = Rect::from_two_pos(a.into(), b);
 
@@ -141,7 +172,7 @@ impl<I: SelectionImpl> Selection<I> {
             CornerRadius::ZERO,
             ctx.style.selection_fill,
             Stroke::new(2.0, ctx.style.selection_border),
-            StrokeKind::Middle
+            StrokeKind::Middle,
         );
     }
 
@@ -149,7 +180,7 @@ impl<I: SelectionImpl> Selection<I> {
         self.selection.clear();
         self.change.clear();
     }
-    
+
     pub fn is_empty(&self) -> bool {
         if self.selection.is_empty() && self.change.is_empty() {
             return true;
@@ -159,6 +190,10 @@ impl<I: SelectionImpl> Selection<I> {
             true => self.selection == self.change,
             false => false,
         }
+    }
+    
+    pub fn update_counter(&self) -> usize {
+        self.update_counter
     }
 }
 
@@ -286,7 +321,7 @@ impl SelectionRenderer {
                     0,
                     glow::RG,
                     glow::UNSIGNED_BYTE,
-                    PixelUnpackData::Slice(None)
+                    PixelUnpackData::Slice(None),
                 );
                 gl.tex_parameter_i32(
                     glow::TEXTURE_2D,

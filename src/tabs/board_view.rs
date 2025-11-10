@@ -1,13 +1,10 @@
 use std::{
-    collections::{BTreeMap, HashSet, VecDeque},
+    collections::{BTreeMap, HashSet},
     f32::consts::{PI, SQRT_2, TAU},
     num::NonZeroU32,
     ops::{Deref, DerefMut, Not},
-    sync::{
-        Arc, Weak,
-        atomic::{AtomicUsize, Ordering},
-    },
-    time::{Duration, Instant},
+    sync::{Arc, Weak, atomic::Ordering},
+    time::Duration,
 };
 
 use eframe::{
@@ -24,18 +21,18 @@ use parking_lot::{Mutex, RwLock};
 use crate::{
     BIG_WIRE_POINT_WIDTH, CHUNK_SIZE, CustomPaintContext, Direction4Half, Direction8,
     Direction8Array, PaintContext, Screen, WIRE_POINT_WIDTH, WIRE_WIDTH,
-    app::{App, COPY_PASTE_BOARD_ITEMS_PREFIX, LastEditorData, SelectedItem},
-    board::CircuitCreationOverrides,
+    app::{App, COPY_PASTE_BOARD_ITEMS_PREFIX, SelectedItem},
+    board::{Board, CircuitCreationOverrides},
     circuits::{
         CircuitBlueprint, CircuitRenderPurpose, CircuitRenderingContext,
         CircuitSelectionRenderingContext, TransformSupport, UntypedCircuitCtx,
     },
     drawing::{self, rotated_rect},
-    editor::{BoardEditor, BoardSelectionImpl, QuarterPos, SelectedBoardItem},
+    editor::{BoardEditor, BoardSelection, InWorldError, QuarterPos, SelectedBoardItem},
     ext::IteratorProduct,
     io::copystate,
     pool::get_pooled,
-    selection::{Selection, SelectionRenderer},
+    selection::SelectionRenderer,
     simulation::SimulationStateData,
     state::{BoardState, sim::UpdateTaskPool},
     vector::{Vec2f, Vec2isize, Vec2usize, Vector2},
@@ -44,22 +41,15 @@ use crate::{
 
 use super::{TabCreation, TabImpl};
 
-const INWORLD_ERROR_FADE_TIME: Duration = Duration::from_millis(400);
-
-static BOARDVIEW_NEXT_ID: AtomicUsize = AtomicUsize::new(0);
-
-pub struct InWorldError {
-    world_rect: Rect,
-    deadline: Instant,
-    text: String,
-}
+const INWORLD_ERROR_FADE_TIME: Duration = Duration::from_millis(500);
+const PLACEMENT_ERROR_DURATION: Duration = Duration::from_secs(5);
 
 pub struct BoardView {
-    id: usize,
     pan_zoom: PanAndZoom,
 
     wire_draw_start: Option<Vec2isize>,
 
+    board: Arc<Board>,
     editor: Arc<RwLock<BoardEditor>>,
     state: Arc<SimulationStateData>,
 
@@ -71,19 +61,16 @@ pub struct BoardView {
     wire_part_buffer: Arc<Mutex<ColoredTriangleBuffer>>,
     pin_buffer: Arc<Mutex<ColoredTriangleBuffer>>,
 
-    selection: Selection<BoardSelectionImpl>,
     selection_renderer: Arc<Mutex<SelectionRenderer>>,
 
     circuits_drawn: HashSet<usize>,
     wire_colors: BTreeMap<usize, Color32>,
 
-    in_world_errors: VecDeque<InWorldError>,
-
     camera_move_velocity: Vec2f,
 }
 
 impl TabCreation for BoardView {
-    fn new(app: &App) -> Self {
+    fn new(app: &mut App) -> Self {
         let board = app
             .sim
             .boards()
@@ -101,13 +88,13 @@ impl TabCreation for BoardView {
             .next()
             .expect("at least one state");
 
-        let editor = app.get_board_editor(&state);
+        let editor = app.get_board_editor(&board);
 
         Self {
-            id: BOARDVIEW_NEXT_ID.fetch_add(1, Ordering::Relaxed),
             pan_zoom: Default::default(),
             wire_draw_start: None,
 
+            board,
             editor,
             state,
 
@@ -119,12 +106,10 @@ impl TabCreation for BoardView {
             wire_part_buffer: Default::default(),
             pin_buffer: Default::default(),
 
-            selection: Selection::new(),
             selection_renderer: Arc::new(Mutex::new(SelectionRenderer::new(&app.gl))),
 
             circuits_drawn: HashSet::new(),
             wire_colors: BTreeMap::new(),
-            in_world_errors: Default::default(),
 
             camera_move_velocity: Vec2f::zero(),
         }
@@ -233,46 +218,26 @@ impl TabImpl for BoardView {
             );
         }
 
-        let mut selection_changed = self.selection.update(
-            self.editor.read().deref(),
-            &interaction,
-            ui,
-            screen,
-            matches!(app.selected_item, Some(SelectedItem::Selection)),
-        );
+        app.editor_shared
+            .entry(self.board.uid())
+            .or_default()
+            .selection
+            .update(
+                self.editor.read().deref(),
+                &interaction,
+                ui,
+                screen,
+                matches!(app.selected_item, Some(SelectedItem::Selection)),
+            );
 
         if !ui.ctx().wants_keyboard_input() {
-            self.handle_keyboard(ui, app, &mut selection_changed);
+            self.handle_keyboard(ui, app);
         }
 
         let interacted =
             interaction.clicked() || interaction.secondary_clicked() || interaction.drag_started();
-        if selection_changed
-            || interacted
-                && app
-                    .last_active_editor
-                    .as_ref()
-                    .is_none_or(|e| e.boardview_id != self.id)
-        {
-            let mut old_data = app.last_active_editor.take();
-            let mut selected_circuits = old_data
-                .as_mut()
-                .map(|d| std::mem::take(&mut d.selected_circuits))
-                .unwrap_or_default();
-            selected_circuits.clear();
-            selected_circuits.extend(self.selection.iter().filter_map(|i| match i {
-                SelectedBoardItem::Circuit { id, .. } => Some(id),
-                _ => None,
-            }));
-            app.last_active_editor = Some(LastEditorData {
-                editor: Arc::downgrade(&self.editor),
-                boardview_id: self.id,
-                selected_circuits,
-                selection_update_counter: old_data
-                    .as_ref()
-                    .map(|d| d.selection_update_counter + 1)
-                    .unwrap_or(0),
-            });
+        if interacted {
+            app.last_active_editor = Some(Arc::downgrade(&self.editor));
         }
 
         let ctx = PaintContext::new(ui, screen, app.gl.clone(), app.style.clone());
@@ -282,10 +247,16 @@ impl TabImpl for BoardView {
         self.selection_renderer.lock().clear_draw();
 
         {
+            let selection = &app
+                .editor_shared
+                .entry(self.board.uid())
+                .or_default()
+                .selection;
+
             let state = self.state.state().clone();
             let mut state = state.upgradable_read();
 
-            self.prepare_wire_draw(&state, &ctx);
+            self.prepare_wire_draw(selection, &state, &ctx);
             self.draw_selection(&ctx);
 
             self.draw_wires(&ctx);
@@ -293,7 +264,7 @@ impl TabImpl for BoardView {
             self.draw_pins(&ctx);
 
             state.with_upgraded(|state| {
-                self.draw_circuits(state, &ctx);
+                self.draw_circuits(selection, state, &ctx);
             })
         }
 
@@ -305,7 +276,11 @@ impl TabImpl for BoardView {
             self.draw_circuit_debug(&ctx);
         }
 
-        self.selection.draw_overlay(&ctx);
+        app.editor_shared
+            .entry(self.board.uid())
+            .or_default()
+            .selection
+            .draw_overlay(&interaction, &ctx);
 
         self.handle_wire_interactions(
             &ctx,
@@ -313,13 +288,26 @@ impl TabImpl for BoardView {
             matches!(app.selected_item, Some(SelectedItem::Wires)),
         );
 
+        #[allow(clippy::collapsible_if)]
         if let Some(SelectedItem::Circuit(c)) = app.selected_item.as_ref() {
-            self.handle_circuit_placement(&interaction, &ctx, c.read().deref());
+            if let Err(e) = self.handle_circuit_placement(&interaction, &ctx, c.read().deref()) {
+                app.editor_shared
+                    .entry(self.board.uid())
+                    .or_default()
+                    .in_world_errors
+                    .push(e);
+            }
         }
 
         self.handle_paste(&interaction, &ctx, app);
 
-        self.draw_in_world_errors(ui, &ctx);
+        let in_world_errors = &app
+            .editor_shared
+            .entry(self.board.uid())
+            .or_default()
+            .in_world_errors;
+
+        self.draw_in_world_errors(ui, &ctx, in_world_errors);
 
         let mut overlay_ui = ui.new_child(UiBuilder::new().max_rect(screen_rect));
 
@@ -444,7 +432,12 @@ impl BoardView {
         });
     }
 
-    fn prepare_wire_draw(&mut self, state: &BoardState, ctx: &PaintContext) {
+    fn prepare_wire_draw(
+        &mut self,
+        selection: &BoardSelection,
+        state: &BoardState,
+        ctx: &PaintContext,
+    ) {
         fn node_has_135_deg_turns(dirs: &Direction8Array<Option<NonZeroU32>>) -> bool {
             for (dir, dist) in dirs.iter() {
                 if dist.is_none() {
@@ -589,10 +582,7 @@ impl BoardView {
                 let len = if dir.is_diagonal() { len * SQRT_2 } else { len };
                 let posf = ctx.screen.world_to_screen(pos.convert(|v| v as f32 + 0.5));
 
-                if self
-                    .selection
-                    .contains(&SelectedBoardItem::WirePart { pos: part_pos, dir })
-                {
+                if selection.contains(&SelectedBoardItem::WirePart { pos: part_pos, dir }) {
                     let wire_width = WIRE_WIDTH + 0.1;
 
                     let pos1 = posf
@@ -655,10 +645,7 @@ impl BoardView {
                         }
                     }
 
-                    if self
-                        .selection
-                        .contains(&SelectedBoardItem::WirePoint { pos })
-                    {
+                    if selection.contains(&SelectedBoardItem::WirePoint { pos }) {
                         for (dir, dist) in node.directions.iter() {
                             let Some(dist) = dist.as_ref() else {
                                 continue;
@@ -671,7 +658,7 @@ impl BoardView {
                                 pos
                             };
 
-                            if !self.selection.contains(&SelectedBoardItem::WirePart {
+                            if !selection.contains(&SelectedBoardItem::WirePart {
                                 pos: target,
                                 dir: part_dir,
                             }) {
@@ -726,10 +713,7 @@ impl BoardView {
                     );
                 }
 
-                if self
-                    .selection
-                    .contains(&SelectedBoardItem::WirePoint { pos })
-                {
+                if selection.contains(&SelectedBoardItem::WirePoint { pos }) {
                     let point_size = point_size + 0.1 * ctx.screen.scale;
                     if straight {
                         selecion_renderer.border_buffer.add_centered_rect(
@@ -776,7 +760,12 @@ impl BoardView {
         });
     }
 
-    fn draw_circuits(&mut self, state: &mut BoardState, ctx: &PaintContext) {
+    fn draw_circuits(
+        &mut self,
+        selection: &BoardSelection,
+        state: &mut BoardState,
+        ctx: &PaintContext,
+    ) {
         self.circuits_drawn.clear();
 
         let editor = self.editor.read();
@@ -818,7 +807,7 @@ impl BoardView {
 
                 let circuit_pos = circuit.info.read().pos;
 
-                let selected = self.selection.contains(&SelectedBoardItem::Circuit {
+                let selected = selection.contains(&SelectedBoardItem::Circuit {
                     id: circuit.id,
                     pos: circuit_pos,
                 });
@@ -1370,14 +1359,14 @@ impl BoardView {
         interaction: &Response,
         ctx: &PaintContext,
         blueprint: &CircuitBlueprint,
-    ) {
+    ) -> Result<(), InWorldError> {
         let world_mouse = ctx
             .ui
             .input(|input| input.pointer.latest_pos())
             .map(|p| ctx.screen.screen_to_world(p));
 
         let Some(world_mouse) = world_mouse else {
-            return;
+            return Ok(());
         };
 
         let world_place_pos = world_mouse - blueprint.transformed_size.convert(|v| v as f32 / 2.0);
@@ -1461,17 +1450,25 @@ impl BoardView {
                     blueprint.transformed_size.convert(|v| v as f32).into(),
                 );
 
-                self.in_world_errors.push_front(InWorldError {
-                    world_rect: rect,
-                    deadline: Instant::now() + Duration::from_secs(2),
-                    text: e.to_string(),
-                });
+                return Err(InWorldError::new(
+                    rect,
+                    PLACEMENT_ERROR_DURATION,
+                    e.to_string(),
+                ));
             }
         }
+
+        Ok(())
     }
 
-    fn handle_keyboard(&mut self, ui: &mut Ui, app: &mut App, selection_changed: &mut bool) {
+    fn handle_keyboard(&mut self, ui: &mut Ui, app: &mut App) {
         // TODO: adjustable
+
+        let selection = &mut app
+            .editor_shared
+            .entry(self.board.uid())
+            .or_default()
+            .selection;
 
         let speedup = 4.0;
 
@@ -1547,8 +1544,8 @@ impl BoardView {
             }
         });
 
-        if (cut | copy) && !self.selection.is_empty() {
-            let copy = self.copy_selection();
+        if (cut | copy) && !selection.is_empty() {
+            let copy = self.copy_selection(selection);
 
             let buf = Vec::from(COPY_PASTE_BOARD_ITEMS_PREFIX.as_bytes());
             let base64 = base64::write::EncoderWriter::new(
@@ -1579,10 +1576,10 @@ impl BoardView {
         }
 
         if (cut | ui.input(|input| input.key_pressed(Key::Delete)))
-            && self.selection.iter().next().is_some()
+            && selection.iter().next().is_some()
         {
             let mut editor = self.editor.write();
-            for item in self.selection.iter() {
+            for item in selection.iter() {
                 match item {
                     SelectedBoardItem::WirePart { pos, dir } => {
                         let dir = Direction8::from(*dir);
@@ -1608,12 +1605,11 @@ impl BoardView {
                     }
                 }
             }
-            self.selection.clear();
-            *selection_changed = true;
+            selection.clear();
         }
     }
 
-    fn copy_selection(&self) -> copystate::CopyState {
+    fn copy_selection(&self, selection: &BoardSelection) -> copystate::CopyState {
         // iMIN .. iMAX -> 0 .. uMAX
 
         fn offset_range(v: isize) -> usize {
@@ -1632,7 +1628,7 @@ impl BoardView {
         let mut min_pos = Vec2usize::single_value(usize::MAX);
         let mut data = copystate::CopyState::default();
 
-        'selection: for &selected in self.selection.iter() {
+        'selection: for &selected in selection.iter() {
             let min = match selected {
                 SelectedBoardItem::WirePart { pos, dir } => {
                     let Some(node) = editor.tiles.wires().get(pos) else {
@@ -1673,13 +1669,11 @@ impl BoardView {
                         let a = Direction8::from(d);
                         let b = a.inverted();
 
-                        let a = self
-                            .selection
-                            .contains(&SelectedBoardItem::WirePart { pos, dir: d });
+                        let a = selection.contains(&SelectedBoardItem::WirePart { pos, dir: d });
                         let b_dist = *node.directions.get(b);
                         let b = b_dist
                             .map(|dist| {
-                                self.selection.contains(&SelectedBoardItem::WirePart {
+                                selection.contains(&SelectedBoardItem::WirePart {
                                     pos: b.into_dir_isize() * dist.get() as isize + pos,
                                     dir: d,
                                 })
@@ -1747,7 +1741,7 @@ impl BoardView {
         data
     }
 
-    fn handle_paste(&mut self, interaction: &Response, ctx: &PaintContext, app: &App) {
+    fn handle_paste(&mut self, interaction: &Response, ctx: &PaintContext, app: &mut App) {
         let Some(SelectedItem::Paste(paste)) = &app.selected_item else {
             return;
         };
@@ -1927,11 +1921,15 @@ impl BoardView {
                             world_place_tile.convert(|v| v as f32).into(),
                             c.blueprint.transformed_size.convert(|v| v as f32).into(),
                         );
-                        self.in_world_errors.push_front(InWorldError {
-                            world_rect: rect,
-                            deadline: Instant::now() + Duration::from_secs(2),
-                            text: e.to_string(),
-                        });
+                        app.editor_shared
+                            .entry(self.board.uid())
+                            .or_default()
+                            .in_world_errors
+                            .push(InWorldError::new(
+                                rect,
+                                PLACEMENT_ERROR_DURATION,
+                                e.to_string(),
+                            ));
                     }
                     Ok(circuit) => {
                         if let Some(state_data) = &c.state {
@@ -1949,11 +1947,17 @@ impl BoardView {
                                                 .convert(|v| v as f32)
                                                 .into(),
                                         );
-                                        self.in_world_errors.push_front(InWorldError {
-                                            world_rect: rect,
-                                            deadline: Instant::now() + Duration::from_secs(2),
-                                            text: e.wrap_err("loading circuit state").to_string(),
-                                        });
+                                        app.editor_shared
+                                            .entry(self.board.uid())
+                                            .or_default()
+                                            .in_world_errors
+                                            .push(InWorldError::new(
+                                                rect,
+                                                PLACEMENT_ERROR_DURATION,
+                                                e
+                                                    .wrap_err("loading circuit state")
+                                                    .to_string(),
+                                            ));
                                     }
                                     Ok(s) => {
                                         let mut state = state.state().write();
@@ -1974,13 +1978,11 @@ impl BoardView {
         }
     }
 
-    fn draw_in_world_errors(&mut self, ui: &Ui, ctx: &PaintContext) {
-        let now = Instant::now();
-
-        self.in_world_errors.retain_mut(|e| {
-            let remaining = e.deadline.checked_duration_since(now);
+    fn draw_in_world_errors(&mut self, ui: &Ui, ctx: &PaintContext, errors: &[InWorldError]) {
+        for e in errors {
+            let remaining = e.remaining();
             let Some(remaining) = remaining else {
-                return false;
+                continue;
             };
 
             let fade = if remaining > INWORLD_ERROR_FADE_TIME {
@@ -1991,11 +1993,11 @@ impl BoardView {
 
             let color = Color32::RED.gamma_multiply(fade);
 
-            let rect = ctx.screen.world_to_screen_rect(e.world_rect);
+            let rect = ctx.screen.world_to_screen_rect(e.world_rect());
 
             let text_pos = pos2(rect.left(), rect.bottom() + 5.0);
 
-            let gal = WidgetText::from(e.text.clone()).into_galley(
+            let gal = WidgetText::from(e.text()).into_galley(
                 ui,
                 None,
                 f32::INFINITY,
@@ -2011,9 +2013,7 @@ impl BoardView {
             if ctx.screen.screen_rect.intersects(rect.expand(1.0)) {
                 ctx.rect_stroke(rect, 1.0, Stroke::new(2.0, color), StrokeKind::Middle);
             }
-
-            true
-        });
+        }
     }
 
     fn draw_overlay(&mut self, ui: &mut Ui, app: &mut App) {

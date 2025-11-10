@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     ops::Not,
     path::PathBuf,
     sync::{Arc, Weak},
@@ -8,18 +8,11 @@ use std::{
 use eframe::{CreationContext, egui};
 use egui_dock::{DockArea, DockState, NodeIndex};
 use eyre::eyre;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 use smoldata::raw::RawValue;
 
 use crate::{
-    Style,
-    circuits::CircuitBlueprint,
-    editor::BoardEditor,
-    io::copystate,
-    simulation::{SimulationCtx, SimulationStateData},
-    state::wires::WireState,
-    tabs::{SafeTabType, Tab, TabSerde, TabType, TabViewer},
-    vector::{Vec2isize, Vec2usize},
+    board::Board, circuits::CircuitBlueprint, editor::{BoardEditor, BoardEditorSharedState}, io::copystate, simulation::SimulationCtx, state::wires::WireState, tabs::{SafeTabType, Tab, TabSerde, TabType, TabViewer}, vector::{Vec2isize, Vec2usize}, Style
 };
 
 pub const APP_NAME: &str = "cuprous-dev";
@@ -63,11 +56,12 @@ pub struct App {
     pub style: Arc<Style>,
     pub sim: Arc<SimulationCtx>,
 
-    pub editors: Mutex<HashMap<u128, Weak<RwLock<BoardEditor>>>>,
+    pub editors: HashMap<u128, Weak<RwLock<BoardEditor>>>,
+    pub editor_shared: HashMap<u128, BoardEditorSharedState>,
 
     pub data_dir: Option<PathBuf>,
     pub errors: Vec<ErrorStrings>,
-    pub last_active_editor: Option<LastEditorData>,
+    pub last_active_editor: Option<Weak<RwLock<BoardEditor>>>,
 }
 
 impl App {
@@ -137,6 +131,7 @@ impl App {
             style: Arc::new(Style::default()),
             sim,
             editors: Default::default(),
+            editor_shared: Default::default(),
             last_active_editor: None,
 
             data_dir,
@@ -144,7 +139,7 @@ impl App {
         }
     }
 
-    fn update(&mut self, ctx: &egui::Context) {
+    pub fn update(&mut self, ctx: &egui::Context) {
         let paste = ctx
             .wants_keyboard_input()
             .not()
@@ -266,17 +261,20 @@ impl App {
 
             self.selected_item = Some(SelectedItem::Paste(paste));
         }
+
+        for v in self.editor_shared.values_mut() {
+            v.update();
+        }
     }
 
-    pub fn get_board_editor(&self, state: &SimulationStateData) -> Arc<RwLock<BoardEditor>> {
-        let mut editors = self.editors.lock();
-        editors.retain(|_, v| v.upgrade().is_some());
-        if let Some(editor) = editors.get(&state.uid()).and_then(|w| w.upgrade()) {
+    pub fn get_board_editor(&mut self, board: &Arc<Board>) -> Arc<RwLock<BoardEditor>> {
+        self.editors.retain(|_, v| v.upgrade().is_some());
+        if let Some(editor) = self.editors.get(&board.uid()).and_then(|w| w.upgrade()) {
             return editor;
         }
 
-        let ed = Arc::new(RwLock::new(BoardEditor::new(state.board())));
-        editors.insert(state.uid(), Arc::downgrade(&ed));
+        let ed = Arc::new(RwLock::new(BoardEditor::new(board.clone())));
+        self.editors.insert(board.uid(), Arc::downgrade(&ed));
         ed
     }
 }
@@ -305,10 +303,10 @@ impl DockedApp {
             .map(|e| eyre::Report::new(e).wrap_err("dock loading").into())
             .collect();
 
-        let app = App::create(cc, errors);
+        let mut app = App::create(cc, errors);
 
         Self {
-            dock: dock.map_tabs(|s| Tab::load(s, &app)),
+            dock: dock.map_tabs(|s| Tab::load(s, &mut app)),
             app,
             sim_no_save: false,
         }
@@ -326,7 +324,7 @@ impl eframe::App for DockedApp {
 
             self.dock
                 .main_surface_mut()
-                .push_to_first_leaf(Tab::new(TabType::BoardView, &self.app));
+                .push_to_first_leaf(Tab::new(TabType::BoardView, &mut self.app));
         }
 
         'b: {
@@ -336,7 +334,7 @@ impl eframe::App for DockedApp {
                 }
             }
 
-            let tab = Tab::new(TabType::CircuitProps, &self.app);
+            let tab = Tab::new(TabType::CircuitProps, &mut self.app);
 
             let surface = self.dock.main_surface_mut();
 
@@ -350,7 +348,7 @@ impl eframe::App for DockedApp {
                 }
             }
 
-            let tab = Tab::new(TabType::ComponentList, &self.app);
+            let tab = Tab::new(TabType::ComponentList, &mut self.app);
 
             let surface = self.dock.main_surface_mut();
 
@@ -459,13 +457,6 @@ impl eframe::App for DockedApp {
         //     }
         // }
     }
-}
-
-pub struct LastEditorData {
-    pub editor: Weak<RwLock<BoardEditor>>,
-    pub boardview_id: usize,
-    pub selected_circuits: HashSet<usize>,
-    pub selection_update_counter: usize,
 }
 
 pub struct PasteCircuit {

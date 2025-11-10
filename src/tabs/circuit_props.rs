@@ -1,11 +1,11 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
-    ops::{Deref, DerefMut},
-    sync::Weak,
+    ops::{Deref, DerefMut, Range},
+    sync::{Arc, Weak},
     time::{Duration, Instant},
 };
 
-use eframe::egui::{Color32, Grid, RichText, Ui};
+use eframe::egui::{Color32, Grid, Rect, RichText, Ui};
 use parking_lot::{RwLock, RwLockWriteGuard};
 
 use crate::{
@@ -13,7 +13,7 @@ use crate::{
     circuits::{
         CircuitImplData, PinType, PropertyChangedParams, TransformSupport, props::PropertyInfo,
     },
-    editor::BoardEditor,
+    editor::{BoardEditor, InWorldError, SelectedBoardItem},
     pool::get_pooled,
     state::sim::UpdateTaskPool,
     str::ArcStaticStr,
@@ -21,7 +21,9 @@ use crate::{
     vector::Vec2usize,
 };
 
-const PROP_ERROR_FADE_TIME: Duration = Duration::from_millis(500);
+const INWORLD_ERROR_DURATION: Duration = Duration::from_secs(5);
+const VALUE_ERROR_DURATION: Duration = Duration::from_secs(5);
+const VALUE_ERROR_FADE_TIME: Duration = Duration::from_millis(500);
 
 pub struct CircuitProps {
     last_selection_counter: Option<usize>,
@@ -34,6 +36,8 @@ pub struct CircuitProps {
 
     new_circuit_property_list: Vec<ArcStaticStr>,
     new_circuit_property_map: HashMap<ArcStaticStr, PropertyInfo>,
+
+    old_value_error_id_range: Option<Range<usize>>,
 }
 
 struct OldCircuitGeometryData {
@@ -46,10 +50,14 @@ impl CircuitProps {
         editor: &mut BoardEditor,
         circuit_locks: &mut BTreeMap<usize, RwLockWriteGuard<'_, CircuitImplData>>,
         reset: impl FnOnce(&mut BTreeMap<usize, RwLockWriteGuard<'_, CircuitImplData>>),
+        in_world_errors: &mut Vec<InWorldError>,
     ) -> Result<(), String> {
         let mut changed_geometry_circuits = BTreeMap::new();
         let board = editor.board().clone();
         let circuits = board.circuits().read();
+
+        let mut error = None::<String>;
+        let mut multiple_errors = false;
 
         // Find circuits with changed deometry, remove them
         for (&id, circuit_imp) in circuit_locks.iter_mut() {
@@ -131,7 +139,7 @@ impl CircuitProps {
                 old_circuit_pins.insert(id, old_pins);
             }
 
-            if changed_geometry_circuits.contains_key(&id) {
+            let res = if changed_geometry_circuits.contains_key(&id) {
                 let res = editor.tiles.place_circuit(
                     board.circuits().read().get(id).unwrap(),
                     circuit_info.pos,
@@ -142,19 +150,41 @@ impl CircuitProps {
                     false,
                 );
 
-                if let Some(err) = res.get_placement_error() {
-                    fail = true;
-                }
-            } else if !pins_eq
-                && let Err(err) = editor.tiles.replace_pins(
-                    id,
-                    circuit_info.pos,
-                    circuit_info.size,
-                    circuit_pins.deref(),
-                )
-            {
-                fail = true;
+                res.placement_error()
+            } else if !pins_eq {
+                editor
+                    .tiles
+                    .replace_pins(
+                        id,
+                        circuit_info.pos,
+                        circuit_info.size,
+                        circuit_pins.deref(),
+                    )
+                    .map_err(Into::into)
+            } else {
+                Ok(())
             };
+
+            if let Err(e) = res {
+                fail = true;
+
+                let str = e.to_string();
+                if !multiple_errors {
+                    match &error {
+                        Some(s) if s == &str => {}
+                        Some(_) => multiple_errors = true,
+                        None => error = Some(str.clone()),
+                    }
+                }
+                in_world_errors.push(InWorldError::new(
+                    Rect::from_min_size(
+                        circuit_info.pos.convert(|v| v as f32).into(),
+                        circuit_info.size.convert(|v| v as f32).into(),
+                    ),
+                    INWORLD_ERROR_DURATION,
+                    str,
+                ));
+            }
         }
 
         // Roll everything back
@@ -282,12 +312,18 @@ impl CircuitProps {
                 .transform_size(circuit_info.size, Some(TransformSupport::Automatic));
         }
 
-        Ok(())
+        if multiple_errors {
+            Err("Multiple errors have happened".into())
+        } else if let Some(err) = error {
+            Err(err)
+        } else {
+            Ok(())
+        }
     }
 }
 
 impl TabCreation for CircuitProps {
-    fn new(_: &App) -> Self {
+    fn new(_: &mut App) -> Self {
         Self {
             last_selection_counter: None,
             last_editor: None,
@@ -299,47 +335,56 @@ impl TabCreation for CircuitProps {
 
             new_circuit_property_list: Default::default(),
             new_circuit_property_map: Default::default(),
+
+            old_value_error_id_range: None,
         }
     }
 }
 
 impl TabImpl for CircuitProps {
     fn update(&mut self, app: &mut App, ui: &mut Ui) {
-        let Some(editor_data) = app.last_active_editor.as_ref() else {
+        let Some(editor) = app.last_active_editor.as_ref().and_then(Weak::upgrade) else {
             return;
         };
 
-        if editor_data.selected_circuits.is_empty() {
+        let board = editor.read().board().clone();
+
+        let Some(editor_data) = app.editor_shared.get_mut(&board.uid()) else {
+            return;
+        };
+
+        if editor_data.selection.is_empty() {
             return;
         }
 
-        let editor_changed = self
+        let mut changed = self
             .last_editor
             .as_ref()
-            .is_none_or(|le| !editor_data.editor.ptr_eq(le));
+            .is_none_or(|le| !Arc::downgrade(&editor).ptr_eq(le));
 
-        let Some(editor) = editor_data.editor.upgrade() else {
-            return;
-        };
+        if !changed {
+            changed = self.last_selection_counter != Some(editor_data.selection.update_counter());
+        }
 
-        let selection_changed =
-            self.last_selection_counter != Some(editor_data.selection_update_counter);
-
-        self.last_editor = Some(editor_data.editor.clone());
-        self.last_selection_counter = Some(editor_data.selection_update_counter);
+        self.last_editor = Some(Arc::downgrade(&editor));
+        self.last_selection_counter = Some(editor_data.selection.update_counter());
 
         let mut editor = editor.write();
         let board = editor.board().clone();
         let board_circuits = board.circuits().read();
 
-        if editor_changed || selection_changed {
+        if changed {
             self.visible_property_list.clear();
             self.visible_property_map.clear();
             self.value_errors.clear();
 
             let mut first = true;
 
-            for &id in editor_data.selected_circuits.iter() {
+            for &item in editor_data.selection.iter() {
+                let SelectedBoardItem::Circuit { id, .. } = item else {
+                    continue;
+                };
+
                 let Some(circuit) = board_circuits.get(id) else {
                     continue;
                 };
@@ -395,7 +440,11 @@ impl TabImpl for CircuitProps {
 
         Grid::new("properties").num_columns(2).show(ui, |ui| {
             let mut circuit_locks = BTreeMap::new();
-            for &id in editor_data.selected_circuits.iter() {
+            for &item in editor_data.selection.iter() {
+                let SelectedBoardItem::Circuit { id, .. } = item else {
+                    continue;
+                };
+
                 let Some(circuit) = board_circuits.get(id) else {
                     continue;
                 };
@@ -443,10 +492,17 @@ impl TabImpl for CircuitProps {
                             }
                         }
 
+                        if let Some(range) = self.old_value_error_id_range.take() {
+                            editor_data
+                                .in_world_errors
+                                .retain(|e| !range.contains(&e.id()));
+                        }
+
                         let geometry_res = if !prop.affects_geometry_or_pins {
                             Ok(())
                         } else {
-                            Self::try_applying_geometry_and_pin_changes(
+                            let next_error_id = InWorldError::read_next_id();
+                            let res = Self::try_applying_geometry_and_pin_changes(
                                 &mut editor,
                                 &mut circuit_locks,
                                 |cl| {
@@ -456,14 +512,22 @@ impl TabImpl for CircuitProps {
                                         old.clone_into_dyn(value);
                                     }
                                 },
-                            )
+                                &mut editor_data.in_world_errors,
+                            );
+                            let new_next_error_id = InWorldError::read_next_id();
+
+                            if new_next_error_id > next_error_id {
+                                self.old_value_error_id_range =
+                                    Some(next_error_id..new_next_error_id)
+                            }
+                            res
                         };
 
                         match geometry_res {
                             Err(why) => {
                                 self.value_errors.insert(
                                     id.clone(),
-                                    (why, Instant::now() + Duration::from_secs(5)),
+                                    (why, Instant::now() + VALUE_ERROR_DURATION),
                                 );
                             }
                             Ok(()) => {
@@ -500,10 +564,10 @@ impl TabImpl for CircuitProps {
                             .map(|d| d.as_secs_f32())
                             .unwrap_or(0.0);
 
-                        let fade = if remaining_secs >= PROP_ERROR_FADE_TIME.as_secs_f32() {
+                        let fade = if remaining_secs >= VALUE_ERROR_FADE_TIME.as_secs_f32() {
                             1.0
                         } else {
-                            remaining_secs / PROP_ERROR_FADE_TIME.as_secs_f32()
+                            remaining_secs / VALUE_ERROR_FADE_TIME.as_secs_f32()
                         };
 
                         ui.horizontal_wrapped(|ui| {

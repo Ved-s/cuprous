@@ -2,7 +2,11 @@ use std::{
     collections::{HashMap, HashSet},
     num::NonZeroU32,
     ops::{Deref, DerefMut},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::{Duration, Instant},
 };
 
 use eframe::egui::{Rect, remap_clamp, vec2};
@@ -17,7 +21,7 @@ use crate::{
     },
     containers::Chunks2D,
     pool::get_pooled,
-    selection::SelectionImpl,
+    selection::{Selection, SelectionImpl},
     state::sim::UpdateTaskPool,
     vector::{Vec2f, Vec2isize, Vec2usize},
 };
@@ -44,7 +48,7 @@ pub struct PlaceCircuitResult {
 }
 
 impl PlaceCircuitResult {
-    pub fn get_placement_error(&self) -> Option<CircuitPlaceError> {
+    pub fn placement_error(&self) -> Result<(), CircuitPlaceError> {
         if self.any_overlapping_quarters || !self.placed_any_quarters || self.any_disconnected_pins
         {
             let err = if self.any_disconnected_pins && self.placed_any_quarters {
@@ -54,9 +58,9 @@ impl PlaceCircuitResult {
             } else {
                 CircuitPlaceError::OccupiesNoTiles
             };
-            Some(err)
+            Err(err)
         } else {
-            None
+            Ok(())
         }
     }
 }
@@ -782,9 +786,9 @@ impl BoardEditor {
 
         drop(imp);
 
-        let err = res.get_placement_error();
+        let err = res.placement_error();
 
-        if let Some(err) = err {
+        if let Err(err) = err {
             drop(pins);
             self.remove_circuit_internal(&circuit, tasks);
             return Err(err);
@@ -1333,12 +1337,75 @@ pub enum CircuitPlaceError {
     DisconnectedPins,
 }
 
+impl From<DisconnectedPinsError> for CircuitPlaceError {
+    fn from(value: DisconnectedPinsError) -> Self {
+        let DisconnectedPinsError = value;
+
+        Self::DisconnectedPins
+    }
+}
+
+static INWORLD_ERROR_NEXT_ID: AtomicUsize = AtomicUsize::new(0);
+
+pub struct InWorldError {
+    id: usize,
+    world_rect: Rect,
+    deadline: Instant,
+    text: String,
+}
+
+impl InWorldError {
+    pub fn new(world_rect: Rect, duration: Duration, text: String) -> Self {
+        Self {
+            id: INWORLD_ERROR_NEXT_ID.fetch_add(1, Ordering::Relaxed),
+            world_rect,
+            deadline: Instant::now() + duration,
+            text,
+        }
+    }
+
+    pub fn id(&self) -> usize {
+        self.id
+    }
+
+    pub fn world_rect(&self) -> Rect {
+        self.world_rect
+    }
+
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    pub fn remaining(&self) -> Option<Duration> {
+        self.deadline.checked_duration_since(Instant::now())
+    }
+
+    pub fn read_next_id() -> usize {
+        INWORLD_ERROR_NEXT_ID.load(Ordering::Relaxed)
+    }
+}
+
+#[derive(Default)]
+pub struct BoardEditorSharedState {
+    pub selection: BoardSelection,
+    pub in_world_errors: Vec<InWorldError>,
+}
+
+impl BoardEditorSharedState {
+    pub fn update(&mut self) {
+        let now = Instant::now();
+        self.in_world_errors.retain(|e| e.deadline > now);
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SelectedBoardItem {
     WirePart { pos: Vec2isize, dir: Direction4Half },
     WirePoint { pos: Vec2isize },
     Circuit { id: usize, pos: Vec2isize },
 }
+
+pub type BoardSelection = Selection<BoardSelectionImpl>;
 
 pub struct BoardSelectionImpl;
 

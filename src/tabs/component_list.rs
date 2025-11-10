@@ -17,7 +17,7 @@ use super::{TabCreation, TabImpl};
 pub struct ComponentList {}
 
 impl TabCreation for ComponentList {
-    fn new(_app: &crate::app::App) -> Self {
+    fn new(_app: &mut crate::app::App) -> Self {
         Self {}
     }
 }

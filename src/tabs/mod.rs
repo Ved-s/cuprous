@@ -61,7 +61,7 @@ pub struct Tab {
 }
 
 impl Tab {
-    pub fn new(ty: TabType, app: &App) -> Self {
+    pub fn new(ty: TabType, app: &mut App) -> Self {
         Self {
             id: Self::next_id(),
             ty: SafeTabType::Loaded(ty),
@@ -69,7 +69,7 @@ impl Tab {
         }
     }
 
-    pub fn load(d: &TabSerde, app: &App) -> Self {
+    pub fn load(d: &TabSerde, app: &mut App) -> Self {
         let imp = TabType::from_id(&d.id).map(|ty| {
             (
                 ty,
@@ -135,9 +135,9 @@ pub trait TabCreation
 where
     Self: Sized,
 {
-    fn new(app: &App) -> Self;
+    fn new(app: &mut App) -> Self;
 
-    fn load(data: &str, app: &App) -> Result<Self, Box<dyn Error>> {
+    fn load(data: &str, app: &mut App) -> Result<Self, Box<dyn Error>> {
         let _ = data;
         Ok(Self::new(app))
     }
