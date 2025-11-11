@@ -568,7 +568,7 @@ impl CircuitTransform {
         }
     }
 
-    fn transform_pins(
+    pub fn transform_pins(
         &self,
         size: Vec2usize,
         pins: &mut dyn Iterator<Item = PosDirMut>,

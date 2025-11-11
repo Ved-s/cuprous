@@ -5,13 +5,14 @@ use std::{
     time::{Duration, Instant},
 };
 
-use eframe::egui::{Color32, Grid, Rect, RichText, Ui};
+use eframe::egui::{Color32, Grid, Label, Rect, RichText, TextWrapMode, Ui, Widget};
 use parking_lot::{RwLock, RwLockWriteGuard};
 
 use crate::{
-    app::App,
+    app::{App, SelectedItem},
     circuits::{
-        CircuitImplData, PinType, PropertyChangedParams, TransformSupport, props::PropertyInfo,
+        CircuitBlueprint, CircuitImplData, PinType, PropertyChangedParams, TransformSupport,
+        props::{PropertyInfo, PropertyValue},
     },
     editor::{BoardEditor, InWorldError, SelectedBoardItem},
     pool::get_pooled,
@@ -38,6 +39,8 @@ pub struct CircuitProps {
     new_circuit_property_map: HashMap<ArcStaticStr, PropertyInfo>,
 
     old_value_error_id_range: Option<Range<usize>>,
+
+    blueprint_property_list: Vec<PropertyInfo>,
 }
 
 struct OldCircuitGeometryData {
@@ -65,6 +68,8 @@ impl CircuitProps {
 
             let old_size = circuit_info.size;
             let new_size = circuit_imp.imp.size(circuit_info.transform);
+
+            let new_size = circuit_info.transform.transform_size(new_size, Some(TransformSupport::Automatic));
 
             circuit_info.size = new_size;
 
@@ -104,7 +109,7 @@ impl CircuitProps {
         for (&id, circuit_imp) in circuit_locks.iter_mut() {
             let circuit = circuits.get(id).unwrap();
             let circuit_info = circuit.info.read();
-            let new_pins = circuit_imp.imp.describe_pins(circuit_info.transform);
+            let mut new_pins = circuit_imp.imp.describe_pins(circuit_info.transform);
             let mut circuit_pins = circuit.pins.write();
 
             let pins_eq = circuit_pins.len() == new_pins.len()
@@ -128,6 +133,14 @@ impl CircuitProps {
                     tasks.clear(); // We do tasks manually in the correct order
                     disconnected_wires.insert(wire.id);
                 }
+
+                let orig_size = circuit_info.transform.transform_size(circuit_info.size, Some(TransformSupport::Automatic));
+
+                circuit_info.transform.transform_pins(
+                    orig_size,
+                    &mut new_pins.iter_mut().map(|p| p.pos_dir_mut()),
+                    Some(TransformSupport::Automatic),
+                );
 
                 let realized_pins = new_pins
                     .into_iter()
@@ -320,40 +333,36 @@ impl CircuitProps {
             Ok(())
         }
     }
-}
 
-impl TabCreation for CircuitProps {
-    fn new(_: &mut App) -> Self {
-        Self {
-            last_selection_counter: None,
-            last_editor: None,
-
-            visible_property_list: Default::default(),
-            visible_property_map: Default::default(),
-
-            value_errors: Default::default(),
-
-            new_circuit_property_list: Default::default(),
-            new_circuit_property_map: Default::default(),
-
-            old_value_error_id_range: None,
-        }
-    }
-}
-
-impl TabImpl for CircuitProps {
-    fn update(&mut self, app: &mut App, ui: &mut Ui) {
+    fn in_world_circuits_ui(&mut self, app: &mut App, ui: &mut Ui) {
         let Some(editor) = app.last_active_editor.as_ref().and_then(Weak::upgrade) else {
+            ui.centered_and_justified(|ui| {
+                Label::new("No active editor").ui(ui);
+            });
             return;
         };
 
         let board = editor.read().board().clone();
 
         let Some(editor_data) = app.editor_shared.get_mut(&board.uid()) else {
+            ui.centered_and_justified(|ui| {
+                Label::new("No active editor").ui(ui);
+            });
             return;
         };
 
         if editor_data.selection.is_empty() {
+            ui.centered_and_justified(|ui| {
+                Label::new(
+                    "\
+                    Nothing selected.\n\
+                    Select some citcuits on the board using the Selection tool \
+                    or pick a configurable circuit from the component list.\
+                ",
+                )
+                .wrap_mode(TextWrapMode::Wrap)
+                .ui(ui);
+            });
             return;
         }
 
@@ -435,10 +444,20 @@ impl TabImpl for CircuitProps {
         }
 
         if self.visible_property_list.is_empty() {
+            ui.centered_and_justified(|ui| {
+                Label::new(
+                    "\
+                    Select some citcuits on the board using the Selection tool \
+                    or pick a configurable circuit from the component list.\
+                ",
+                )
+                .wrap_mode(TextWrapMode::Wrap)
+                .ui(ui);
+            });
             return;
         }
 
-        Grid::new("properties").num_columns(2).show(ui, |ui| {
+        CircuitPropertiesUi::new(ui).show(|mut prop_ui| {
             let mut circuit_locks = BTreeMap::new();
             for &item in editor_data.selection.iter() {
                 let SelectedBoardItem::Circuit { id, .. } = item else {
@@ -458,131 +477,222 @@ impl TabImpl for CircuitProps {
                     continue;
                 };
 
-                ui.label(prop.display_name.deref());
+                let first_circuit = circuit_locks.values_mut().next().expect("any circuit");
+                let prop_value = first_circuit.imp.get_property_value(id);
 
-                ui.vertical(|ui| {
-                    let first_circuit = circuit_locks.values_mut().next().expect("any circuit");
-                    let prop_value = first_circuit.imp.get_property_value(id);
-                    let Some(prop_value) = prop_value else {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label(
-                                RichText::new(format!(
-                                "Circuit enumerated this property (\"{id}\") but returned no value"
-                            ))
-                                .color(Color32::RED),
-                            );
-                        });
-                        return;
+                let error_text = if let Some((error, time)) = self.value_errors.get(id) {
+                    let remaining_secs = time
+                        .checked_duration_since(Instant::now())
+                        .map(|d| d.as_secs_f32())
+                        .unwrap_or(0.0);
+
+                    let fade = if remaining_secs >= VALUE_ERROR_FADE_TIME.as_secs_f32() {
+                        1.0
+                    } else {
+                        remaining_secs / VALUE_ERROR_FADE_TIME.as_secs_f32()
                     };
-                    let new = prop_value.ui(ui);
 
-                    if let Some(new) = new {
-                        let mut old_values = BTreeMap::new();
+                    Some(RichText::new(error.clone()).color(Color32::RED.gamma_multiply(fade)))
+                } else {
+                    None
+                };
 
-                        {
+                let new = prop_ui.show_property(prop, prop_value, error_text);
+
+                if let Some(new) = new {
+                    let mut old_values = BTreeMap::new();
+
+                    {
+                        for (&circuit_id, circuit) in circuit_locks.iter_mut() {
+                            let Some(prop) = circuit.imp.get_property_value(id) else {
+                                continue;
+                            };
+
+                            let old = prop.clone_dyn();
+                            new.clone_into_dyn(prop);
+
+                            old_values.insert(circuit_id, old);
+                        }
+                    }
+
+                    if let Some(range) = self.old_value_error_id_range.take() {
+                        editor_data
+                            .in_world_errors
+                            .retain(|e| !range.contains(&e.id()));
+                    }
+
+                    let geometry_res = if !prop.affects_geometry_or_pins {
+                        Ok(())
+                    } else {
+                        let next_error_id = InWorldError::read_next_id();
+                        let res = Self::try_applying_geometry_and_pin_changes(
+                            &mut editor,
+                            &mut circuit_locks,
+                            |cl| {
+                                for (circuit_id, old) in old_values {
+                                    let circuit = cl.get_mut(&circuit_id).unwrap();
+                                    let value = circuit.imp.get_property_value(id).unwrap();
+                                    old.clone_into_dyn(value);
+                                }
+                            },
+                            &mut editor_data.in_world_errors,
+                        );
+                        let new_next_error_id = InWorldError::read_next_id();
+
+                        if new_next_error_id > next_error_id {
+                            self.old_value_error_id_range = Some(next_error_id..new_next_error_id)
+                        }
+                        res
+                    };
+
+                    match geometry_res {
+                        Err(why) => {
+                            self.value_errors
+                                .insert(id.clone(), (why, Instant::now() + VALUE_ERROR_DURATION));
+                        }
+                        Ok(()) => {
+                            self.value_errors.remove(id);
                             for (&circuit_id, circuit) in circuit_locks.iter_mut() {
-                                let Some(prop) = circuit.imp.get_property_value(id) else {
-                                    continue;
-                                };
+                                let circuit = circuit.deref_mut();
 
-                                let old = prop.clone_dyn();
-                                new.clone_into_dyn(prop);
+                                let mut params = PropertyChangedParams::default();
 
-                                old_values.insert(circuit_id, old);
-                            }
-                        }
-
-                        if let Some(range) = self.old_value_error_id_range.take() {
-                            editor_data
-                                .in_world_errors
-                                .retain(|e| !range.contains(&e.id()));
-                        }
-
-                        let geometry_res = if !prop.affects_geometry_or_pins {
-                            Ok(())
-                        } else {
-                            let next_error_id = InWorldError::read_next_id();
-                            let res = Self::try_applying_geometry_and_pin_changes(
-                                &mut editor,
-                                &mut circuit_locks,
-                                |cl| {
-                                    for (circuit_id, old) in old_values {
-                                        let circuit = cl.get_mut(&circuit_id).unwrap();
-                                        let value = circuit.imp.get_property_value(id).unwrap();
-                                        old.clone_into_dyn(value);
-                                    }
-                                },
-                                &mut editor_data.in_world_errors,
-                            );
-                            let new_next_error_id = InWorldError::read_next_id();
-
-                            if new_next_error_id > next_error_id {
-                                self.old_value_error_id_range =
-                                    Some(next_error_id..new_next_error_id)
-                            }
-                            res
-                        };
-
-                        match geometry_res {
-                            Err(why) => {
-                                self.value_errors.insert(
-                                    id.clone(),
-                                    (why, Instant::now() + VALUE_ERROR_DURATION),
+                                circuit.imp.property_changed(
+                                    Some((
+                                        board_circuits.get(circuit_id).unwrap(),
+                                        &mut circuit.instance,
+                                    )),
+                                    id,
+                                    &mut params,
                                 );
-                            }
-                            Ok(()) => {
-                                self.value_errors.remove(id);
-                                for (&circuit_id, circuit) in circuit_locks.iter_mut() {
-                                    let circuit = circuit.deref_mut();
 
-                                    let mut params = PropertyChangedParams::default();
+                                if params.trigger_signal_update {
+                                    let mut tasks = get_pooled::<UpdateTaskPool>();
 
-                                    circuit.imp.property_changed(
-                                        Some((
-                                            board_circuits.get(circuit_id).unwrap(),
-                                            &mut circuit.instance,
-                                        )),
-                                        id,
-                                        &mut params,
-                                    );
+                                    tasks.add_circuit_task(circuit_id, None);
 
-                                    if params.trigger_signal_update {
-                                        let mut tasks = get_pooled::<UpdateTaskPool>();
-
-                                        tasks.add_circuit_task(circuit_id, None);
-
-                                        editor.board().add_tasks(&tasks);
-                                    }
+                                    editor.board().add_tasks(&tasks);
                                 }
                             }
                         }
                     }
-
-                    if let Some((error, time)) = self.value_errors.get(id) {
-                        let remaining_secs = time
-                            .checked_duration_since(Instant::now())
-                            .map(|d| d.as_secs_f32())
-                            .unwrap_or(0.0);
-
-                        let fade = if remaining_secs >= VALUE_ERROR_FADE_TIME.as_secs_f32() {
-                            1.0
-                        } else {
-                            remaining_secs / VALUE_ERROR_FADE_TIME.as_secs_f32()
-                        };
-
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label(
-                                RichText::new(error.clone())
-                                    .color(Color32::RED.gamma_multiply(fade)),
-                            );
-                        });
-                    }
-                });
-                ui.end_row();
+                }
             }
         });
 
         let now = Instant::now();
         self.value_errors.retain(|_, v| v.1 > now);
+    }
+
+    fn circuit_blueprint_ui(
+        &mut self,
+        ui: &mut Ui,
+        blueprint: &mut CircuitBlueprint,
+    ) {
+        CircuitPropertiesUi::new(ui).show(|mut prop_ui| {
+            self.blueprint_property_list.clear();
+
+            blueprint.imp.enum_properties(&mut |info| {
+                self.blueprint_property_list.push(info.clone());
+            });
+
+            for prop in self.blueprint_property_list.drain(..) {
+                let mut value = blueprint.imp.get_property_value(&prop.id);
+
+                let new = prop_ui.show_property(&prop, value.as_deref_mut(), None);
+
+                let Some((new, value)) = new.zip(value) else {
+                    continue;
+                };
+
+                new.clone_into_dyn(value);
+
+                blueprint.recalculate();
+            }
+        });
+    }
+}
+
+impl TabCreation for CircuitProps {
+    fn new(_: &mut App) -> Self {
+        Self {
+            last_selection_counter: None,
+            last_editor: None,
+
+            visible_property_list: Default::default(),
+            visible_property_map: Default::default(),
+
+            value_errors: Default::default(),
+
+            new_circuit_property_list: Default::default(),
+            new_circuit_property_map: Default::default(),
+
+            old_value_error_id_range: None,
+            blueprint_property_list: Default::default(),
+        }
+    }
+}
+
+impl TabImpl for CircuitProps {
+    fn update(&mut self, app: &mut App, ui: &mut Ui) {
+        let Some(SelectedItem::Circuit(selected_circuit)) = &app.selected_item else {
+            self.in_world_circuits_ui(app, ui);
+            return;
+        };
+
+        self.circuit_blueprint_ui(ui, &mut selected_circuit.write());
+    }
+}
+
+struct CircuitPropertiesUi<'a>(&'a mut Ui);
+struct CircuitPropertiesUiInner<'a>(&'a mut Ui);
+
+impl<'a> CircuitPropertiesUi<'a> {
+    fn new(ui: &'a mut Ui) -> Self {
+        Self(ui)
+    }
+
+    fn show(self, add_contents: impl FnOnce(CircuitPropertiesUiInner)) {
+        Grid::new("properties").num_columns(2).show(self.0, |ui| {
+            add_contents(CircuitPropertiesUiInner(ui));
+        });
+    }
+}
+
+impl CircuitPropertiesUiInner<'_> {
+    fn show_property(
+        &mut self,
+        info: &PropertyInfo,
+        prop: Option<&mut dyn PropertyValue>,
+        error_text: Option<RichText>,
+    ) -> Option<Box<dyn PropertyValue>> {
+        let ui = &mut *self.0;
+        ui.label(info.display_name.deref());
+
+        let res = ui.vertical(|ui| {
+            let Some(prop) = prop else {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(
+                        RichText::new(format!(
+                            "Circuit enumerated this property (\"{}\") but returned no value",
+                            info.id
+                        ))
+                        .color(Color32::RED),
+                    );
+                });
+                return None;
+            };
+            let new = prop.ui(ui);
+
+            if let Some(err) = error_text {
+                ui.horizontal_wrapped(|ui| ui.label(err));
+            }
+
+            new
+        });
+
+        ui.end_row();
+
+        res.inner
     }
 }
