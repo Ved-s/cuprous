@@ -5,8 +5,8 @@ edition = "2024"
 
 [dependencies]
 bezier-nd = "0.5.0"
-eframe = { version = "0.31.1", features = ["persistence"] }
-egui_dock = { version = "0.16.0", features = ["serde"] }
+eframe = { version = "0.33.0", features = ["persistence"] }
+egui_dock = { version = "0.18.0", features = ["serde"] }
 eyre = "0.6.12"
 geo-nd = "0.5.0"
 getrandom = "0.2.15"
@@ -18,9 +18,9 @@ ron = "0.8.1"
 serde = { version = "1.0.203", features = ["derive"] }
 thiserror = "1.0.63"
 directories-next = "2.0.0"
-egui_extras = "0.31.1"
+egui_extras = "0.33.0"
 
 traitbox = { path = "crates/traitbox" }
-smoldata = { git = "https://github.com/Ved-s/smoldata.git", rev = "8d0f8572713f66e389598a61611e08c880500b70" }
+smoldata = { git = "https://github.com/Ved-s/smoldata.git", rev = "ca6f4039462c5a21aeb49364f21dc89ec05dd104" }
 base64 = "0.22.1"
 flate2 = "1.1.2"

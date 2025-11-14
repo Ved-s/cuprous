@@ -4,12 +4,14 @@ use eframe::{
     egui::{
         pos2, vec2, CollapsingHeader, Color32, FontSelection, Painter, Pos2, Rect, Response, Sense, Shape, Stroke, StrokeKind, TextWrapMode, Ui, WidgetText
     },
-    epaint::{Marginf, PathShape, PathStroke},
+    epaint::{MarginF32, PathShape, PathStroke},
 };
 
 use crate::{
-    app::SelectedItem, circuits::{CircuitRenderPurpose, CircuitRenderingContext}, vector::Vec2f, PaintContext, Screen,
-    Style,
+    PaintContext, Screen, Style,
+    app::SelectedItem,
+    circuits::{CircuitRenderPurpose, CircuitRenderingContext},
+    vector::Vec2f,
 };
 
 use super::{TabCreation, TabImpl};
@@ -57,7 +59,10 @@ impl TabImpl for ComponentList {
                     _ => None,
                 });
                 let mut new_selected = None;
-                for blueprint in &app.blueprints {
+                for id in &app.blueprint_order {
+                    let Some(blueprint) = app.blueprints.get(id) else {
+                        continue;
+                    };
                     let selected = selected.is_some_and(|s| Arc::ptr_eq(s, blueprint));
 
                     let mut icon = |rect: Rect, ui: &mut Ui| {
@@ -114,14 +119,19 @@ fn selectable_icon_label(
     text: WidgetText,
     icon: &mut dyn FnMut(Rect, &mut Ui),
 ) -> Response {
-    let padding = Marginf::same(2.0);
+    let padding = MarginF32::same(2.0);
     let spacing = 3.0;
 
     let icon_size = FontSelection::Default.resolve(ui.style()).size + 2.0;
     let max_text_width =
         ui.available_width() - (icon_size + spacing + padding.left + padding.right);
 
-    let galley = text.into_galley(ui, Some(TextWrapMode::Wrap), max_text_width, FontSelection::Default);
+    let galley = text.into_galley(
+        ui,
+        Some(TextWrapMode::Wrap),
+        max_text_width,
+        FontSelection::Default,
+    );
 
     let size = vec2(
         galley.size().x + spacing + icon_size,

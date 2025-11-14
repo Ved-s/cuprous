@@ -1,23 +1,33 @@
 use std::{
     collections::HashMap,
-    ops::Not,
+    ops::{Deref, Not},
     path::PathBuf,
     sync::{Arc, Weak},
 };
 
-use eframe::{CreationContext, egui};
+use eframe::{CreationContext, Storage, egui};
 use egui_dock::{DockArea, DockState, NodeIndex};
 use eyre::eyre;
 use parking_lot::RwLock;
-use smoldata::raw::RawValue;
+use smoldata::{SmolRead, raw::RawValue};
 
 use crate::{
-    board::Board, circuits::CircuitBlueprint, editor::{BoardEditor, BoardEditorSharedState}, io::copystate, simulation::SimulationCtx, state::wires::WireState, tabs::{SafeTabType, Tab, TabSerde, TabType, TabViewer}, vector::{Vec2isize, Vec2usize}, Style
+    Style,
+    board::Board,
+    circuits::{CircuitBlueprint, CircuitImplBox},
+    editor::{BoardEditor, BoardEditorSharedState},
+    io::copystate,
+    simulation::SimulationCtx,
+    state::wires::WireState,
+    storage::Filesystem,
+    str::ArcStaticStr,
+    tabs::{SafeTabType, Tab, TabSerde, TabType, TabViewer},
+    vector::{Vec2isize, Vec2usize},
 };
 
-pub const APP_NAME: &str = "cuprous-dev";
-
 pub const COPY_PASTE_BOARD_ITEMS_PREFIX: &str = "cuprousbrditms:";
+
+const BLUEPRINT_DATA_DIR: &str = "blueprint_data";
 
 pub struct ErrorStrings {
     main: String,
@@ -52,46 +62,103 @@ pub struct App {
     pub gl: Arc<glow::Context>,
     pub selected_item: Option<SelectedItem>,
     pub selected_tab: Option<TabType>,
-    pub blueprints: Vec<Arc<RwLock<CircuitBlueprint>>>,
+    pub blueprints: HashMap<ArcStaticStr, Arc<RwLock<CircuitBlueprint>>>,
+    pub blueprint_order: Vec<ArcStaticStr>,
+
     pub style: Arc<Style>,
     pub sim: Arc<SimulationCtx>,
 
     pub editors: HashMap<u128, Weak<RwLock<BoardEditor>>>,
     pub editor_shared: HashMap<u128, BoardEditorSharedState>,
 
-    pub data_dir: Option<PathBuf>,
     pub errors: Vec<ErrorStrings>,
     pub last_active_editor: Option<Weak<RwLock<BoardEditor>>>,
+
+    pub fs: Box<dyn Filesystem>,
+    pub egui_storage: Box<dyn Storage>,
 }
 
 impl App {
-    pub fn create(cc: &CreationContext, mut errors: Vec<ErrorStrings>) -> Self {
-        let blueprints = vec![
-            Arc::new(RwLock::new(crate::circuits::test::TestCircuit.into())),
-            Arc::new(RwLock::new(
-                crate::circuits::button::Button::default().into(),
-            )),
-            Arc::new(RwLock::new(crate::circuits::gates::Gate::and().into())),
-            Arc::new(RwLock::new(crate::circuits::gates::Gate::nand().into())),
-            Arc::new(RwLock::new(crate::circuits::gates::Gate::or().into())),
-            Arc::new(RwLock::new(crate::circuits::gates::Gate::nor().into())),
-            Arc::new(RwLock::new(crate::circuits::gates::Gate::xor().into())),
-            Arc::new(RwLock::new(crate::circuits::gates::Gate::xnor().into())),
-            Arc::new(RwLock::new(crate::circuits::gates::not::Not.into())),
-            Arc::new(RwLock::new(
-                crate::circuits::constant::Constant::new(WireState::Bool(false)).into(),
-            )),
-            Arc::new(RwLock::new(
-                crate::circuits::constant::Constant::new(WireState::Bool(true)).into(),
-            )),
-            Arc::new(RwLock::new(crate::circuits::buffer::Buffer.into())),
-            Arc::new(RwLock::new(
-                crate::circuits::error_filter::ErrorFilter.into(),
-            )),
+    pub fn create(
+        cc: &CreationContext,
+        mut errors: Vec<ErrorStrings>,
+        mut fs: Box<dyn Filesystem>,
+        egui_storage: Box<dyn Storage>,
+    ) -> Self {
+        // TODO: save and load blueprint data
+        let mut blueprints: Vec<CircuitImplBox> = vec![
+            crate::circuits::test::TestCircuit.into(),
+            crate::circuits::button::Button::default().into(),
+            crate::circuits::gates::Gate::and().into(),
+            crate::circuits::gates::Gate::nand().into(),
+            crate::circuits::gates::Gate::or().into(),
+            crate::circuits::gates::Gate::nor().into(),
+            crate::circuits::gates::Gate::xor().into(),
+            crate::circuits::gates::Gate::xnor().into(),
+            crate::circuits::gates::not::Not.into(),
+            crate::circuits::constant::Constant::new(WireState::Bool(false)).into(),
+            crate::circuits::buffer::Buffer.into(),
+            crate::circuits::error_filter::ErrorFilter.into(),
         ];
 
-        let data_dir = directories_next::ProjectDirs::from("", "", APP_NAME)
-            .map(|proj_dirs| proj_dirs.data_dir().to_path_buf());
+        let mut loaded_blueprints = HashMap::new();
+        let mut blueprint_order = vec![];
+        let mut path = PathBuf::new();
+
+        for mut b in blueprints.drain(..) {
+            let id = b.id();
+
+            path.clear();
+            path.push(BLUEPRINT_DATA_DIR);
+            path.push(id.deref());
+            let res = fs.readfile(&path, &mut |r| {
+                let mut reader = match smoldata::reader::Reader::new(r) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        errors.push(ErrorStrings::from(
+                            eyre::Report::new(e)
+                                .wrap_err(format!("Reading blueprint data for {id}")),
+                        ));
+                        return Ok(());
+                    }
+                };
+
+                let raw = match RawValue::read(reader.read()) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        errors.push(ErrorStrings::from(
+                            eyre::Report::new(e)
+                                .wrap_err(format!("Reading blueprint data for {id}")),
+                        ));
+                        return Ok(());
+                    }
+                };
+
+                if let Err(e) = b.load_config(&raw) {
+                    errors.push(ErrorStrings::from(
+                        e.wrap_err(format!("Loading blueprint data for {id}")),
+                    ));
+                }
+
+                Ok(())
+            });
+
+            if let Err(e) = res
+                && !matches!(e.kind(), std::io::ErrorKind::NotFound)
+            {
+                errors.push(ErrorStrings::from(
+                    eyre::Report::new(e).wrap_err(format!("Reading blueprint data for {id}")),
+                ));
+            }
+
+            let b = Arc::new(RwLock::new(CircuitBlueprint::new(b)));
+            blueprint_order.push(id.clone());
+
+            assert!(
+                loaded_blueprints.insert(id, b).is_none(),
+                "dev error: multiple blueprints with same id"
+            );
+        }
 
         // let sim = data_dir.as_ref().and_then(|d| {
         //     let autosave = d.join("autosave");
@@ -127,15 +194,18 @@ impl App {
             gl: cc.gl.clone().expect("started in OpenGL context"),
             selected_item: None,
             selected_tab: None,
-            blueprints,
+            blueprints: loaded_blueprints,
+            blueprint_order,
             style: Arc::new(Style::default()),
             sim,
             editors: Default::default(),
             editor_shared: Default::default(),
             last_active_editor: None,
 
-            data_dir,
             errors,
+
+            fs,
+            egui_storage,
         }
     }
 
@@ -190,10 +260,7 @@ impl App {
                 .circuits
                 .into_iter()
                 .filter_map(|c| {
-                    let blueprint = self.blueprints.iter().find_map(|b| {
-                        let b = b.read();
-                        b.id.eq(&c.id).then(|| b.clone())
-                    });
+                    let blueprint = self.blueprints.get(&c.id).map(|b| b.read().clone());
 
                     let Some(mut blueprint) = blueprint else {
                         self.errors
@@ -277,19 +344,84 @@ impl App {
         self.editors.insert(board.uid(), Arc::downgrade(&ed));
         ed
     }
+
+    fn save(&mut self) {
+        'save_blueprints: {
+            if let Err(e) = self.fs.mkdir(BLUEPRINT_DATA_DIR.as_ref()) {
+                self.errors.push(ErrorStrings::from(
+                    eyre::Report::new(e).wrap_err("Creating blueprint data directory"),
+                ));
+                break 'save_blueprints;
+            }
+
+            let mut path = PathBuf::new();
+            for (id, b) in &self.blueprints {
+                path.clear();
+                path.push(BLUEPRINT_DATA_DIR);
+                path.push(id.deref());
+
+                let config = b.read().imp.save_config();
+                let config = match config {
+                    None => {
+                        self.fs.rmfile(&path).ok();
+                        continue;
+                    }
+                    Some(c) => c,
+                };
+
+                let res = self
+                    .fs
+                    .writefile(&path, &mut |w| smoldata::write_into(&config, w));
+
+                if let Err(e) = res {
+                    self.errors.push(ErrorStrings::from(
+                        eyre::Report::new(e).wrap_err(format!("Saving blueprint data for {id}")),
+                    ));
+                }
+            }
+        }
+
+        // if let Some(data_dir) = self.app.data_dir.as_ref().filter(|_| !self.sim_no_save) {
+        //     let autosave_path = data_dir.join("autosave");
+        //     let savestate = self.app.sim.save();
+
+        //     let res = 'save: {
+        //         let file = match File::create(autosave_path) {
+        //             Ok(v) => v,
+        //             Err(e) => break 'save Err(e),
+        //         };
+
+        //         if let Err(e) = smoldata::write_into(&savestate, file) {
+        //             break 'save Err(e);
+        //         }
+
+        //         Ok(())
+        //     };
+        //     if let Err(e) = res {
+        //         self.app.errors.push(
+        //             eyre::Report::new(e)
+        //                 .wrap_err("saving simulation state")
+        //                 .into(),
+        //         );
+        //     }
+        // }
+    }
 }
 
 pub struct DockedApp {
     dock: DockState<Tab>,
     app: App,
-    sim_no_save: bool,
+    no_save: bool,
 }
 
 impl DockedApp {
-    pub fn create(cc: &CreationContext) -> Self {
-        let dock = cc
-            .storage
-            .and_then(|s| s.get_string("dock"))
+    pub fn create(
+        cc: &CreationContext,
+        fs: Box<dyn Filesystem>,
+        egui_storage: Box<dyn Storage>,
+    ) -> Self {
+        let dock = egui_storage
+            .get_string("dock")
             .map(|s| ron::from_str::<DockState<TabSerde>>(&s));
 
         let (dock, dock_error) = match dock {
@@ -303,12 +435,12 @@ impl DockedApp {
             .map(|e| eyre::Report::new(e).wrap_err("dock loading").into())
             .collect();
 
-        let mut app = App::create(cc, errors);
+        let mut app = App::create(cc, errors, fs, egui_storage);
 
         Self {
             dock: dock.map_tabs(|s| Tab::load(s, &mut app)),
             app,
-            sim_no_save: false,
+            no_save: false,
         }
     }
 }
@@ -404,7 +536,7 @@ impl eframe::App for DockedApp {
                             );
 
                             if child_ui.button("Exit without saving").clicked() {
-                                self.sim_no_save = true;
+                                self.no_save = true;
                                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                             }
                             if child_ui.button("Clear").clicked() {
@@ -425,37 +557,18 @@ impl eframe::App for DockedApp {
         }
     }
 
-    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+    fn save(&mut self, _: &mut dyn eframe::Storage) {
+        if self.no_save {
+            return;
+        }
+
         let dock = self.dock.map_tabs(|tab| tab.save());
         let dock_str = ron::to_string(&dock);
         if let Ok(dock) = dock_str {
-            storage.set_string("dock", dock);
+            self.app.egui_storage.set_string("dock", dock);
         }
 
-        // if let Some(data_dir) = self.app.data_dir.as_ref().filter(|_| !self.sim_no_save) {
-        //     let autosave_path = data_dir.join("autosave");
-        //     let savestate = self.app.sim.save();
-
-        //     let res = 'save: {
-        //         let file = match File::create(autosave_path) {
-        //             Ok(v) => v,
-        //             Err(e) => break 'save Err(e),
-        //         };
-
-        //         if let Err(e) = smoldata::write_into(&savestate, file) {
-        //             break 'save Err(e);
-        //         }
-
-        //         Ok(())
-        //     };
-        //     if let Err(e) = res {
-        //         self.app.errors.push(
-        //             eyre::Report::new(e)
-        //                 .wrap_err("saving simulation state")
-        //                 .into(),
-        //         );
-        //     }
-        // }
+        self.app.save();
     }
 }
 

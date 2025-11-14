@@ -3,7 +3,7 @@ use std::{any::{Any, TypeId}, sync::Arc};
 use eframe::egui::{
     vec2, Color32, CursorIcon, DragValue, PointerButton, Rect, Sense, Stroke, StrokeKind, Ui, Widget
 };
-use smoldata::{raw::RawValue, SmolReadWrite};
+use smoldata::{raw::RawValue, SmolRead, SmolReadWrite, SmolWrite};
 
 use crate::{
     circuits::{props::{PropertyInfo, PropertyValue}, PropertyChangedParams},
@@ -18,10 +18,15 @@ use super::{
     CircuitTransform, CircuitTransformSupport, PinDescription, PinType, TransformSupport,
 };
 
-#[derive(Default, Clone)]
-pub struct Button {
+#[derive(Default, Clone, SmolReadWrite)]
+pub struct ButtonConfig {
     width: ButtonSize,
     height: ButtonSize,
+}
+
+#[derive(Default, Clone)]
+pub struct Button {
+    config: ButtonConfig
 }
 
 #[derive(Default, SmolReadWrite)]
@@ -46,16 +51,16 @@ impl CircuitImpl for Button {
     }
 
     fn size(&self, _: CircuitTransform) -> Vec2usize {
-        [self.width.0, self.height.0].into()
+        [self.config.width.0, self.config.height.0].into()
     }
 
     fn occupies_quarter(&self, _: CircuitTransform, qpos: Vec2usize) -> bool {
-        qpos.x >= 1 && qpos.x <= (self.width.0 - 1) * 2 && qpos.y >= 1 && qpos.y <= (self.height.0 - 1) * 2
+        qpos.x >= 1 && qpos.x <= (self.config.width.0 - 1) * 2 && qpos.y >= 1 && qpos.y <= (self.config.height.0 - 1) * 2
     }
 
     fn describe_pins(&self, _: CircuitTransform) -> Box<[PinDescription]> {
         [PinDescription {
-            pos: [self.width.0 - 1, (self.height.0 - 1) / 2].into(),
+            pos: [self.config.width.0 - 1, (self.config.height.0 - 1) / 2].into(),
             id: "out".into(),
             display_name: "Out".into(),
             dir: Some(Direction8::Right),
@@ -111,7 +116,7 @@ impl CircuitImpl for Button {
             color: Color32::from_gray(48),
         };
 
-        let diameter = self.width.0.min(self.height.0) as f32 - 1.5;
+        let diameter = self.config.width.0.min(self.config.height.0) as f32 - 1.5;
 
         // render.paint.rect(ctx.rect, rounding, color, stroke);
         render.paint.circle(
@@ -172,7 +177,12 @@ impl CircuitImpl for Button {
     }
 
     fn save_config(&self) -> Option<RawValue> {
-        todo!()
+        RawValue::write_object(&self.config).ok()
+    }
+
+    fn load_config(&mut self, data: &RawValue) -> Result<(), eyre::Report> {
+        self.config = data.read_object()?;
+        Ok(())
     }
 
     fn save_state(
@@ -210,8 +220,8 @@ impl CircuitImpl for Button {
 
     fn get_property_value<'a>(&'a mut self, id: &str) -> Option<&'a mut dyn PropertyValue> {
         match id {
-            "width" => Some(&mut self.width),
-            "height" => Some(&mut self.height),
+            "width" => Some(&mut  self.config.width),
+            "height" => Some(&mut self.config.height),
             _ => None,
         }
     }
@@ -264,5 +274,17 @@ impl PropertyValue for ButtonSize {
         } else {
             None
         }
+    }
+}
+
+impl SmolRead for ButtonSize {
+    fn read(reader: smoldata::reader::ValueReader) -> smoldata::reader::ReadResult<Self> {
+        Ok(Self(<usize as SmolRead>::read(reader)?.max(3)))
+    }
+}
+
+impl SmolWrite for ButtonSize {
+    fn write(&self, writer: smoldata::writer::ValueWriter) -> std::io::Result<()> {
+        <usize as SmolWrite>::write(&self.0, writer)
     }
 }

@@ -1,6 +1,7 @@
 use std::{ops::Deref, sync::Arc};
 
 use app::DockedApp;
+use directories_next::ProjectDirs;
 use eframe::{
     egui::{Align2, Color32, PaintCallback, PaintCallbackInfo, Painter, Rect, Ui},
     egui_glow,
@@ -28,10 +29,11 @@ pub mod vertex_renderer;
 
 #[macro_use]
 pub mod pool;
-pub mod state;
-pub mod simulation;
-pub mod path;
 pub mod io;
+pub mod path;
+pub mod simulation;
+pub mod state;
+pub mod storage;
 
 pub const CHUNK_SIZE: usize = 16;
 pub const WIRE_WIDTH: f32 = 0.2;
@@ -39,15 +41,36 @@ pub const WIRE_POINT_WIDTH: f32 = 0.35;
 pub const BIG_WIRE_POINT_WIDTH: f32 = 0.65;
 
 fn main() -> Result<(), eframe::Error> {
+    let project_dirs =
+        Arc::new(ProjectDirs::from("", "", "cuprous").expect("Could not fetch ProjectDirs"));
+
+    let fs = storage::native::NativeFilesystem::new(project_dirs.data_dir().into());
+
+    let egui_dir_fs = storage::FilesystemDirectory::new(fs.clone(), "egui".into())
+        .expect("invalid egui directory");
+
+    // TODO: patch egui to accept dyn Storage instead
+    let egui_app_path = project_dirs.data_dir().join("egui/app.ron");
+
+    let egui_storage = storage::EpiStorageAdapter::new(egui_dir_fs);
+
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default().with_title("cuprous"),
+        persistence_path: Some(egui_app_path),
+        persist_window: true,
         ..Default::default()
     };
 
     eframe::run_native(
-        app::APP_NAME,
+        "cuprous-dev",
         options,
-        Box::new(|cc| Ok(Box::new(DockedApp::create(cc)))),
+        Box::new(|cc| {
+            Ok(Box::new(DockedApp::create(
+                cc,
+                Box::new(fs),
+                Box::new(egui_storage),
+            )))
+        }),
     )
 }
 
@@ -101,7 +124,7 @@ impl Default for Style {
                 r#false: Color32::from_rgb(10, 120, 10),
                 r#true: Color32::from_rgb(30, 255, 30),
                 error: Color32::from_rgb(255, 30, 30),
-            }
+            },
         }
     }
 }
@@ -152,15 +175,15 @@ impl Screen {
         )
     }
 
-    pub fn world_to_screen_tile_rect(&self, pos: impl Into<Vec2isize>, size: impl Into<Vec2usize>) -> Rect {
-
+    pub fn world_to_screen_tile_rect(
+        &self,
+        pos: impl Into<Vec2isize>,
+        size: impl Into<Vec2usize>,
+    ) -> Rect {
         let screen_pos = self.world_to_screen_tile(pos.into());
         let screen_size = size.into().convert(|v| v as f32) * self.scale;
 
-        Rect::from_min_size(
-            screen_pos.into(),
-            screen_size.into(),
-        )
+        Rect::from_min_size(screen_pos.into(), screen_size.into())
     }
 }
 
@@ -471,7 +494,6 @@ impl Direction8 {
     }
 }
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, SmolReadWrite, Serialize, Deserialize)]
 pub enum Direction4 {
     Up,
@@ -482,12 +504,7 @@ pub enum Direction4 {
 
 #[allow(dead_code)]
 impl Direction4 {
-    pub const ALL: [Self; 4] = [
-        Self::Up,
-        Self::Right,
-        Self::Down,
-        Self::Left,
-    ];
+    pub const ALL: [Self; 4] = [Self::Up, Self::Right, Self::Down, Self::Left];
 
     pub const fn into_dir_isize(self) -> Vec2isize {
         let [x, y] = match self {
@@ -570,7 +587,7 @@ impl Direction4 {
             Self::Left => PI,
         }
     }
-    
+
     fn is_vertical(self) -> bool {
         match self {
             Direction4::Up => true,

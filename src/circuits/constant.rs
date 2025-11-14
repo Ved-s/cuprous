@@ -216,7 +216,7 @@ impl CircuitImpl for Constant {
             &font,
         );
 
-        let galley = render.paint.ui.fonts(|f| f.layout_job(layout));
+        let galley = render.paint.ui.fonts_mut(|f| f.layout_job(layout));
 
         if icon {
             let text_pos =
