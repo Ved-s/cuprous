@@ -3,7 +3,7 @@ use std::{
     mem::discriminant,
 };
 
-use eframe::egui::{ComboBox, Ui};
+use eframe::egui::{ComboBox, Ui, UiKind};
 
 use crate::{state::wires::WireState, str::ArcStaticStr};
 
@@ -72,7 +72,8 @@ impl PropertyValue for WireState {
                     let checked = state_loose_eq(v, self);
                     if ui.selectable_label(checked, state_name(v)).clicked() && !checked {
                         new = Some(v.clone());
-                        ui.close_menu();
+
+                        ui.close_kind(UiKind::Menu);
                     }
                 }
             });

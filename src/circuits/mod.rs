@@ -350,7 +350,7 @@ impl<'a> CircuitRenderingContext<'a> {
             Some(a) => norm.rotated(a, 0.5),
         };
 
-        self.screen_rect.lerp_inside(norm.into()).into()
+        self.screen_rect.lerp_inside(norm).into()
     }
 
     pub fn world_size(&self) -> Vec2usize {

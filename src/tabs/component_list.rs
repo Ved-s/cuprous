@@ -186,8 +186,8 @@ fn wire_icon(rect: Rect, ui: &mut Ui) {
 
     let color = Color32::DARK_GREEN;
 
-    let rect1 = Rect::from_center_size(rect.lerp_inside([0.2, 0.2].into()), rect.size() * 0.3);
-    let rect2 = Rect::from_center_size(rect.lerp_inside([0.8, 0.8].into()), rect.size() * 0.3);
+    let rect1 = Rect::from_center_size(rect.lerp_inside([0.2, 0.2]), rect.size() * 0.3);
+    let rect2 = Rect::from_center_size(rect.lerp_inside([0.8, 0.8]), rect.size() * 0.3);
 
     let painter = ui.painter();
 

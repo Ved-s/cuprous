@@ -211,6 +211,12 @@ impl<T: std::ops::Neg<Output = O>, O> std::ops::Neg
     }
 }
 
+impl<'a, T: Clone> From<&'a Vector2<T>> for Vector2<T> {
+    fn from(value: &'a Vector2<T>) -> Self {
+        value.clone()
+    }
+}
+
 impl<T: Copy> From<T> for Vector2<T> {
     fn from(value: T) -> Self {
         Self::single_value(value)
@@ -221,6 +227,39 @@ impl<T> From<[T; 2]> for Vector2<T> {
     fn from(value: [T; 2]) -> Self {
         let [x, y] = value;
         Self::new(x, y)
+    }
+}
+
+impl<'a, T: Clone> From<&'a [T; 2]> for Vector2<T> {
+    fn from(value: &'a [T; 2]) -> Self {
+        Self::new(value[0].clone(), value[1].clone())
+    }
+}
+impl<'a, T: Clone> TryFrom<&'a [T]> for Vector2<T> {
+    type Error = ();
+
+    fn try_from(value: &'a [T]) -> Result<Self, Self::Error> {
+        if value.len() != 2 {
+            Err(())
+        }
+        else {
+            Ok(Self::new(value[0].clone(), value[1].clone()))
+        }
+    }
+}
+
+impl<T> TryFrom<Vec<T>> for Vector2<T> {
+    type Error = Vec<T>;
+
+    fn try_from(mut value: Vec<T>) -> Result<Self, Self::Error> {
+        if value.len() != 2 {
+            Err(value)
+        }
+        else {
+            let y = value.pop().unwrap();
+            let x = value.pop().unwrap();
+            Ok(Self::new(x, y))
+        }
     }
 }
 
@@ -295,6 +334,20 @@ impl<T> std::convert::AsMut<[T; 2]> for Vector2<T> {
     }
 }
 
+impl<T> std::ops::Deref for Vector2<T> {
+    type Target = [T; 2];
+    
+    fn deref(&self) -> &Self::Target {
+        self.as_ref()
+    }
+}
+
+impl<T> std::ops::DerefMut for Vector2<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.as_mut()
+    }
+}
+
 impl<T> std::convert::AsRef<[T]> for Vector2<T> {
     fn as_ref(&self) -> &[T] {
         AsRef::<[T; 2]>::as_ref(self)
@@ -306,6 +359,7 @@ impl<T> std::convert::AsMut<[T]> for Vector2<T> {
         AsMut::<[T; 2]>::as_mut(self)
     }
 }
+
 impl<T> std::ops::Index<usize> for Vector2<T> {
     type Output = T;
 
@@ -368,38 +422,12 @@ impl<'de, T: Deserialize<'de> + Zero> Visitor<'de> for Vector2Visitor<T> {
 
 impl<T: geo_nd::Float + Default> geo_nd::Vector<T, 2> for Vector2<T>
 {
-    fn from_array(data: [T; 2]) -> Self {
-        data.into()
-    }
-
-    fn zero() -> Self {
-        Zero::zero()
-    }
-
-    fn into_array(self) -> [T; 2] {
-        *self.as_ref()
-    }
-
     fn is_zero(&self) -> bool {
         Zero::is_zero(self)
     }
 
-    fn set_zero(&mut self) {
-        Zero::set_zero(self)
-    }
-
     fn reduce_sum(&self) -> T {
         self.x + self.y
-    }
-
-    fn mix(self, other: &Self, t: T) -> Self {
-        let x = self.x + (other.x - self.x) * t;
-        let y = self.y + (other.y - self.y) * t;
-        Self::new(x, y)
-    }
-
-    fn dot(&self, other: &Self) -> T {
-        self.x * other.x + self.y * other.y
     }
 }
 
