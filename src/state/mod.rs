@@ -4,19 +4,22 @@ use std::{
     time::Instant,
 };
 
+use parking_lot::Mutex;
+
 use crate::{
+    Style,
     board::{Board, Wire},
     circuits::{CircuitPin, PinType, UntypedCircuitCtx},
+    io::savestate,
     pool::get_pooled,
     state::{
-        circuits::BoardCircuitsState,
+        circuits::{BoardCircuitsState, CircuitState},
         sim::{
-            BoardSimulationState, CircuitUpdateTask, InputUpdateTask, UpdateTask, UpdateTaskPool,
-            WireUpdateTask,
+            BoardSimulationState, CircuitUpdateTask, ExternalTaskPool, InputUpdateTask, UpdateTask,
+            UpdateTaskPool, WireUpdateTask,
         },
         wires::{BoardWiresState, WireState},
     },
-    Style,
 };
 
 pub mod circuits;
@@ -68,107 +71,132 @@ impl BoardState {
         self.sim.reset();
     }
 
-    /*
-    // pub fn save(&self) -> savestate::BoardState {
-    //     let wires = self.board.wires().read();
-    //     let circuits = self.board.circuits().read();
+    pub fn save(&mut self) -> savestate::BoardState {
+        let board = self
+            .board
+            .upgrade()
+            .expect("tried to save state without attached board");
 
-    //     savestate::BoardState {
-    //         wires: self
-    //             .wires
-    //             .read()
-    //             .iter()
-    //             .enumerate()
-    //             .map(|(i, v)| match wires.get(i).is_some() {
-    //                 true => v.clone(),
-    //                 false => WireState::None,
-    //             })
-    //             .collect(),
-    //         circuits: self
-    //             .circuits
-    //             .read()
-    //             .iter()
-    //             .enumerate()
-    //             .map(|(i, v)| {
-    //                 let circuit = circuits.get(i)?;
-    //                 let pins = circuit.pins.read();
+        let wires = board.wires().read();
+        let circuits = board.circuits().read();
 
-    //                 Some(savestate::CircuitState {
-    //                     pins: v
-    //                         .pins
-    //                         .iter()
-    //                         .enumerate()
-    //                         .take(pins.len())
-    //                         .map(|(i, v)| (pins[i].desc.id.clone(), v.clone()))
-    //                         .collect(),
-    //                     internal: {
-    //                         let int = v.internal.read();
-    //                         int.as_ref().and_then(|int| {
-    //                             let imp = circuit.imp.read();
-    //                             imp.imp.save_state(circuit, &imp.instance, int)
-    //                         })
-    //                     },
-    //                 })
-    //             })
-    //             .collect(),
-    //         sim: self.sim.read().save(),
-    //     }
-    // }
+        savestate::BoardState {
+            uid: self.id,
+            wires: self
+                .wires
+                .wires
+                .iter()
+                .enumerate()
+                .map(|(i, v)| match wires.get(i).is_some() {
+                    true => v.clone(),
+                    false => WireState::None,
+                })
+                .collect(),
+            circuits: self
+                .circuits
+                .inner
+                .inner
+                .iter()
+                .enumerate()
+                .map(|(i, v)| {
+                    let v = v.as_ref()?;
+                    let circuit = circuits.get(i)?;
+                    let pins = circuit.pins.read();
 
-    // fn load_stage1_shallow(&self, data: &savestate::BoardState) {
-    //     self.wires.write().clone_from(&data.wires);
+                    Some(savestate::CircuitState {
+                        pins: v
+                            .pins
+                            .iter()
+                            .enumerate()
+                            .take(pins.len())
+                            .map(|(i, v)| (pins[i].desc.id.clone(), v.clone()))
+                            .collect(),
+                        internal: {
+                            v.internal.as_ref().and_then(|int| {
+                                let imp = circuit.imp.read();
+                                imp.imp.save_state(circuit, &imp.instance, int)
+                            })
+                        },
+                    })
+                })
+                .collect(),
+            sim: self.sim.save(),
+        }
+    }
 
-    //     self.sim.write().load(&data.sim);
-    // }
+    pub fn load_stage1_shallow(&mut self, data: &mut savestate::BoardState) {
+        self.wires.wires.clone_from(&data.wires);
 
-    // fn load_stage2_circuits(&self, data: &savestate::BoardState) {
-    //     let board_circuits = self.board.circuits();
-    //     let board_circuits = board_circuits.read();
-    //     let mut circuits = self.circuits.write();
-    //     for (i, circuit_data) in data.circuits.iter().enumerate() {
-    //         let Some(circuit_data) = circuit_data else {
-    //             continue;
-    //         };
+        self.sim.load(std::mem::take(&mut data.sim));
+    }
 
-    //         let board_circuit = board_circuits.get(i).expect("loaded circuits");
+    pub fn load_stage2_circuits(&mut self, data: &mut savestate::BoardState) {
+        let board = self
+            .board
+            .upgrade()
+            .expect("tried to load state without attached board");
 
-    //         let pins = board_circuit.pins.read().iter().map(|p| {
-    //             circuit_data.pins.get(&p.desc.id).cloned().unwrap_or_default()
-    //         }).collect();
+        let board_circuits = board.circuits();
+        let board_circuits = board_circuits.read();
+        for (i, circuit_data) in data.circuits.iter().enumerate() {
+            let Some(circuit_data) = circuit_data else {
+                continue;
+            };
 
-    //         let circuit = CircuitState {
-    //             pins,
-    //             internal: Default::default(),
-    //         };
+            let board_circuit = board_circuits.get(i).expect("loaded circuits");
 
-    //         circuits.set(i, circuit);
-    //     };
-    // }
+            let pins = board_circuit
+                .pins
+                .read()
+                .iter()
+                .map(|p| {
+                    circuit_data
+                        .pins
+                        .get(&p.desc.id)
+                        .cloned()
+                        .unwrap_or(WireState::None)
+                })
+                .collect();
 
-    // fn load_stage3_circuit_states(&self, data: &savestate::BoardState) {
-    //     let board_circuits = self.board.circuits();
-    //     let board_circuits = board_circuits.read();
-    //     let circuits = self.circuits.read();
-    //     for (i, circuit_data) in data.circuits.iter().enumerate() {
-    //         let Some(circuit_data) = circuit_data else {
-    //             continue;
-    //         };
+            let circuit = CircuitState {
+                pins,
+                internal: Default::default(),
+            };
 
-    //         let Some(state_data) = &circuit_data.internal else {
-    //             continue;
-    //         };
+            self.circuits.inner.set(i, circuit);
+        }
+    }
 
-    //         let board_circuit = board_circuits.get(i).expect("loaded circuits");
-    //         let circuit = circuits.get(i).expect("loaded circuits");
+    pub fn load_stage3_circuit_states(&mut self, data: &mut savestate::BoardState) {
+        let board = self
+            .board
+            .upgrade()
+            .expect("tried to load state without attached board");
 
-    //         let imp = board_circuit.imp.read();
+        let board_circuits = board.circuits();
+        let board_circuits = board_circuits.read();
+        for (i, circuit_data) in data.circuits.iter().enumerate() {
+            let Some(circuit_data) = circuit_data else {
+                continue;
+            };
 
-    //         // todo: errors
-    //         let state = imp.imp.load_state(board_circuit, &imp.instance, state_data).ok();
-    //         *circuit.internal.write() = state;
-    //     };
-    // }
-    */
+            let Some(state_data) = &circuit_data.internal else {
+                continue;
+            };
+
+            let board_circuit = board_circuits.get(i).expect("loaded circuits");
+            let circuit = self.circuits.inner.get_mut(i).expect("loaded circuits");
+
+            let imp = board_circuit.imp.read();
+
+            // todo: errors
+            let state = imp
+                .imp
+                .load_state(board_circuit, &imp.instance, state_data)
+                .ok();
+            circuit.internal = state;
+        }
+    }
 
     pub fn pin_color(&self, pin: &CircuitPin, style: &Style) -> eframe::egui::Color32 {
         let connected_wire = pin.wire.read().clone();
@@ -187,8 +215,14 @@ impl BoardState {
         self.sim.add_tasks(tasks, false, None);
     }
 
+    pub fn set_external_tasks(&mut self, external_tasks: Arc<Mutex<ExternalTaskPool>>) {
+        self.sim.set_external_tasks(external_tasks);
+    }
+
     pub fn run(&mut self, task_limit: &mut usize) -> Option<Instant> {
         let mut tasks = get_pooled::<UpdateTaskPool>();
+
+        self.sim.flush_tasks();
 
         'main_loop: while *task_limit > 0 {
             let Some((task, meta)) = self.sim.next_task() else {

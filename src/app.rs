@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    io::ErrorKind,
     ops::{Deref, Not},
     path::PathBuf,
     sync::{Arc, Weak},
@@ -19,7 +20,7 @@ use crate::{
     io::copystate,
     simulation::SimulationCtx,
     state::wires::WireState,
-    storage::Filesystem,
+    storage::{Filesystem, ItemType},
     str::ArcStaticStr,
     tabs::{SafeTabType, Tab, TabSerde, TabType, TabViewer},
     vector::{Vec2isize, Vec2usize},
@@ -28,10 +29,11 @@ use crate::{
 pub const COPY_PASTE_BOARD_ITEMS_PREFIX: &str = "cuprousbrditms:";
 
 const BLUEPRINT_DATA_DIR: &str = "blueprint_data";
+const PROJECT_AUTOSAVE_DIR: &str = "project_autosave";
 
 pub struct ErrorStrings {
-    main: String,
-    sub: String,
+    pub main: String,
+    pub sub: String,
 }
 
 impl<T: AsRef<dyn std::error::Error>> From<T> for ErrorStrings {
@@ -160,35 +162,32 @@ impl App {
             );
         }
 
-        // let sim = data_dir.as_ref().and_then(|d| {
-        //     let autosave = d.join("autosave");
+        let sim_loadable = match fs.stat(PROJECT_AUTOSAVE_DIR.as_ref()) {
+            Err(e) if matches!(e.kind(), ErrorKind::NotFound) => false,
+            Ok(ItemType::Directory) => true,
+            Ok(_) => {
+                errors.push(ErrorStrings {
+                    main: format!("Failed to load autosave from {PROJECT_AUTOSAVE_DIR}"),
+                    sub: "Path is not a directory".into(),
+                });
+                false
+            }
+            Err(e) => {
+                errors.push(ErrorStrings::from(eyre::Report::new(e).wrap_err(format!(
+                    "Failed to load autosave from {PROJECT_AUTOSAVE_DIR}"
+                ))));
+                false
+            }
+        };
 
-        //     let file = match File::open(autosave) {
-        //         Ok(f) => f,
-        //         Err(e) if matches!(e.kind(), std::io::ErrorKind::NotFound) => return None,
-        //         Err(e) => return Some(Err(eyre::Report::new(e).wrap_err("opening autosave"))),
-        //     };
-
-        //     Some(
-        //         smoldata::read_from(file)
-        //             .map(|d| SimulationCtx::load(&d, &blueprints))
-        //             .wrap_err("loading simulation state"),
-        //     )
-        // });
-
-        // let sim = None;
-
-        // let sim = sim.unwrap_or_else(|| Ok(SimulationCtx::new()));
-
-        // let sim = match sim {
-        //     Ok(s) => s,
-        //     Err(e) => {
-        //         errors.push(e.into());
-        //         SimulationCtx::new()
-        //     }
-        // };
-
-        let sim = SimulationCtx::new();
+        let sim = if !sim_loadable {
+            SimulationCtx::new()
+        } else {
+            let mut save_project_dir =
+                crate::storage::FilesystemDirectory::new(&mut *fs, PROJECT_AUTOSAVE_DIR.into())
+                    .unwrap();
+            SimulationCtx::load(&mut save_project_dir, &loaded_blueprints, &mut errors)
+        };
 
         Self {
             gl: cc.gl.clone().expect("started in OpenGL context"),
@@ -381,30 +380,21 @@ impl App {
             }
         }
 
-        // if let Some(data_dir) = self.app.data_dir.as_ref().filter(|_| !self.sim_no_save) {
-        //     let autosave_path = data_dir.join("autosave");
-        //     let savestate = self.app.sim.save();
+        'save_project: {
+            if let Err(e) = self.fs.mkdir(PROJECT_AUTOSAVE_DIR.as_ref()) {
+                self.errors.push(ErrorStrings::from(
+                    eyre::Report::new(e).wrap_err("Project autosave directory"),
+                ));
+                break 'save_project;
+            }
 
-        //     let res = 'save: {
-        //         let file = match File::create(autosave_path) {
-        //             Ok(v) => v,
-        //             Err(e) => break 'save Err(e),
-        //         };
-
-        //         if let Err(e) = smoldata::write_into(&savestate, file) {
-        //             break 'save Err(e);
-        //         }
-
-        //         Ok(())
-        //     };
-        //     if let Err(e) = res {
-        //         self.app.errors.push(
-        //             eyre::Report::new(e)
-        //                 .wrap_err("saving simulation state")
-        //                 .into(),
-        //         );
-        //     }
-        // }
+            let mut save_project_dir = crate::storage::FilesystemDirectory::new(
+                &mut *self.fs,
+                PROJECT_AUTOSAVE_DIR.into(),
+            )
+            .unwrap();
+            self.sim.save(&mut save_project_dir, &mut self.errors);
+        }
     }
 }
 

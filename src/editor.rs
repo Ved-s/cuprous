@@ -85,10 +85,14 @@ impl BoardEditor {
         for wire in board_wires.iter() {
             let points = wire.points.read();
 
-            for (pos, point) in points.iter() {
+            for (pos, _) in points.iter() {
                 let pos = *pos;
 
                 tiles.set_wire(pos, Some(wire.clone()));
+            }
+
+            for (pos, point) in points.iter() {
+                let pos = *pos;
 
                 let abs_coord_diff_pos = pos.x.abs_diff(pos.y);
                 let abs_coord_diff_neg = (-pos.x).abs_diff(pos.y);

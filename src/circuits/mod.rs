@@ -1,5 +1,6 @@
 use std::{
     any::Any,
+    collections::HashMap,
     f32::consts::TAU,
     ops::Deref,
     sync::{Arc, Weak},
@@ -56,10 +57,9 @@ impl Circuit {
         id: usize,
         board: &Arc<Board>,
         circuit_data: &savestate::Circuit,
-        blueprints: &[Arc<RwLock<CircuitBlueprint>>],
+        blueprints: &HashMap<ArcStaticStr, Arc<RwLock<CircuitBlueprint>>>,
     ) -> Circuit {
-        let blueprint = blueprints.iter().find(|b| b.read().id == circuit_data.id);
-        let Some(blueprint) = blueprint else {
+        let Some(blueprint) = blueprints.get(&circuit_data.id) else {
             todo!("unloaded circuit");
         };
 

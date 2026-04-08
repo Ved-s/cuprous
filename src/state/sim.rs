@@ -1,11 +1,13 @@
 use std::{
     collections::VecDeque,
     hash::{BuildHasher, DefaultHasher, Hasher, RandomState},
+    sync::Arc,
 };
 
+use parking_lot::Mutex;
 use smoldata::SmolReadWrite;
 
-use crate::pool::{get_pooled, Pooled};
+use crate::pool::{Pooled, get_pooled};
 
 #[derive(Default)]
 pub struct UpdateTaskPool(Vec<UpdateTask>);
@@ -17,6 +19,10 @@ impl UpdateTaskPool {
 
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
     }
 
     pub fn add_wire_task(&mut self, id: usize, force_pin_updates: bool) {
@@ -121,6 +127,56 @@ impl UpdateTaskPool {
     }
 }
 
+enum UpdateTaskSeparated {
+    Task(UpdateTask),
+    Separator,
+}
+
+#[derive(Default)]
+pub struct ExternalTaskPool(VecDeque<UpdateTaskSeparated>);
+
+impl ExternalTaskPool {
+    pub fn add_tasks(&mut self, tasks: &mut dyn Iterator<Item = UpdateTask>) {
+        if !self.0.is_empty() {
+            self.0.push_back(UpdateTaskSeparated::Separator);
+        }
+        self.0.extend(tasks.map(UpdateTaskSeparated::Task));
+    }
+
+    pub fn next_batch(&mut self) -> Option<ExternalTaskPoolBatch<'_>> {
+        if self.0.is_empty() {
+            None
+        } else {
+            Some(ExternalTaskPoolBatch(Some(&mut self.0)))
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
+}
+
+pub struct ExternalTaskPoolBatch<'a>(Option<&'a mut VecDeque<UpdateTaskSeparated>>);
+
+impl Iterator for ExternalTaskPoolBatch<'_> {
+    type Item = UpdateTask;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let item = self.0.as_deref_mut()?.pop_front();
+        match item {
+            Some(UpdateTaskSeparated::Separator) | None => {
+                self.0 = None;
+                None
+            }
+            Some(UpdateTaskSeparated::Task(task)) => Some(task),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Hash, PartialEq, Eq, SmolReadWrite)]
 pub struct DropCircuitTask {
     pub id: usize,
@@ -146,7 +202,7 @@ pub struct CircuitUpdateTask {
     pub changed_pin: Option<usize>,
 }
 
-#[derive(Clone, Copy, Hash, PartialEq, Eq)]
+#[derive(Clone, Copy, Hash, PartialEq, Eq, SmolReadWrite)]
 pub enum UpdateTask {
     Wire(WireUpdateTask),
     Circuit(CircuitUpdateTask),
@@ -189,6 +245,8 @@ pub struct BoardSimulationState {
     next_tasks: VecDeque<Pooled<UpdateTaskPool>>,
     current_epoch: usize,
     hasher: DefaultHasher,
+
+    external_tasks: Option<Arc<Mutex<ExternalTaskPool>>>,
 }
 
 impl BoardSimulationState {
@@ -198,19 +256,21 @@ impl BoardSimulationState {
             next_tasks: Default::default(),
             current_epoch: 0,
             hasher: RandomState::new().build_hasher(),
+
+            external_tasks: None,
         }
     }
-    // fn save(&self) -> savestate::BoardStateSimulation {
-    //     savestate::BoardStateSimulation {
-    //         wires: self.wires.iter().cloned().collect(),
-    //         circuits: self.circuits.iter().cloned().collect(),
-    //     }
-    // }
 
-    // fn load(&mut self, data: &savestate::BoardStateSimulation) {
-    //     self.wires = data.wires.iter().cloned().collect();
-    //     self.circuits = data.circuits.iter().cloned().collect();
-    // }
+    pub fn flush_tasks(&mut self) {
+        let Some(ext) = self.external_tasks.clone() else {
+            return;
+        };
+
+        let mut ext = ext.lock();
+        while let Some(mut batch) = ext.next_batch() {
+            self.add_tasks(&mut batch, false, None);
+        }
+    }
 
     pub fn next_task(&mut self) -> Option<(UpdateTask, UpdateTaskMetadata)> {
         loop {
@@ -221,6 +281,8 @@ impl BoardSimulationState {
                 };
                 break Some((task, meta));
             }
+
+            self.flush_tasks();
 
             if let Some(mut next) = self.next_tasks.pop_front() {
                 self.current_epoch = self.current_epoch.wrapping_add(1);
@@ -245,11 +307,7 @@ impl BoardSimulationState {
             meta.map(|m| {
                 let offset = if m.can_be_a_bit_late {
                     self.hasher.write_usize(self.current_epoch);
-                    if self.hasher.finish() & 1 == 0 {
-                        2
-                    } else {
-                        1
-                    }
+                    if self.hasher.finish() & 1 == 0 { 2 } else { 1 }
                 } else {
                     1
                 };
@@ -318,6 +376,60 @@ impl BoardSimulationState {
         self.current_tasks.clear();
         self.next_tasks.clear();
         self.current_epoch = 0;
+    }
+
+    pub fn set_external_tasks(&mut self, external_tasks: Arc<Mutex<ExternalTaskPool>>) {
+        self.external_tasks = Some(external_tasks);
+    }
+
+    pub fn save(&mut self) -> crate::io::savestate::BoardStateSimulation {
+        self.flush_tasks();
+
+        let mut cap = self.current_tasks.len();
+        for pool in &self.next_tasks {
+            if cap > 0 {
+                cap += 1;
+            }
+            cap += pool.len();
+        }
+
+        let mut vec = Vec::with_capacity(cap);
+        vec.extend(self.current_tasks.iter().copied().map(Some));
+
+        for pool in &self.next_tasks {
+            if !vec.is_empty() {
+                vec.push(None);
+            }
+            vec.extend(pool.iter().map(Some));
+        }
+
+        crate::io::savestate::BoardStateSimulation { tasks: vec }
+    }
+
+    pub fn load(&mut self, sim: crate::io::savestate::BoardStateSimulation) {
+        self.current_epoch = 0;
+        self.current_tasks.clear();
+        self.next_tasks.clear();
+
+        let mut iter = sim.tasks.into_iter();
+
+        while let Some(Some(task)) = iter.next() {
+            self.current_tasks.push_back(task);
+        }
+
+        let mut iter = iter.peekable();
+        loop {
+            if iter.peek().is_none() {
+                break;
+            }
+
+            let mut pool = get_pooled::<UpdateTaskPool>();
+
+            while let Some(Some(task)) = iter.next() {
+                pool.add(task);
+            }
+            self.next_tasks.push_back(pool);
+        }
     }
 }
 

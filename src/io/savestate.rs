@@ -1,18 +1,18 @@
 use std::collections::HashMap;
 
-use smoldata::{raw::RawValue, SmolReadWrite};
+use smoldata::{SmolReadWrite, raw::RawValue};
 
-use crate::{state::{sim::{CircuitUpdateTask, WireUpdateTask}, wires::WireState}, str::ArcStaticStr, vector::Vec2isize, Direction4};
-
-#[derive(SmolReadWrite)]
-pub struct Simulation {
-    pub boards: Vec<Board>,
-    pub states: Vec<BoardState>,
-}
+use crate::{
+    Direction4,
+    state::{sim::UpdateTask, wires::WireState},
+    str::ArcStaticStr,
+    vector::Vec2isize,
+};
 
 #[derive(SmolReadWrite)]
 pub struct Board {
     pub uid: u128,
+    pub name: String,
     pub wires: Vec<Option<Wire>>,
     pub circuits: Vec<Option<Circuit>>,
     pub states: Vec<u128>,
@@ -42,6 +42,7 @@ pub struct Circuit {
 
 #[derive(SmolReadWrite)]
 pub struct BoardState {
+    pub uid: u128,
     pub wires: Vec<WireState>,
     pub circuits: Vec<Option<CircuitState>>,
     pub sim: BoardStateSimulation,
@@ -53,8 +54,7 @@ pub struct CircuitState {
     pub internal: Option<RawValue>,
 }
 
-#[derive(SmolReadWrite)]
+#[derive(Default, SmolReadWrite)]
 pub struct BoardStateSimulation {
-    pub wires: Vec<WireUpdateTask>,
-    pub circuits: Vec<CircuitUpdateTask>,
+    pub tasks: Vec<Option<UpdateTask>>,
 }

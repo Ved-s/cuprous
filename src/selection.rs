@@ -52,7 +52,9 @@ impl<I: SelectionImpl> Selection<I> {
         screen: Screen,
         active: bool,
     ) {
-        if let Some(drag) = &self.drag_state && interaction.id != drag.interaction_id {
+        if let Some(drag) = &self.drag_state
+            && interaction.id != drag.interaction_id
+        {
             return;
         }
 
@@ -119,7 +121,7 @@ impl<I: SelectionImpl> Selection<I> {
 
     fn stop_drag(&mut self) {
         self.drag_state = None;
-    
+
         match self.exclude {
             true => {
                 self.selection.retain(|i| !self.change.contains(i));
@@ -130,9 +132,11 @@ impl<I: SelectionImpl> Selection<I> {
             }
         };
     }
-    
+
     pub fn end_of_frame(&mut self) {
-        if let Some(drag) = &mut self.drag_state && !drag.seen_this_frame {
+        if let Some(drag) = &mut self.drag_state
+            && !drag.seen_this_frame
+        {
             self.stop_drag();
         }
     }
@@ -191,7 +195,7 @@ impl<I: SelectionImpl> Selection<I> {
             false => false,
         }
     }
-    
+
     pub fn update_counter(&self) -> usize {
         self.update_counter
     }

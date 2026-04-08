@@ -7,13 +7,22 @@ use parking_lot::RwLock;
 use smoldata::raw::RawValue;
 
 use crate::{
+    Direction4, Direction4HalfArray,
     circuits::{
-        Circuit, CircuitBlueprint, CircuitImplData, CircuitInfo, CircuitPin, CircuitTransform, TransformSupport,
-    }, containers::FixedVec, io::savestate, simulation::{SimulationCtx, SimulationStateData}, state::sim::UpdateTaskPool, vector::Vec2isize, Direction4, Direction4HalfArray
+        Circuit, CircuitBlueprint, CircuitImplData, CircuitInfo, CircuitPin, CircuitTransform,
+        TransformSupport,
+    },
+    containers::FixedVec,
+    io::savestate,
+    simulation::{SimulationCtx, SimulationStateData},
+    state::sim::UpdateTaskPool,
+    str::ArcStaticStr,
+    vector::Vec2isize,
 };
 
 pub struct Board {
     uid: u128,
+    name: RwLock<String>,
     wires: RwLock<FixedVec<Arc<Wire>>>,
     circuits: RwLock<FixedVec<Arc<Circuit>>>,
 
@@ -52,11 +61,15 @@ impl Board {
     pub fn states(&self) -> &RwLock<Vec<Weak<SimulationStateData>>> {
         &self.states
     }
-    
-    /*
+
+    pub fn name(&self) -> &RwLock<String> {
+        &self.name
+    }
+
     pub fn save(&self) -> savestate::Board {
         savestate::Board {
             uid: self.uid,
+            name: self.name.read().clone(),
             wires: self
                 .wires
                 .read()
@@ -71,29 +84,32 @@ impl Board {
                 .iter()
                 .map(|o| o.as_ref().map(|c| c.save()))
                 .collect(),
-            states: self.states.read().save(),
+            states: self
+                .states
+                .read()
+                .iter()
+                .filter_map(Weak::upgrade)
+                .map(|s| s.uid())
+                .collect(),
         }
     }
 
-    pub fn preload(data: &savestate::Board, sim: Arc<SimulationCtx>) -> Arc<Self> {
-        let this = Arc::new(Board {
+    pub fn preload(data: &mut savestate::Board, sim: &Arc<SimulationCtx>) -> Arc<Self> {
+        Arc::new(Board {
             uid: data.uid,
+            name: RwLock::new(std::mem::take(&mut data.name)),
             wires: RwLock::new(Vec::with_capacity(data.wires.len()).into()),
             circuits: RwLock::new(Vec::with_capacity(data.circuits.len()).into()),
-            simulation: sim,
-            editor: Default::default(),
-            states: RwLock::new(BoardStateCollection::uninitialized()),
-        });
+            simulation: Arc::downgrade(sim),
 
-        this.states.write().preload(&data.states, this.clone());
-
-        this
+            states: RwLock::new(Vec::with_capacity(data.states.len())),
+        })
     }
 
     pub fn load_stage1_shallow(
         self: &Arc<Self>,
         data: &savestate::Board,
-        blueprints: &[Arc<RwLock<CircuitBlueprint>>],
+        blueprints: &HashMap<ArcStaticStr, Arc<RwLock<CircuitBlueprint>>>,
     ) {
         let mut wires = self.wires.write();
 
@@ -132,13 +148,11 @@ impl Board {
             let Some(circuit_data) = circuit_data else {
                 continue;
             };
-            let circuit = Circuit::preload(i, self.clone(), circuit_data, blueprints);
+            let circuit = Circuit::preload(i, self, circuit_data, blueprints);
             circuits.set(i, Arc::new(circuit));
         }
 
         drop(circuits);
-
-        self.states.read().load_stage1_shallow(&data.states);
     }
 
     pub fn load_stage2_circuits(&self, data: &savestate::Board) {
@@ -179,29 +193,26 @@ impl Board {
         }
 
         drop(circuits);
-
-        self.states.read().load_stage2_circuits(&data.states);
     }
-
-    pub fn load_stage3_circuit_states(&self, data: &savestate::Board) {
-        self.states.read().load_stage3_circuit_states(&data.states);
-    }
-    */
 }
 
 impl Board {
-    pub fn new(simulation: &Arc<SimulationCtx>) -> Self {
-        let mut uid_buf = [0u8; 16];
-        if let Err(e) = getrandom::getrandom(&mut uid_buf) {
-            panic!("Could not generate a new board uid: {e}")
-        }
+    pub fn new(simulation: &Arc<SimulationCtx>, uid: Option<u128>, name: String) -> Self {
+        let uid = uid.unwrap_or_else(|| {
+            let mut uid_buf = [0u8; 16];
+            if let Err(e) = getrandom::getrandom(&mut uid_buf) {
+                panic!("Could not generate a new board uid: {e}")
+            }
+            u128::from_ne_bytes(uid_buf)
+        });
 
         Self {
-            uid: u128::from_ne_bytes(uid_buf),
+            uid,
+            name: RwLock::new(name),
             wires: RwLock::new(vec![].into()),
             circuits: RwLock::new(vec![].into()),
             simulation: Arc::downgrade(simulation),
-            states:  RwLock::new(vec![])
+            states: RwLock::new(vec![]),
         }
     }
 

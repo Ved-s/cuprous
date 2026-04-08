@@ -1,6 +1,11 @@
-use std::{borrow::Cow, fs::{File, OpenOptions}, io, path::{Path, PathBuf}};
+use std::{
+    borrow::Cow,
+    fs::{File, OpenOptions},
+    io,
+    path::{Path, PathBuf},
+};
 
-use crate::storage::{verify_contained_path, Filesystem, ItemType};
+use crate::storage::{Filesystem, ItemType, verify_contained_path};
 
 #[derive(Clone)]
 pub struct NativeFilesystem {
@@ -11,7 +16,11 @@ pub struct NativeFilesystem {
 
 impl NativeFilesystem {
     pub fn new(root: PathBuf) -> Self {
-        Self { root, tmp_path: Default::default(), tmp_str: Default::default() }
+        Self {
+            root,
+            tmp_path: Default::default(),
+            tmp_str: Default::default(),
+        }
     }
 
     fn setpath(&mut self, path: &Path) -> io::Result<&Path> {
@@ -23,21 +32,37 @@ impl NativeFilesystem {
 }
 
 impl Filesystem for NativeFilesystem {
-    fn writefile(&mut self, path: &std::path::Path, writer: &mut dyn FnMut(&mut dyn std::io::Write) -> std::io::Result<()>) -> std::io::Result<()> {
+    fn writefile(
+        &mut self,
+        path: &std::path::Path,
+        writer: &mut dyn FnMut(&mut dyn std::io::Write) -> std::io::Result<()>,
+    ) -> std::io::Result<()> {
         let path = self.setpath(path)?;
-        let mut file = OpenOptions::new().create(true).write(true).truncate(true).open(path)?;
+        let mut file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(path)?;
         writer(&mut file)?;
         Ok(())
     }
 
-    fn readfile(&mut self, path: &std::path::Path, reader: &mut dyn FnMut(&mut dyn std::io::Read) -> std::io::Result<()>) -> std::io::Result<()> {
+    fn readfile(
+        &mut self,
+        path: &std::path::Path,
+        reader: &mut dyn FnMut(&mut dyn std::io::Read) -> std::io::Result<()>,
+    ) -> std::io::Result<()> {
         let path = self.setpath(path)?;
         let mut file = File::open(path)?;
         reader(&mut file)?;
         Ok(())
     }
 
-    fn readdir(&mut self, path: &std::path::Path, reader: &mut dyn FnMut(&str, super::ItemType) -> std::io::Result<()>) -> std::io::Result<()> {
+    fn readdir(
+        &mut self,
+        path: &std::path::Path,
+        reader: &mut dyn FnMut(&str, super::ItemType) -> std::io::Result<()>,
+    ) -> std::io::Result<()> {
         let path = self.setpath(path)?;
 
         for entry in std::fs::read_dir(path)? {
@@ -70,6 +95,14 @@ impl Filesystem for NativeFilesystem {
         }
 
         Ok(())
+    }
+
+    fn stat(&mut self, path: &Path) -> io::Result<ItemType> {
+        let path = self.setpath(path)?;
+        Ok(match std::fs::metadata(path)?.is_file() {
+            true => ItemType::File,
+            false => ItemType::Directory,
+        })
     }
 
     fn rmdir(&mut self, path: &std::path::Path) -> std::io::Result<()> {

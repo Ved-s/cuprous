@@ -31,6 +31,8 @@ pub trait Filesystem {
         reader: &mut dyn FnMut(&str, ItemType) -> io::Result<()>,
     ) -> io::Result<()>;
 
+    fn stat(&mut self, path: &Path) -> io::Result<ItemType>;
+
     /// Removes directories with contents
     fn rmdir(&mut self, path: &Path) -> io::Result<()>;
     fn rmfile(&mut self, path: &Path) -> io::Result<()>;
@@ -39,7 +41,7 @@ pub trait Filesystem {
     fn mkdir(&mut self, path: &Path) -> io::Result<()>;
 }
 
-impl<F: Filesystem> Filesystem for &mut F {
+impl<F: Filesystem + ?Sized> Filesystem for &mut F {
     fn writefile(
         &mut self,
         path: &Path,
@@ -62,6 +64,10 @@ impl<F: Filesystem> Filesystem for &mut F {
         reader: &mut dyn FnMut(&str, ItemType) -> io::Result<()>,
     ) -> io::Result<()> {
         <F as Filesystem>::readdir(*self, path, reader)
+    }
+
+    fn stat(&mut self, path: &Path) -> io::Result<ItemType> {
+        <F as Filesystem>::stat(*self, path)
     }
 
     fn rmdir(&mut self, path: &Path) -> io::Result<()> {
@@ -126,6 +132,12 @@ impl<F: Filesystem> Filesystem for FilesystemDirectory<F> {
         self.inner.readdir(&self.tmp, reader)
     }
 
+    fn stat(&mut self, path: &Path) -> io::Result<ItemType> {
+        self.tmp.clone_from(&self.dir);
+        self.tmp.push(path);
+        self.inner.stat(&self.tmp)
+    }
+
     fn rmdir(&mut self, path: &Path) -> io::Result<()> {
         self.tmp.clone_from(&self.dir);
         self.tmp.push(path);
@@ -170,7 +182,10 @@ impl<F: Filesystem> eframe::Storage for EpiStorageAdapter<F> {
 
         let mut res = lock.writefile(key.as_ref(), &mut |w| w.write_all(value.as_bytes()));
 
-        if res.as_ref().is_err_and(|e| matches!(e.kind(), io::ErrorKind::NotFound)) {
+        if res
+            .as_ref()
+            .is_err_and(|e| matches!(e.kind(), io::ErrorKind::NotFound))
+        {
             res = lock.mkdir("".as_ref());
 
             if res.is_ok() {

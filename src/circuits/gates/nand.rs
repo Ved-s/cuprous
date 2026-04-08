@@ -26,12 +26,12 @@ impl GateImpl for Nand {
         if !input {
             GateOutput {
                 out: true,
-                fin: false,
+                fin: true,
             }
         } else {
             GateOutput {
                 out: false,
-                fin: true,
+                fin: false,
             }
         }
     }
