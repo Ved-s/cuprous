@@ -6,11 +6,7 @@ use eframe::egui::{
 use smoldata::{raw::RawValue, SmolRead, SmolReadWrite, SmolWrite};
 
 use crate::{
-    circuits::{props::{PropertyInfo, PropertyValue}, PropertyChangedParams},
-    state::wires::WireState,
-    str::{ArcRefStr, ArcStaticStr},
-    vector::Vec2usize,
-    Direction4, Direction8,
+    Direction4, Direction8, circuits::{CircuitUpdateReason, PropertyChangedParams, props::{PropertyInfo, PropertyValue}}, state::wires::WireState, str::{ArcRefStr, ArcStaticStr}, vector::Vec2usize
 };
 
 use super::{
@@ -168,7 +164,13 @@ impl CircuitImpl for Button {
         }
     }
 
-    fn update_signals(&self, mut circuit: CircuitCtx<Self>, _: Option<usize>) {
+    fn pins_changed(&self, circuit: &Circuit, instance: &mut Self::Instance) {
+        let pins = circuit.pins.read();
+        
+        instance.pin = pins[0].pin.clone();
+    }
+
+    fn update(&self, mut circuit: CircuitCtx<Self>, _: CircuitUpdateReason) {
         let state = circuit
             .read_internal_state()
             .map(|s| s.state)
@@ -233,7 +235,7 @@ impl CircuitImpl for Button {
             params: &mut PropertyChangedParams,
         ) {
         if prop == "width" || prop == "height" {
-            params.trigger_signal_update = true;
+            params.trigger_update = true;
 
             if let Some((circuit, instance)) = circuit_instance {
                 instance.pin = circuit.pins.read()[0].pin.clone();

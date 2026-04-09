@@ -6,10 +6,9 @@ use eframe::{
 };
 
 use crate::{
-    circuits::{
-        Circuit, CircuitCtx, CircuitImpl, CircuitPin, CircuitRenderingContext, CircuitTransform,
-        PinDescription, PinType,
-    }, state::wires::WireState, str::ArcStaticStr, vector::{Vec2f, Vec2usize}, Direction8
+    Direction8, circuits::{
+        Circuit, CircuitCtx, CircuitImpl, CircuitPin, CircuitRenderingContext, CircuitTransform, CircuitUpdateReason, PinDescription, PinType
+    }, state::wires::WireState, str::ArcStaticStr, vector::{Vec2f, Vec2usize}
 };
 
 #[derive(Clone)]
@@ -103,7 +102,13 @@ impl CircuitImpl for ErrorFilter {
         }
     }
 
-    fn update_signals(&self, ctx: CircuitCtx<Self>, _changed_pin: Option<usize>) {
+    fn pins_changed(&self, circuit: &Circuit, instance: &mut Self::Instance) {
+        let pins = circuit.pins.read();
+        instance.input = pins[0].pin.clone();
+        instance.output = pins[1].pin.clone();
+    }
+
+    fn update(&self, ctx: CircuitCtx<Self>, _reason: CircuitUpdateReason) {
         let val = ctx.instance.input.get_state(ctx.state);
 
         let out = match val {

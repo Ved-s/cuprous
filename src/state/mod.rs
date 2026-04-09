@@ -9,7 +9,7 @@ use parking_lot::Mutex;
 use crate::{
     Style,
     board::{Board, Wire},
-    circuits::{CircuitPin, PinType, UntypedCircuitCtx},
+    circuits::{CircuitPin, CircuitUpdateReason, PinType, UntypedCircuitCtx},
     io::savestate,
     pool::get_pooled,
     state::{
@@ -289,10 +289,10 @@ impl BoardState {
                     PinType::Inside => {
                         let changed = this.circuits.set_pin(pin.circuit.id, pin.id, state.clone());
                         if changed {
-                            tasks.add(CircuitUpdateTask {
-                                id: pin.circuit.id,
-                                changed_pin: Some(pin.id),
-                            });
+                            tasks.add_circuit_task(
+                                pin.circuit.id,
+                                CircuitUpdateReason::ChangedPin(pin.id),
+                            );
                         }
                     }
                     PinType::Outside => {}
@@ -331,7 +331,7 @@ impl BoardState {
             instance: imp.instance.deref(),
         };
 
-        imp.imp.update_signals(ctx, task.changed_pin);
+        imp.imp.update(ctx, task.reason);
     }
 
     fn update_input(
@@ -363,7 +363,7 @@ impl BoardState {
         let changed = self.circuits.set_pin(task.circuit, task.pin, state);
 
         if changed && task.update_circuit {
-            tasks.add_circuit_task(task.circuit, Some(task.pin));
+            tasks.add_circuit_task(task.circuit, CircuitUpdateReason::ChangedPin(task.pin));
             *queue_immediately = true;
         }
     }

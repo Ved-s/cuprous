@@ -2,7 +2,7 @@ use std::{ops::Deref, sync::Arc};
 
 use eframe::egui::{Color32, FontId, Rect};
 
-use crate::{editor::QuarterPos, ext::IteratorProduct, pool::get_pooled, state::wires::WireState, str::ArcStaticStr, vector::Vec2usize, vertex_renderer::{ColoredTriangleBuffer, ColoredVertexRenderer}, Direction4, Direction8};
+use crate::{Direction4, Direction8, circuits::CircuitUpdateReason, editor::QuarterPos, ext::IteratorProduct, pool::get_pooled, state::wires::WireState, str::ArcStaticStr, vector::Vec2usize, vertex_renderer::{ColoredTriangleBuffer, ColoredVertexRenderer}};
 
 use super::{Circuit, CircuitCtx, CircuitFlipSupport, CircuitImpl, CircuitPin, CircuitRenderingContext, CircuitRotationSupport, CircuitTransform, CircuitTransformSupport, FlipType, PinDescription, PinType, TransformSupport};
 
@@ -181,8 +181,19 @@ impl CircuitImpl for TestCircuit {
             pin_e: pins[4].pin.clone(),
         }
     }
-    fn update_signals(&self, mut ctx: CircuitCtx<Self>, changed_pin: Option<usize>) {
-        if changed_pin.is_some_and(|c| c < 4) {
+
+    fn pins_changed(&self, circuit: &Circuit, instance: &mut Self::Instance) {
+        let pins = circuit.pins.read();
+        
+        instance.pin_a = pins[0].pin.clone();
+        instance.pin_b = pins[1].pin.clone();
+        instance.pin_c = pins[2].pin.clone();
+        instance.pin_d = pins[3].pin.clone();
+        instance.pin_e = pins[4].pin.clone();
+    }
+
+    fn update(&self, mut ctx: CircuitCtx<Self>, reason: CircuitUpdateReason) {
+        if let CircuitUpdateReason::ChangedPin(_) = reason {
             ctx.write_internal_state().count += 1;
         }
 

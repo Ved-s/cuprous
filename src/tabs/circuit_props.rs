@@ -11,8 +11,7 @@ use parking_lot::{RwLock, RwLockWriteGuard};
 use crate::{
     app::{App, SelectedItem},
     circuits::{
-        CircuitBlueprint, CircuitImplData, PinType, PropertyChangedParams, TransformSupport,
-        props::{PropertyInfo, PropertyValue},
+        CircuitBlueprint, CircuitImplData, CircuitUpdateReason, PinType, PropertyChangedParams, TransformSupport, props::{PropertyInfo, PropertyValue}
     },
     editor::{BoardEditor, InWorldError, SelectedBoardItem},
     pool::get_pooled,
@@ -310,8 +309,20 @@ impl CircuitProps {
         }
 
         // Update circuits
-        for &id in old_circuit_pins.keys() {
-            tasks.add_circuit_task(id, None);
+        if !fail {
+            for (id, lock) in &mut *circuit_locks {
+                if !old_circuit_pins.contains_key(id) {
+                    continue;
+                }
+
+                let circuit = circuits.get(*id).unwrap();
+
+                tasks.add_circuit_task(*id, CircuitUpdateReason::NewPins);
+
+                let lock = lock.deref_mut();
+
+                lock.imp.pins_changed(circuit, &mut lock.instance);
+            }
         }
 
         board.add_tasks(&tasks);
@@ -566,10 +577,10 @@ impl CircuitProps {
                                     &mut params,
                                 );
 
-                                if params.trigger_signal_update {
+                                if params.trigger_update {
                                     let mut tasks = get_pooled::<UpdateTaskPool>();
 
-                                    tasks.add_circuit_task(circuit_id, None);
+                                    tasks.add_circuit_task(circuit_id, CircuitUpdateReason::PropertyChanged(id.clone()));
 
                                     editor.board().add_tasks(&tasks);
                                 }
@@ -606,6 +617,12 @@ impl CircuitProps {
                 };
 
                 new.clone_into_dyn(value);
+
+                blueprint.imp.property_changed(
+                    None,
+                    &prop.id,
+                    &mut PropertyChangedParams::default(),
+                );
 
                 blueprint.recalculate();
             }

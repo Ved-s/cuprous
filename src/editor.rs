@@ -16,8 +16,7 @@ use crate::{
     Direction8Array, WIRE_POINT_WIDTH, WIRE_WIDTH,
     board::{Board, CircuitCreationOverrides, Wire, WirePoint},
     circuits::{
-        Circuit, CircuitBlueprint, CircuitImplBox, CircuitPin, CircuitTransform, PinType,
-        RealizedPin, TransformSupport,
+        Circuit, CircuitBlueprint, CircuitImplBox, CircuitPin, CircuitTransform, CircuitUpdateReason, PinType, RealizedPin, TransformSupport
     },
     containers::Chunks2D,
     pool::get_pooled,
@@ -817,7 +816,7 @@ impl BoardEditor {
 
         drop(pins);
 
-        tasks.add_circuit_task(circuit.id, None);
+        tasks.add_circuit_task(circuit.id, CircuitUpdateReason::CircuitPlaced);
 
         Ok(circuit)
     }

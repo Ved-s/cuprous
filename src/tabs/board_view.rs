@@ -24,8 +24,7 @@ use crate::{
     app::{App, COPY_PASTE_BOARD_ITEMS_PREFIX, SelectedItem},
     board::{Board, CircuitCreationOverrides},
     circuits::{
-        CircuitBlueprint, CircuitRenderPurpose, CircuitRenderingContext,
-        CircuitSelectionRenderingContext, TransformSupport, UntypedCircuitCtx,
+        CircuitBlueprint, CircuitRenderPurpose, CircuitRenderingContext, CircuitSelectionRenderingContext, CircuitUpdateReason, TransformSupport, UntypedCircuitCtx
     },
     drawing::{self, rotated_rect},
     editor::{BoardEditor, BoardSelection, InWorldError, QuarterPos, SelectedBoardItem},
@@ -139,7 +138,7 @@ impl TabImpl for BoardView {
                 let circuits = board.circuits().read();
                 let mut tasks = get_pooled::<UpdateTaskPool>();
                 for c in circuits.iter() {
-                    tasks.add_circuit_task(c.id, None);
+                    tasks.add_circuit_task(c.id, CircuitUpdateReason::StateReset);
                 }
 
                 self.state.add_tasks(&mut tasks.drain());

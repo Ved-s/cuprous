@@ -3,9 +3,9 @@ use std::sync::Arc;
 use eframe::{egui::{Color32, Pos2}, epaint::{PathShape, PathStroke}};
 
 use crate::{
-    circuits::{
-        Circuit, CircuitCtx, CircuitImpl, CircuitPin, CircuitRenderingContext, CircuitTransform, PinDescription, PinType
-    }, str::ArcStaticStr, vector::Vec2usize, Direction8
+    Direction8, circuits::{
+        Circuit, CircuitCtx, CircuitImpl, CircuitPin, CircuitRenderingContext, CircuitTransform, CircuitUpdateReason, PinDescription, PinType
+    }, str::ArcStaticStr, vector::Vec2usize
 };
 
 #[derive(Clone)]
@@ -83,7 +83,7 @@ impl CircuitImpl for Buffer {
         }
     }
 
-    fn update_signals(&self, ctx: CircuitCtx<Self>, _changed_pin: Option<usize>) {
+    fn update(&self, ctx: CircuitCtx<Self>, _reason: CircuitUpdateReason) {
         ctx.instance.output.set_output(ctx.state, ctx.tasks, ctx.instance.input.get_state(ctx.state));
     }
 }

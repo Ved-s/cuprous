@@ -7,7 +7,7 @@ use std::{
 use parking_lot::Mutex;
 use smoldata::SmolReadWrite;
 
-use crate::pool::{Pooled, get_pooled};
+use crate::{circuits::CircuitUpdateReason, pool::{Pooled, get_pooled}};
 
 #[derive(Default)]
 pub struct UpdateTaskPool(Vec<UpdateTask>);
@@ -32,8 +32,8 @@ impl UpdateTaskPool {
         })
     }
 
-    pub fn add_circuit_task(&mut self, id: usize, changed_pin: Option<usize>) {
-        self.add(CircuitUpdateTask { id, changed_pin })
+    pub fn add_circuit_task(&mut self, id: usize, reason: CircuitUpdateReason) {
+        self.add(CircuitUpdateTask { id, reason })
     }
 
     pub fn add_update_input_task(&mut self, circuit: usize, pin: usize, update_circuit: bool) {
@@ -102,7 +102,7 @@ impl UpdateTaskPool {
     // }
 
     pub fn iter(&self) -> impl Iterator<Item = UpdateTask> + '_ {
-        self.0.iter().copied()
+        self.0.iter().cloned()
     }
 
     pub fn drain(&mut self) -> impl Iterator<Item = UpdateTask> + '_ {
@@ -177,32 +177,32 @@ impl Iterator for ExternalTaskPoolBatch<'_> {
     }
 }
 
-#[derive(Clone, Copy, Hash, PartialEq, Eq, SmolReadWrite)]
+#[derive(Clone, Hash, PartialEq, Eq, SmolReadWrite)]
 pub struct DropCircuitTask {
     pub id: usize,
     pub pin_only: Option<usize>,
 }
 
-#[derive(Clone, Copy, Hash, PartialEq, Eq, SmolReadWrite)]
+#[derive(Clone, Hash, PartialEq, Eq, SmolReadWrite)]
 pub struct InputUpdateTask {
     pub circuit: usize,
     pub pin: usize,
     pub update_circuit: bool,
 }
 
-#[derive(Clone, Copy, Hash, PartialEq, Eq, SmolReadWrite)]
+#[derive(Clone, Hash, PartialEq, Eq, SmolReadWrite)]
 pub struct WireUpdateTask {
     pub id: usize,
     pub force_pin_updates: bool,
 }
 
-#[derive(Clone, Copy, Hash, PartialEq, Eq, SmolReadWrite)]
+#[derive(Clone, Hash, PartialEq, Eq, SmolReadWrite)]
 pub struct CircuitUpdateTask {
     pub id: usize,
-    pub changed_pin: Option<usize>,
+    pub reason: CircuitUpdateReason,
 }
 
-#[derive(Clone, Copy, Hash, PartialEq, Eq, SmolReadWrite)]
+#[derive(Clone, Hash, PartialEq, Eq, SmolReadWrite)]
 pub enum UpdateTask {
     Wire(WireUpdateTask),
     Circuit(CircuitUpdateTask),
@@ -394,7 +394,7 @@ impl BoardSimulationState {
         }
 
         let mut vec = Vec::with_capacity(cap);
-        vec.extend(self.current_tasks.iter().copied().map(Some));
+        vec.extend(self.current_tasks.iter().cloned().map(Some));
 
         for pool in &self.next_tasks {
             if !vec.is_empty() {

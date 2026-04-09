@@ -3,7 +3,14 @@ use std::sync::Arc;
 use traitbox::traitbox;
 
 use crate::{
-    circuits::{CircuitFlipSupport, CircuitRotationSupport, CircuitTransformSupport, FlipType, TransformSupport}, state::wires::WireState, str::ArcStaticStr, vector::Vec2usize, Direction4, Direction8
+    Direction4, Direction8,
+    circuits::{
+        CircuitFlipSupport, CircuitRotationSupport, CircuitTransformSupport, CircuitUpdateReason,
+        FlipType, TransformSupport,
+    },
+    state::wires::WireState,
+    str::ArcStaticStr,
+    vector::Vec2usize,
 };
 
 use super::{
@@ -179,9 +186,19 @@ impl CircuitImpl for Gate {
         }
     }
 
+    fn pins_changed(&self, circuit: &Circuit, instance: &mut Self::Instance) {
+        let pins = circuit.pins.read();
+
+        instance.inputs = pins[..pins.len() - 1]
+            .iter()
+            .map(|p| p.pin.clone())
+            .collect();
+        instance.output = pins[pins.len() - 1].pin.clone();
+    }
+
     // TODO: let user select what to do with None inputs
 
-    fn update_signals(&self, mut ctx: CircuitCtx<Self>, _: Option<usize>) {
+    fn update(&self, mut ctx: CircuitCtx<Self>, _: CircuitUpdateReason) {
         let inputs = &ctx.instance.inputs;
 
         let output = 'compute: {

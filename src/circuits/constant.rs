@@ -6,18 +6,9 @@ use parking_lot::RwLock;
 use smoldata::SmolReadWrite;
 
 use crate::{
-    circuits::{
-        props::{PropertyInfo, PropertyValue},
-        Circuit, CircuitCtx, CircuitImpl, CircuitPin, CircuitRenderPurpose,
-        CircuitRenderingContext, CircuitRotationSupport, CircuitTransform, CircuitTransformSupport,
-        PinDescription, PinType, TransformSupport,
-    },
-    pool::get_pooled,
-    state::wires::WireState,
-    str::{ArcRefStr, ArcStaticStr},
-    vector::{Vec2f, Vec2usize},
-    vertex_renderer::{ColoredTriangleBuffer, ColoredVertexRenderer},
-    Direction4, Direction8, Style, WIRE_WIDTH,
+    Direction4, Direction8, Style, WIRE_WIDTH, circuits::{
+        Circuit, CircuitCtx, CircuitImpl, CircuitPin, CircuitRenderPurpose, CircuitRenderingContext, CircuitRotationSupport, CircuitTransform, CircuitTransformSupport, CircuitUpdateReason, PinDescription, PinType, TransformSupport, props::{PropertyInfo, PropertyValue}
+    }, pool::get_pooled, state::wires::WireState, str::{ArcRefStr, ArcStaticStr}, vector::{Vec2f, Vec2usize}, vertex_renderer::{ColoredTriangleBuffer, ColoredVertexRenderer}
 };
 
 #[derive(Clone, SmolReadWrite)]
@@ -248,7 +239,12 @@ impl CircuitImpl for Constant {
         }
     }
 
-    fn update_signals(&self, ctx: CircuitCtx<Self>, _changed_pin: Option<usize>) {
+    fn pins_changed(&self, circuit: &Circuit, instance: &mut Self::Instance) {
+        let pins = circuit.pins.read();
+        instance.pin = pins[0].pin.clone();
+    }
+
+    fn update(&self, ctx: CircuitCtx<Self>, _reason: CircuitUpdateReason) {
         ctx.instance
             .pin
             .set_output(ctx.state, ctx.tasks, self.config.value.clone());
@@ -278,7 +274,8 @@ impl CircuitImpl for Constant {
         params: &mut super::PropertyChangedParams,
     ) {
         if prop == "value" {
-            params.trigger_signal_update = true;
+            params.trigger_update = true;
+            *self.display_name.write() = None;
         }
     }
 }

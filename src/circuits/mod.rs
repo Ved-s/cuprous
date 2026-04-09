@@ -8,7 +8,7 @@ use std::{
 
 use eframe::egui::Rect;
 use parking_lot::{Mutex, RwLock};
-use smoldata::raw::RawValue;
+use smoldata::{SmolReadWrite, raw::RawValue};
 
 use crate::{
     Direction4, Direction8, PaintContext,
@@ -607,15 +607,24 @@ impl<'a> UntypedCircuitCtx<'a> {
 }
 
 pub struct PropertyChangedParams {
-    pub trigger_signal_update: bool,
+    pub trigger_update: bool,
 }
 
 impl Default for PropertyChangedParams {
     fn default() -> Self {
         Self {
-            trigger_signal_update: true,
+            trigger_update: true,
         }
     }
+}
+
+#[derive(Debug, Clone, SmolReadWrite, Hash, PartialEq, Eq)]
+pub enum CircuitUpdateReason {
+    ChangedPin(usize),
+    PropertyChanged(ArcStaticStr),
+    NewPins,
+    CircuitPlaced,
+    StateReset,
 }
 
 pub struct CircuitCtx<'a, C: CircuitImpl> {
@@ -676,7 +685,11 @@ pub trait CircuitImpl: Clone + Send + Sync {
 
     fn create_instance(&self, circuit: &Arc<Circuit>) -> Self::Instance;
 
-    fn update_signals(&self, ctx: CircuitCtx<Self>, changed_pin: Option<usize>);
+    fn update(&self, ctx: CircuitCtx<Self>, reason: CircuitUpdateReason);
+
+    fn pins_changed(&self, circuit: &Circuit, instance: &mut Self::Instance) {
+        let _ = (circuit, instance);
+    }
 
     fn save_config(&self) -> Option<RawValue> {
         None
@@ -766,8 +779,12 @@ traitbox::traitbox! {
             Box::new(this.create_instance(circuit))
         }
 
-        fn update_signals<C: CircuitImpl>(this: &C, ctx: UntypedCircuitCtx, changed_pin: Option<usize>) {
-            this.update_signals(ctx.make_typed(), changed_pin);
+        fn update<C: CircuitImpl>(this: &C, ctx: UntypedCircuitCtx, reason: CircuitUpdateReason) {
+            this.update(ctx.make_typed(), reason);
+        }
+
+        fn pins_changed<C: CircuitImpl>(this: &C, circuit: &Circuit, instance: &mut Box<dyn Any + Send + Sync>) {
+            this.pins_changed(circuit, instance.downcast_mut().expect("incorrect circuit instance"));
         }
 
         fn draw<C: CircuitImpl>(this: &C, circuit: Option<UntypedCircuitCtx>, render: &CircuitRenderingContext) {
@@ -860,6 +877,7 @@ impl CircuitBlueprint {
             &mut self.pins.iter_mut().map(|p| p.pos_dir_mut()),
             Some(TransformSupport::Automatic),
         );
+        self.display_name = self.imp.display_name()
     }
 }
 
