@@ -84,6 +84,7 @@ impl CircuitImpl for Buffer {
     }
 
     fn update(&self, ctx: CircuitCtx<Self>, _reason: CircuitUpdateReason) {
-        ctx.instance.output.set_output(ctx.state, ctx.tasks, ctx.instance.input.get_state(ctx.state));
+        let state = ctx.instance.input.get_state(&ctx.state.circuits);
+        ctx.instance.output.set_output(&mut ctx.state.circuits, ctx.tasks, state);
     }
 }

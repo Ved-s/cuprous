@@ -247,7 +247,7 @@ impl CircuitImpl for Constant {
     fn update(&self, ctx: CircuitCtx<Self>, _reason: CircuitUpdateReason) {
         ctx.instance
             .pin
-            .set_output(ctx.state, ctx.tasks, self.config.value.clone());
+            .set_output(&mut ctx.state.circuits, ctx.tasks, self.config.value.clone());
     }
 
     fn save_config(&self) -> Option<smoldata::raw::RawValue> {

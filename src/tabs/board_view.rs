@@ -24,7 +24,8 @@ use crate::{
     app::{App, COPY_PASTE_BOARD_ITEMS_PREFIX, SelectedItem},
     board::{Board, CircuitCreationOverrides},
     circuits::{
-        CircuitBlueprint, CircuitRenderPurpose, CircuitRenderingContext, CircuitSelectionRenderingContext, CircuitUpdateReason, TransformSupport, UntypedCircuitCtx
+        CircuitBlueprint, CircuitRenderPurpose, CircuitRenderingContext,
+        CircuitSelectionRenderingContext, CircuitUpdateReason, TransformSupport, UntypedCircuitCtx,
     },
     drawing::{self, rotated_rect},
     editor::{BoardEditor, BoardSelection, InWorldError, QuarterPos, SelectedBoardItem},
@@ -835,7 +836,7 @@ impl BoardView {
                 let mut update_tasks = get_pooled::<UpdateTaskPool>();
 
                 let circuit_ctx = UntypedCircuitCtx {
-                    state: &mut state.circuits,
+                    state,
                     circuit,
                     tasks: &mut update_tasks,
                     instance: imp.instance.deref(),
@@ -1953,9 +1954,7 @@ impl BoardView {
                                             .push(InWorldError::new(
                                                 rect,
                                                 PLACEMENT_ERROR_DURATION,
-                                                e
-                                                    .wrap_err("loading circuit state")
-                                                    .to_string(),
+                                                e.wrap_err("loading circuit state").to_string(),
                                             ));
                                     }
                                     Ok(s) => {

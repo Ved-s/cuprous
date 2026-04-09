@@ -1,6 +1,6 @@
 use std::{
     ops::Deref,
-    sync::{Arc, Weak},
+    sync::{Arc, Weak}, time::Duration,
 };
 
 use parking_lot::Mutex;
@@ -19,7 +19,7 @@ use crate::{
         },
         wires::{BoardWiresState, WireState},
     },
-    time::Instant
+    time::{self, Instant, TimeProvider},
 };
 
 pub mod circuits;
@@ -224,34 +224,47 @@ impl BoardState {
 
         self.sim.flush_tasks();
 
+        // todo: correct time provider
+        let time_provider = &time::SYSTEM;
+
         'main_loop: while *task_limit > 0 {
-            let Some((task, meta)) = self.sim.next_task() else {
-                break 'main_loop;
-            };
-
-            *task_limit -= 1;
             let mut queue_immediately = false;
+            let mut meta = None;
 
-            match task {
-                UpdateTask::Wire(w) => {
-                    self.update_wire(w, &mut tasks);
-                }
-                UpdateTask::Circuit(c) => {
-                    self.update_circuit(c, &mut tasks);
-                }
-                UpdateTask::Input(i) => {
-                    self.update_input(i, &mut tasks, &mut queue_immediately);
-                }
-                UpdateTask::DropCircuit(d) => {
-                    self.circuits.drop_circuit(d.id, d.pin_only);
+            if let Ok(id) = self.sim.next_update(time_provider.now()) {
+                let task = CircuitUpdateTask {
+                    id,
+                    reason: CircuitUpdateReason::Timer,
+                };
+                self.update_circuit(task, &mut tasks);
+            } else {
+                let Some((task, m)) = self.sim.next_task() else {
+                    break 'main_loop;
+                };
+                meta = Some(m);
+
+                match task {
+                    UpdateTask::Wire(w) => {
+                        self.update_wire(w, &mut tasks);
+                    }
+                    UpdateTask::Circuit(c) => {
+                        self.update_circuit(c, &mut tasks);
+                    }
+                    UpdateTask::Input(i) => {
+                        self.update_input(i, &mut tasks, &mut queue_immediately);
+                    }
+                    UpdateTask::DropCircuit(d) => {
+                        self.circuits.drop_circuit(d.id, d.pin_only);
+                    }
                 }
             }
 
+            *task_limit -= 1;
             self.sim
-                .add_tasks(&mut tasks.drain(), queue_immediately, Some(&meta));
+                .add_tasks(&mut tasks.drain(), queue_immediately, meta.as_ref());
         }
 
-        None
+        self.sim.next_update_time()
     }
 
     fn update_wire(&mut self, task: WireUpdateTask, tasks: &mut UpdateTaskPool) {
@@ -325,7 +338,7 @@ impl BoardState {
         let imp = circuit.imp.read();
 
         let ctx = UntypedCircuitCtx {
-            state: &mut self.circuits,
+            state: self,
             circuit: &circuit,
             tasks,
             instance: imp.instance.deref(),
@@ -366,6 +379,18 @@ impl BoardState {
             tasks.add_circuit_task(task.circuit, CircuitUpdateReason::ChangedPin(task.pin));
             *queue_immediately = true;
         }
+    }
+    
+    pub fn get_timer(&self, circuit_id: usize) -> Option<(Instant, Option<Duration>)> {
+        self.sim.find_update(circuit_id)
+    }
+
+    pub fn set_timer(&mut self, circuit_id: usize, at: Instant, interval: Option<Duration>) {
+        self.sim.schedule_update(circuit_id, at, interval);
+    }
+
+    pub fn reset_timer(&mut self, circuit_id: usize) {
+        self.sim.stop_update(circuit_id);
     }
 }
 

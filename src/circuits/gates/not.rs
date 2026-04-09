@@ -99,12 +99,12 @@ impl CircuitImpl for Not {
     }
 
     fn update(&self, ctx: CircuitCtx<Self>, _reason: CircuitUpdateReason) {
-        let val = ctx.instance.input.get_state(ctx.state);
+        let val = ctx.instance.input.get_state(&ctx.state.circuits);
         let out = match val {
             WireState::None => WireState::None,
             WireState::Bool(b) => WireState::Bool(!b),
             WireState::Error => WireState::Error,
         };
-        ctx.instance.output.set_output(ctx.state, ctx.tasks, out);
+        ctx.instance.output.set_output(&mut ctx.state.circuits, ctx.tasks, out);
     }
 }

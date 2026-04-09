@@ -3,7 +3,7 @@ use std::{
     collections::HashMap,
     f32::consts::TAU,
     ops::Deref,
-    sync::{Arc, Weak},
+    sync::{Arc, Weak}, time::Duration,
 };
 
 use eframe::egui::Rect;
@@ -11,14 +11,7 @@ use parking_lot::{Mutex, RwLock};
 use smoldata::{SmolReadWrite, raw::RawValue};
 
 use crate::{
-    Direction4, Direction8, PaintContext,
-    board::{Board, Wire},
-    circuits::props::{PropertyInfo, PropertyValue},
-    io::savestate,
-    selection::SelectionRenderer,
-    state::{circuits::BoardCircuitsState, sim::UpdateTaskPool, wires::WireState},
-    str::ArcStaticStr,
-    vector::{Vec2f, Vec2isize, Vec2usize},
+    Direction4, Direction8, PaintContext, board::{Board, Wire}, circuits::props::{PropertyInfo, PropertyValue}, io::savestate, selection::SelectionRenderer, state::{BoardState, circuits::BoardCircuitsState, sim::UpdateTaskPool, wires::WireState}, str::ArcStaticStr, time::{self, Instant, TimeProvider}, vector::{Vec2f, Vec2isize, Vec2usize}
 };
 
 pub mod buffer;
@@ -584,28 +577,6 @@ impl CircuitTransform {
     }
 }
 
-// TODO: read-only state for draws
-pub struct UntypedCircuitCtx<'a> {
-    pub state: &'a mut BoardCircuitsState,
-    pub circuit: &'a Arc<Circuit>,
-    pub tasks: &'a mut UpdateTaskPool,
-    pub instance: &'a dyn Any,
-}
-
-impl<'a> UntypedCircuitCtx<'a> {
-    pub fn make_typed<C: CircuitImpl>(self) -> CircuitCtx<'a, C> {
-        CircuitCtx {
-            state: self.state,
-            circuit: self.circuit,
-            tasks: self.tasks,
-            instance: self
-                .instance
-                .downcast_ref::<C::Instance>()
-                .expect("correct instance for a circuit"),
-        }
-    }
-}
-
 pub struct PropertyChangedParams {
     pub trigger_update: bool,
 }
@@ -625,30 +596,70 @@ pub enum CircuitUpdateReason {
     NewPins,
     CircuitPlaced,
     StateReset,
+    Timer,
+}
+
+// TODO: read-only state for draws (depends on widgets)
+pub struct UntypedCircuitCtx<'a> {
+    pub state: &'a mut BoardState,
+    pub circuit: &'a Arc<Circuit>,
+    pub tasks: &'a mut UpdateTaskPool,
+    pub instance: &'a dyn Any,
+}
+
+impl<'a> UntypedCircuitCtx<'a> {
+    pub fn make_typed<C: CircuitImpl>(self) -> CircuitCtx<'a, C> {
+        CircuitCtx {
+            state: self.state,
+            circuit: self.circuit,
+            tasks: self.tasks,
+            instance: self
+                .instance
+                .downcast_ref::<C::Instance>()
+                .expect("correct instance for a circuit"),
+        }
+    }
 }
 
 pub struct CircuitCtx<'a, C: CircuitImpl> {
-    pub state: &'a mut BoardCircuitsState,
+    pub state: &'a mut BoardState,
     pub circuit: &'a Arc<Circuit>,
     pub tasks: &'a mut UpdateTaskPool,
     pub instance: &'a C::Instance,
 }
 
 impl<C: CircuitImpl> CircuitCtx<'_, C> {
-    fn set_pin_output(&mut self, pin: &CircuitPin, state: WireState) {
-        pin.set_output(self.state, self.tasks, state);
+    pub fn set_pin_output(&mut self, pin: &CircuitPin, state: WireState) {
+        pin.set_output(&mut self.state.circuits, self.tasks, state);
     }
 
-    fn get_pin_input(&self, pin: &CircuitPin) -> WireState {
-        pin.get_state(self.state)
+    pub fn get_pin_input(&self, pin: &CircuitPin) -> WireState {
+        pin.get_state(&self.state.circuits)
     }
 
-    fn read_internal_state(&self) -> Option<&C::State> {
-        self.state.read_internal_circuit_state(self.circuit.id)
+    pub fn read_internal_state(&self) -> Option<&C::State> {
+        self.state.circuits.read_internal_circuit_state(self.circuit.id)
     }
 
-    fn write_internal_state(&mut self) -> &mut C::State {
-        self.state.write_internal_circuit_state(self.circuit.id)
+    pub fn write_internal_state(&mut self) -> &mut C::State {
+        self.state.circuits.write_internal_circuit_state(self.circuit.id)
+    }
+
+    pub fn time_provider(&self) -> &dyn TimeProvider {
+        // todo: correct time provider
+        &time::SYSTEM
+    }
+
+    pub fn get_timer(&self) -> Option<(Instant, Option<Duration>)> {
+        self.state.get_timer(self.circuit.id)
+    }
+
+    pub fn set_timer(&mut self, at: Instant, interval: Option<Duration>) {
+        self.state.set_timer(self.circuit.id, at, interval)
+    }
+
+    pub fn reset_timer(&mut self) {
+        self.state.reset_timer(self.circuit.id)
     }
 }
 

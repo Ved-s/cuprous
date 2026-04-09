@@ -1,13 +1,17 @@
 use std::{
-    collections::VecDeque,
+    collections::{BTreeSet, BinaryHeap, VecDeque},
     hash::{BuildHasher, DefaultHasher, Hasher, RandomState},
     sync::Arc,
+    time::Duration,
 };
 
 use parking_lot::Mutex;
 use smoldata::SmolReadWrite;
 
-use crate::{circuits::CircuitUpdateReason, pool::{Pooled, get_pooled}};
+use crate::{
+    circuits::CircuitUpdateReason,
+    pool::{Pooled, get_pooled}, time::Instant,
+};
 
 #[derive(Default)]
 pub struct UpdateTaskPool(Vec<UpdateTask>);
@@ -51,55 +55,6 @@ impl UpdateTaskPool {
     pub fn add(&mut self, task: impl Into<UpdateTask>) {
         self.0.push(task.into());
     }
-
-    // fn add_internal(&mut self, task: UpdateTask) {
-    //     todo!()
-    // match task {
-    //     UpdateTask::Wire(WireUpdateTask {
-    //         id,
-    //         force_pin_updates,
-    //     }) => match force_pin_updates {
-    //         false => {
-    //             if self.0.contains(
-    //                 &WireUpdateTask {
-    //                     id,
-    //                     force_pin_updates: true,
-    //                 }
-    //                 .into(),
-    //             ) {
-    //                 return;
-    //             }
-    //         }
-    //         true => {
-    //             self.0.retain(|u| match u {
-    //                 UpdateTask::Wire(WireUpdateTask { id: eid, .. }) => *eid != id,
-    //                 _ => true,
-    //             });
-    //         }
-    //     },
-    //     UpdateTask::Circuit(CircuitUpdateTask { id, changed_pin }) => match changed_pin {
-    //         Some(_) => {
-    //             if self.0.contains(
-    //                 &CircuitUpdateTask {
-    //                     id,
-    //                     changed_pin: None,
-    //                 }
-    //                 .into(),
-    //             ) {
-    //                 return;
-    //             }
-    //         }
-    //         None => {
-    //             self.0.retain(|u| match u {
-    //                 UpdateTask::Circuit(CircuitUpdateTask { id: eid, .. }) => *eid != id,
-    //                 _ => true,
-    //             });
-    //         }
-    //     },
-    //     UpdateTask::Input(..) => {}
-    // }
-    // self.0.insert(task);
-    // }
 
     pub fn iter(&self) -> impl Iterator<Item = UpdateTask> + '_ {
         self.0.iter().cloned()
@@ -239,6 +194,31 @@ pub struct UpdateTaskMetadata {
     can_be_a_bit_late: bool,
 }
 
+#[derive(Clone, Copy)]
+struct CircuitUpdateDeadline {
+    at: Instant,
+    id: usize,
+    interval: Option<Duration>,
+}
+
+impl std::cmp::Eq for CircuitUpdateDeadline {}
+impl std::cmp::PartialEq for CircuitUpdateDeadline {
+    fn eq(&self, other: &Self) -> bool {
+        self.at == other.at || self.id == other.id
+    }
+}
+
+impl std::cmp::PartialOrd for CircuitUpdateDeadline {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl std::cmp::Ord for CircuitUpdateDeadline {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.at.cmp(&other.at).reverse()
+    }
+}
+
 pub struct BoardSimulationState {
     current_tasks: VecDeque<UpdateTask>,
 
@@ -247,6 +227,10 @@ pub struct BoardSimulationState {
     hasher: DefaultHasher,
 
     external_tasks: Option<Arc<Mutex<ExternalTaskPool>>>,
+
+    // (deadline, circuit id) => interval
+    circuit_updates: BinaryHeap<CircuitUpdateDeadline>,
+    active_circuit_updates: BTreeSet<usize>,
 }
 
 impl BoardSimulationState {
@@ -258,6 +242,9 @@ impl BoardSimulationState {
             hasher: RandomState::new().build_hasher(),
 
             external_tasks: None,
+
+            circuit_updates: Default::default(),
+            active_circuit_updates: Default::default(),
         }
     }
 
@@ -380,6 +367,64 @@ impl BoardSimulationState {
 
     pub fn set_external_tasks(&mut self, external_tasks: Arc<Mutex<ExternalTaskPool>>) {
         self.external_tasks = Some(external_tasks);
+    }
+
+    pub fn next_update(&mut self, now: Instant) -> Result<usize, Option<Instant>> {
+        let Some(&first) = self.circuit_updates.peek() else {
+            return Err(None);
+        };
+
+        if first.at > now {
+            return Err(Some(first.at));
+        }
+
+        self.circuit_updates.pop();
+
+        match first.interval {
+            Some(interval) => {
+                self.circuit_updates.push(CircuitUpdateDeadline {
+                    at: first.at + interval,
+                    ..first
+                });
+            }
+            None => {
+                self.active_circuit_updates.remove(&first.id);
+            }
+        }
+
+        Ok(first.id)
+    }
+
+    pub fn schedule_update(&mut self, id: usize, at: Instant, interval: Option<Duration>) {
+        let active = self.active_circuit_updates.contains(&id);
+        if active {
+            self.circuit_updates.retain(|d| d.id != id);
+        } else {
+            self.active_circuit_updates.insert(id);
+        }
+
+        self.circuit_updates
+            .push(CircuitUpdateDeadline { at, id, interval });
+    }
+
+    pub fn find_update(&self, id: usize) -> Option<(Instant, Option<Duration>)> {
+        if !self.active_circuit_updates.contains(&id) {
+            return None;
+        }
+
+        self.circuit_updates.iter().find(|d| d.id == id).map(|d| (d.at, d.interval))
+    }
+
+    pub fn stop_update(&mut self, id: usize) {
+        if !self.active_circuit_updates.contains(&id) {
+            return;
+        }
+
+        self.circuit_updates.retain(|d| d.id != id);
+    }
+
+    pub fn next_update_time(&self) -> Option<Instant> {
+        self.circuit_updates.peek().map(|d| d.at)
     }
 
     pub fn save(&mut self) -> crate::io::savestate::BoardStateSimulation {
