@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use smoldata::{SmolReadWrite, raw::RawValue};
 
@@ -57,4 +57,5 @@ pub struct CircuitState {
 #[derive(Default, SmolReadWrite)]
 pub struct BoardStateSimulation {
     pub tasks: Vec<Option<UpdateTask>>,
+    pub updates: BTreeMap<usize, (u128, Option<u128>)>,
 }

@@ -289,6 +289,7 @@ impl App {
                         blueprint,
                         instance: c.instance,
                         state: c.state,
+                        timer: c.timer,
                     })
                 })
                 .collect();
@@ -567,6 +568,7 @@ pub struct PasteCircuit {
     pub blueprint: CircuitBlueprint,
     pub instance: Option<RawValue>,
     pub state: Option<RawValue>,
+    pub timer: Option<(u128, Option<u128>)>,
 }
 
 pub struct Paste {

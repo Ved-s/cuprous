@@ -26,4 +26,5 @@ pub struct Circuit {
     pub config: Option<RawValue>,
     pub instance: Option<RawValue>,
     pub state: Option<RawValue>,
+    pub timer: Option<(u128, Option<u128>)>
 }

@@ -71,7 +71,7 @@ impl BoardState {
         self.sim.reset();
     }
 
-    pub fn save(&mut self) -> savestate::BoardState {
+    pub fn save(&mut self, start: Instant) -> savestate::BoardState {
         let board = self
             .board
             .upgrade()
@@ -120,14 +120,12 @@ impl BoardState {
                     })
                 })
                 .collect(),
-            sim: self.sim.save(),
+            sim: self.sim.save(start),
         }
     }
 
     pub fn load_stage1_shallow(&mut self, data: &mut savestate::BoardState) {
         self.wires.wires.clone_from(&data.wires);
-
-        self.sim.load(std::mem::take(&mut data.sim));
     }
 
     pub fn load_stage2_circuits(&mut self, data: &mut savestate::BoardState) {
@@ -196,6 +194,10 @@ impl BoardState {
                 .ok();
             circuit.internal = state;
         }
+    }
+
+    pub fn load_stage4_simulation_data(&mut self, data: &mut savestate::BoardState, start: Instant) {
+        self.sim.load(std::mem::take(&mut data.sim), start);
     }
 
     pub fn pin_color(&self, pin: &CircuitPin, style: &Style) -> eframe::egui::Color32 {

@@ -35,6 +35,7 @@ use crate::{
     selection::SelectionRenderer,
     simulation::SimulationStateData,
     state::{BoardState, sim::UpdateTaskPool},
+    time::{self, TimeProvider},
     vector::{Vec2f, Vec2isize, Vec2usize, Vector2},
     vertex_renderer::{ColoredLineBuffer, ColoredTriangleBuffer, ColoredVertexRenderer},
 };
@@ -1628,6 +1629,10 @@ impl BoardView {
         let mut min_pos = Vec2usize::single_value(usize::MAX);
         let mut data = copystate::CopyState::default();
 
+        //todo: correct time provider
+
+        let copy_time = time::SYSTEM.now();
+
         'selection: for &selected in selection.iter() {
             let min = match selected {
                 SelectedBoardItem::WirePart { pos, dir } => {
@@ -1703,11 +1708,20 @@ impl BoardView {
                     let info = circuit.info.read();
                     let imp = circuit.imp.read();
 
-                    let state = state
+                    let inner_state = state
                         .circuits
                         .inner
                         .get(id)
                         .and_then(|s| s.internal.as_ref());
+
+                    let timer = state.get_timer(id).map(|(a, d)| {
+                        (
+                            a.checked_duration_since(copy_time)
+                                .map(|d| d.as_nanos())
+                                .unwrap_or(0),
+                            d.map(|d| d.as_nanos()),
+                        )
+                    });
 
                     data.circuits.push(copystate::Circuit {
                         id: imp.imp.id(),
@@ -1716,7 +1730,9 @@ impl BoardView {
                         flip: info.transform.flip,
                         config: imp.imp.save_config(),
                         instance: imp.imp.save_instance(circuit, &imp.instance),
-                        state: state.and_then(|s| imp.imp.save_state(circuit, &imp.instance, s)),
+                        state: inner_state
+                            .and_then(|s| imp.imp.save_state(circuit, &imp.instance, s)),
+                        timer,
                     });
 
                     pos.convert(offset_range)
@@ -1903,6 +1919,9 @@ impl BoardView {
                 editor.toggle_wire_point_manual(pos, &mut tasks);
             }
 
+            // todo: correct time provider
+            let paste_time = time::SYSTEM.now();
+
             for c in &paste.circuits {
                 let pos = world_place_tile + c.pos.convert(|v| v as isize);
 
@@ -1932,39 +1951,47 @@ impl BoardView {
                             ));
                     }
                     Ok(circuit) => {
-                        if let Some(state_data) = &c.state {
+                        if c.state.is_some() || c.timer.is_some() {
                             let imp = circuit.imp.read();
                             for state in editor.board().states().read().iter() {
                                 let Some(state) = state.upgrade() else {
                                     continue;
                                 };
-                                match imp.imp.load_state(&circuit, &imp.instance, state_data) {
-                                    Err(e) => {
-                                        let rect = Rect::from_min_size(
-                                            world_place_tile.convert(|v| v as f32).into(),
-                                            c.blueprint
-                                                .transformed_size
-                                                .convert(|v| v as f32)
-                                                .into(),
-                                        );
-                                        app.editor_shared
-                                            .entry(self.board.uid())
-                                            .or_default()
-                                            .in_world_errors
-                                            .push(InWorldError::new(
-                                                rect,
-                                                PLACEMENT_ERROR_DURATION,
-                                                e.wrap_err("loading circuit state").to_string(),
-                                            ));
+                                let mut state = state.state().write();
+                                if let Some(state_data) = &c.state {
+                                    match imp.imp.load_state(&circuit, &imp.instance, state_data) {
+                                        Err(e) => {
+                                            let rect = Rect::from_min_size(
+                                                world_place_tile.convert(|v| v as f32).into(),
+                                                c.blueprint
+                                                    .transformed_size
+                                                    .convert(|v| v as f32)
+                                                    .into(),
+                                            );
+                                            app.editor_shared
+                                                .entry(self.board.uid())
+                                                .or_default()
+                                                .in_world_errors
+                                                .push(InWorldError::new(
+                                                    rect,
+                                                    PLACEMENT_ERROR_DURATION,
+                                                    e.wrap_err("loading circuit state").to_string(),
+                                                ));
+                                        }
+                                        Ok(s) => {
+                                            let circuit_state = state
+                                                .circuits
+                                                .inner
+                                                .get_or_create_mut(circuit.id, Default::default);
+                                            circuit_state.internal = Some(s);
+                                        }
                                     }
-                                    Ok(s) => {
-                                        let mut state = state.state().write();
-                                        let circuit_state = state
-                                            .circuits
-                                            .inner
-                                            .get_or_create_mut(circuit.id, Default::default);
-                                        circuit_state.internal = Some(s);
-                                    }
+                                }
+                                if let Some(timer_data) = c.timer {
+                                    let at = paste_time + Duration::from_nanos_u128(timer_data.0);
+                                    let interval = timer_data.1.map(Duration::from_nanos_u128);
+
+                                    state.set_timer(circuit.id, at, interval);
                                 }
                             }
                         }

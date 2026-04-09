@@ -1,4 +1,4 @@
-use std::{ops::Deref, sync::Arc};
+use std::{ops::Deref, sync::Arc, time::Duration};
 
 use eframe::egui::{Color32, FontId, Rect};
 
@@ -18,6 +18,7 @@ pub struct TestCircuitInstance {
 #[derive(Default)]
 pub struct TestCircuitState {
     count: usize,
+    clock: bool,
 }
 
 #[derive(Clone)]
@@ -52,7 +53,7 @@ impl CircuitImpl for TestCircuit {
         QUARTERS[qpos.y][qpos.x] != 0
     }
 
-    fn draw(&self, mut circuit: Option<CircuitCtx<Self>>, render: &CircuitRenderingContext) {
+    fn draw(&self, circuit: Option<CircuitCtx<Self>>, render: &CircuitRenderingContext) {
         let size = self.size(render.transform);
 
         let mut buffer = get_pooled::<ColoredTriangleBuffer>();
@@ -107,13 +108,6 @@ impl CircuitImpl for TestCircuit {
                 font,
                 Color32::BLACK,
             );
-        }
-
-        if let Some(cir) = &mut circuit {
-            let blink_state = render.paint.ui.ctx().cumulative_pass_nr() % 120 >= 60;
-            cir.instance
-                .pin_a
-                .set_output(&mut cir.state.circuits, cir.tasks, WireState::Bool(blink_state));
         }
     }
 
@@ -193,8 +187,28 @@ impl CircuitImpl for TestCircuit {
     }
 
     fn update(&self, mut ctx: CircuitCtx<Self>, reason: CircuitUpdateReason) {
-        if let CircuitUpdateReason::ChangedPin(_) = reason {
+        if let CircuitUpdateReason::ChangedPin(pin) = reason {
             ctx.write_internal_state().count += 1;
+
+            if pin == 1 {
+                let state = ctx.get_pin_input(&ctx.instance.pin_b);
+                if let WireState::Bool(b) = state {
+                    if !b {
+                        ctx.reset_timer();
+                    }
+                    else if ctx.get_timer().is_none() {
+                        ctx.set_timer(ctx.time_provider().now(), Some(Duration::from_secs(1)));
+                    }
+                }
+            }
+        }
+
+        if let CircuitUpdateReason::Timer = reason {
+            let state = ctx.write_internal_state();
+            state.clock = !state.clock;
+            let clock = state.clock;
+
+            ctx.set_pin_output(&ctx.instance.pin_a, WireState::Bool(clock));
         }
 
         ctx.set_pin_output(&ctx.instance.pin_e, WireState::Bool(true));

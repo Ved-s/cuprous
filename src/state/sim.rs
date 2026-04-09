@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeSet, BinaryHeap, VecDeque},
+    collections::{BTreeMap, BTreeSet, BinaryHeap, VecDeque},
     hash::{BuildHasher, DefaultHasher, Hasher, RandomState},
     sync::Arc,
     time::Duration,
@@ -427,7 +427,7 @@ impl BoardSimulationState {
         self.circuit_updates.peek().map(|d| d.at)
     }
 
-    pub fn save(&mut self) -> crate::io::savestate::BoardStateSimulation {
+    pub fn save(&mut self, start: Instant) -> crate::io::savestate::BoardStateSimulation {
         self.flush_tasks();
 
         let mut cap = self.current_tasks.len();
@@ -438,20 +438,29 @@ impl BoardSimulationState {
             cap += pool.len();
         }
 
-        let mut vec = Vec::with_capacity(cap);
-        vec.extend(self.current_tasks.iter().cloned().map(Some));
+        let mut tasks = Vec::with_capacity(cap);
+        tasks.extend(self.current_tasks.iter().cloned().map(Some));
 
         for pool in &self.next_tasks {
-            if !vec.is_empty() {
-                vec.push(None);
+            if !tasks.is_empty() {
+                tasks.push(None);
             }
-            vec.extend(pool.iter().map(Some));
+            tasks.extend(pool.iter().map(Some));
         }
 
-        crate::io::savestate::BoardStateSimulation { tasks: vec }
+        let mut updates = BTreeMap::new();
+
+        for d in self.circuit_updates.iter() {
+            let at = d.at.checked_duration_since(start).map(|d| d.as_nanos()).unwrap_or(0);
+            let interval = d.interval.map(|d| d.as_nanos());
+
+            updates.insert(d.id, (at, interval));
+        }
+
+        crate::io::savestate::BoardStateSimulation { tasks, updates }
     }
 
-    pub fn load(&mut self, sim: crate::io::savestate::BoardStateSimulation) {
+    pub fn load(&mut self, sim: crate::io::savestate::BoardStateSimulation, start: Instant) {
         self.current_epoch = 0;
         self.current_tasks.clear();
         self.next_tasks.clear();
@@ -474,6 +483,14 @@ impl BoardSimulationState {
                 pool.add(task);
             }
             self.next_tasks.push_back(pool);
+        }
+
+        for (id, (at, interval)) in sim.updates {
+            let at = start + Duration::from_nanos_u128(at);
+            let interval = interval.map(Duration::from_nanos_u128);
+
+            self.circuit_updates.push(CircuitUpdateDeadline { at, id, interval });
+            self.active_circuit_updates.insert(id);
         }
     }
 }

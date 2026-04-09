@@ -23,7 +23,7 @@ use crate::{
     },
     storage::{Filesystem, ItemType},
     str::ArcStaticStr,
-    time::{self, TimeProvider},
+    time::{self, Instant, TimeProvider},
 };
 
 const BOARDS_DIR: &str = "boards";
@@ -92,8 +92,8 @@ impl SimulationStateData {
         drop(pq);
     }
 
-    pub fn save(&self) -> crate::io::savestate::BoardState {
-        self.state.write().save()
+    pub fn save(&self, start: Instant) -> crate::io::savestate::BoardState {
+        self.state.write().save(start)
     }
 }
 
@@ -193,6 +193,9 @@ impl SimulationCtx {
 
         let mut tmp_path = PathBuf::new();
 
+        // todo: correct time provider
+        let start_time = time::SYSTEM.now();
+
         for board in self.boards.read().values() {
             let mut name = String::new();
             clean_name_for_filesystem(&board.name().read(), &mut name);
@@ -233,7 +236,7 @@ impl SimulationCtx {
                 tmp_path.push(&name);
 
                 let res = fs.writefile(&tmp_path, &mut |w| {
-                    let saved: crate::io::savestate::BoardState = state.save();
+                    let saved: crate::io::savestate::BoardState = state.save(start_time);
                     smoldata::write_into(&saved, w)
                 });
 
@@ -472,6 +475,17 @@ impl SimulationCtx {
                 .state()
                 .write()
                 .load_stage3_circuit_states(state_data);
+        }
+
+        // todo: correct time provider
+        let start_time = time::SYSTEM.now();
+
+        // load simulations
+        for state_data in &mut state_data {
+            states[&state_data.uid]
+                .state()
+                .write()
+                .load_stage4_simulation_data(state_data, start_time);
         }
 
         drop(states);
