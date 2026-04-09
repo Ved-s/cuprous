@@ -6,23 +6,15 @@ use std::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use eframe::egui::{Rect, remap_clamp, vec2};
 
 use crate::{
-    BIG_WIRE_POINT_WIDTH, CHUNK_SIZE, Direction4Half, Direction4HalfArray, Direction8,
-    Direction8Array, WIRE_POINT_WIDTH, WIRE_WIDTH,
-    board::{Board, CircuitCreationOverrides, Wire, WirePoint},
-    circuits::{
+    BIG_WIRE_POINT_WIDTH, CHUNK_SIZE, Direction4Half, Direction4HalfArray, Direction8, Direction8Array, WIRE_POINT_WIDTH, WIRE_WIDTH, board::{Board, CircuitCreationOverrides, Wire, WirePoint}, circuits::{
         Circuit, CircuitBlueprint, CircuitImplBox, CircuitPin, CircuitTransform, CircuitUpdateReason, PinType, RealizedPin, TransformSupport
-    },
-    containers::Chunks2D,
-    pool::get_pooled,
-    selection::{Selection, SelectionImpl},
-    state::sim::UpdateTaskPool,
-    vector::{Vec2f, Vec2isize, Vec2usize},
+    }, containers::Chunks2D, pool::get_pooled, selection::{Selection, SelectionImpl}, state::sim::UpdateTaskPool, time::{self, Instant, TimeProvider}, vector::{Vec2f, Vec2isize, Vec2usize}
 };
 
 #[derive(Default)]
@@ -1362,7 +1354,7 @@ impl InWorldError {
         Self {
             id: INWORLD_ERROR_NEXT_ID.fetch_add(1, Ordering::Relaxed),
             world_rect,
-            deadline: Instant::now() + duration,
+            deadline: time::SYSTEM.now() + duration,
             text,
         }
     }
@@ -1380,7 +1372,7 @@ impl InWorldError {
     }
 
     pub fn remaining(&self) -> Option<Duration> {
-        self.deadline.checked_duration_since(Instant::now())
+        self.deadline.checked_duration_since(time::SYSTEM.now())
     }
 
     pub fn read_next_id() -> usize {
@@ -1396,7 +1388,7 @@ pub struct BoardEditorSharedState {
 
 impl BoardEditorSharedState {
     pub fn update(&mut self) {
-        let now = Instant::now();
+        let now = time::SYSTEM.now();
         self.in_world_errors.retain(|e| e.deadline > now);
     }
 }

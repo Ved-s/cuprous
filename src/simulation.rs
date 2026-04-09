@@ -7,7 +7,7 @@ use std::{
         Arc, Weak,
         atomic::{AtomicBool, Ordering},
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use parking_lot::{Mutex, RwLock};
@@ -23,6 +23,7 @@ use crate::{
     },
     storage::{Filesystem, ItemType},
     str::ArcStaticStr,
+    time::{self, TimeProvider},
 };
 
 const BOARDS_DIR: &str = "boards";
@@ -135,7 +136,7 @@ impl SimulationCtx {
             return;
         }
 
-        let start = Instant::now();
+        let start = time::SYSTEM.now();
         let end = start + Duration::from_millis(10);
 
         let mut runs = 0;
@@ -159,7 +160,7 @@ impl SimulationCtx {
             }
 
             runs += 1;
-            let now = Instant::now();
+            let now = time::SYSTEM.now();
             let elapsed = now - start;
             let average_ns = (elapsed.as_nanos() / runs as u128) as u64;
             let average = Duration::from_nanos(average_ns);
@@ -422,7 +423,8 @@ impl SimulationCtx {
                                 board.name().read(),
                                 board.uid()
                             ),
-                            sub: "The state is missing from the project or failed to load".to_string(),
+                            sub: "The state is missing from the project or failed to load"
+                                .to_string(),
                         });
 
                         let state = Arc::new(RwLock::new(BoardState::new(board, Some(uid))));

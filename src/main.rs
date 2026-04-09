@@ -34,6 +34,7 @@ pub mod path;
 pub mod simulation;
 pub mod state;
 pub mod storage;
+pub mod time;
 
 pub const CHUNK_SIZE: usize = 16;
 pub const WIRE_WIDTH: f32 = 0.2;

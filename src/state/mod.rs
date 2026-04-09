@@ -1,7 +1,6 @@
 use std::{
     ops::Deref,
     sync::{Arc, Weak},
-    time::Instant,
 };
 
 use parking_lot::Mutex;
@@ -20,6 +19,7 @@ use crate::{
         },
         wires::{BoardWiresState, WireState},
     },
+    time::Instant
 };
 
 pub mod circuits;

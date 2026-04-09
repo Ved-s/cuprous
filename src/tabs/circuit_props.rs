@@ -2,7 +2,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     ops::{Deref, DerefMut, Range},
     sync::{Arc, Weak},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use eframe::egui::{Color32, Grid, Label, Rect, RichText, TextWrapMode, Ui, Widget};
@@ -19,6 +19,7 @@ use crate::{
     str::ArcStaticStr,
     tabs::{TabCreation, TabImpl},
     vector::Vec2usize,
+    time::{self, Instant, TimeProvider}
 };
 
 const INWORLD_ERROR_DURATION: Duration = Duration::from_secs(5);
@@ -493,7 +494,7 @@ impl CircuitProps {
 
                 let error_text = if let Some((error, time)) = self.value_errors.get(id) {
                     let remaining_secs = time
-                        .checked_duration_since(Instant::now())
+                        .checked_duration_since(time::SYSTEM.now())
                         .map(|d| d.as_secs_f32())
                         .unwrap_or(0.0);
 
@@ -559,7 +560,7 @@ impl CircuitProps {
                     match geometry_res {
                         Err(why) => {
                             self.value_errors
-                                .insert(id.clone(), (why, Instant::now() + VALUE_ERROR_DURATION));
+                                .insert(id.clone(), (why, time::SYSTEM.now() + VALUE_ERROR_DURATION));
                         }
                         Ok(()) => {
                             self.value_errors.remove(id);
@@ -591,7 +592,7 @@ impl CircuitProps {
             }
         });
 
-        let now = Instant::now();
+        let now = time::SYSTEM.now();
         self.value_errors.retain(|_, v| v.1 > now);
     }
 
