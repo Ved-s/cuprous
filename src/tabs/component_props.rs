@@ -11,8 +11,8 @@ use parking_lot::{RwLock, RwLockWriteGuard};
 use crate::{
     app::{App, SelectedItem},
     components::{
-        ComponentBlueprint, ComponentImplData, ComponentUpdateReason, PinType, PropertyChangedParams,
-        TransformSupport,
+        ComponentBlueprint, ComponentImplData, ComponentUpdateReason, PinType,
+        PropertyChangedParams, TransformSupport,
         props::{PropertyInfo, PropertyValue},
     },
     editor::{BoardEditor, InWorldError, SelectedBoardItem},
@@ -78,7 +78,9 @@ impl ComponentProps {
             component_info.size = new_size;
 
             if old_size != new_size {
-                editor.tiles.remove_component(id, component_info.pos, old_size);
+                editor
+                    .tiles
+                    .remove_component(id, component_info.pos, old_size);
                 changed_geometry_components.insert(
                     id,
                     OldComponentGeometryData {
@@ -96,7 +98,9 @@ impl ComponentProps {
                 &component_imp.imp,
             );
             if !valid {
-                editor.tiles.remove_component(id, component_info.pos, old_size);
+                editor
+                    .tiles
+                    .remove_component(id, component_info.pos, old_size);
                 changed_geometry_components.insert(id, OldComponentGeometryData { size: None });
             }
         }
@@ -374,7 +378,7 @@ impl ComponentProps {
                 Label::new(
                     "\
                     Nothing selected.\n\
-                    Select some citcuits on the board using the Selection tool \
+                    Select some components on the board using the Selection tool \
                     or pick a configurable component from the component list.\
                 ",
                 )
@@ -463,14 +467,9 @@ impl ComponentProps {
 
         if self.visible_property_list.is_empty() {
             ui.centered_and_justified(|ui| {
-                Label::new(
-                    "\
-                    Select some citcuits on the board using the Selection tool \
-                    or pick a configurable component from the component list.\
-                ",
-                )
-                .wrap_mode(TextWrapMode::Wrap)
-                .ui(ui);
+                Label::new("Selected components have no properties.")
+                    .wrap_mode(TextWrapMode::Wrap)
+                    .ui(ui);
             });
             return;
         }

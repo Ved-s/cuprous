@@ -28,6 +28,7 @@ pub mod button;
 pub mod constant;
 pub mod error_filter;
 pub mod gates;
+pub mod clock;
 pub mod test;
 
 pub mod props;
@@ -599,6 +600,7 @@ impl Default for PropertyChangedParams {
 }
 
 #[derive(Debug, Clone, SmolReadWrite, Hash, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ComponentUpdateReason {
     ChangedPin(usize),
     PropertyChanged(ArcStaticStr),

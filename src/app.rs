@@ -87,7 +87,6 @@ impl App {
         mut fs: Box<dyn Filesystem>,
         egui_storage: Box<dyn Storage>,
     ) -> Self {
-        // TODO: save and load blueprint data
         let mut blueprints: Vec<ComponentImplBox> = vec![
             crate::components::test::Test.into(),
             crate::components::button::Button::default().into(),
@@ -101,6 +100,7 @@ impl App {
             crate::components::constant::Constant::new(WireState::Bool(false)).into(),
             crate::components::buffer::Buffer.into(),
             crate::components::error_filter::ErrorFilter.into(),
+            crate::components::clock::Clock::default().into(),
         ];
 
         let mut loaded_blueprints = HashMap::new();

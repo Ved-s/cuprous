@@ -88,3 +88,26 @@ impl PropertyValue for WireState {
         new.map(|v| Box::new(v) as Box<_>)
     }
 }
+
+impl PropertyValue for bool {
+    fn clone_dyn(&self) -> Box<dyn PropertyValue> {
+        Box::new(*self)
+    }
+
+    fn clone_into_dyn(&self, other: &mut dyn PropertyValue) {
+        if let Some(other) = (other as &mut dyn Any).downcast_mut::<Self>() {
+            self.clone_into(other);
+        }
+    }
+
+    fn ui(&self, ui: &mut Ui) -> Option<Box<dyn PropertyValue>> {
+        let mut checked = *self;
+        ui.checkbox(&mut checked, "");
+
+        if *self != checked {
+            return Some(Box::new(checked));
+        }
+
+        None
+    }
+}

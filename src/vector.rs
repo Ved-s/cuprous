@@ -65,12 +65,12 @@ impl<T> Vector2<T> {
         *self = Self::from_angle_length(angle, length);
     }
 
-    pub fn with_length(self, length: T)
+    pub fn with_length(self, length: T) -> Self
     where
         T: Float + FloatConst,
     {
         let angle = self.angle();
-        Self::from_angle_length(angle, length);
+        Self::from_angle_length(angle, length)
     }
 
     /// 0 -> 2PI cloclwise from +X axis (default for operations)
@@ -172,6 +172,16 @@ impl<T> Vector2<T> {
         T: Float,
     {
         Self::new(self.x.round(), self.y.round())
+    }
+    
+    pub fn lerp_to(self, to: Self, t: T) -> Self where T: Float {
+        let Self { x: x1, y: y1 } = self;
+        let Self { x: x2, y: y2 } = to;
+        let ti = T::one() - t;
+        Self::new(
+            x1 * ti + x2 * t,
+            y1 * ti + y2 * t
+        )
     }
 }
 

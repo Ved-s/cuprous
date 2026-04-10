@@ -523,7 +523,7 @@ generate_pool! {
 
 generate_pool! {
     Vec<ComponentUpdateTask>,
-    CIRCUIT_UPDATE_TASK_VEC_POOL,
+    COMPONENT_UPDATE_TASK_VEC_POOL,
     |v| v.clear()
 }
 
