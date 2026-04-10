@@ -1330,7 +1330,7 @@ impl BoardView {
                 let color = if has_quarters {
                     ctx.style.wire_colors.r#false
                 } else {
-                    Color32::RED // TODO: style.wires.error_color
+                    ctx.style.wire_colors.error
                 };
 
                 drawing::pin(

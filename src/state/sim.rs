@@ -321,39 +321,6 @@ impl BoardSimulationState {
             self.next_tasks[next_tasks_index].add(task);
             next_tasks_index += 1;
         }
-
-        // let mut tasks = tasks.peekable();
-        // if tasks.peek().is_none() {
-        //     return;
-        // }
-
-        // let mut components = get_pooled::<Vec<ComponentUpdateTask>>();
-        // let mut wires = get_pooled::<Vec<WireUpdateTask>>();
-        // let mut hasher = get_pooled::<DefaultHasher>();
-
-        // for task in tasks {
-        //     match task {
-        //         UpdateTask::Wire(w) => wires.push(w),
-        //         UpdateTask::Component(c) => components.push(c),
-        //         UpdateTask::Input(i) => todo!(),
-        //                     }
-        // }
-
-        // if !components.is_empty() {
-        //     hasher.write_usize(components.len());
-        //     for i in 0..components.len() {
-        //         hasher.write_usize(i);
-        //         let other = hasher.finish() as usize % components.len();
-        //         if other == i {
-        //             continue;
-        //         }
-
-        //         components.swap(i, other);
-        //     }
-        // }
-
-        // self.wires.extend(wires.drain(..));
-        // self.components.extend(components.drain(..));
     }
 
     pub fn has_jobs(&self) -> bool {
