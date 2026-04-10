@@ -6,9 +6,14 @@ use eframe::{
 };
 
 use crate::{
-    Direction8, circuits::{
-        Circuit, CircuitCtx, CircuitImpl, CircuitPin, CircuitRenderingContext, CircuitTransform, CircuitUpdateReason, PinDescription, PinType
-    }, state::wires::WireState, str::ArcStaticStr, vector::{Vec2f, Vec2usize}
+    Direction8,
+    circuits::{
+        Circuit, CircuitCtx, CircuitImpl, CircuitPin, CircuitRenderingContext, CircuitTransform,
+        CircuitUpdateReason, PinDescription, PinType,
+    },
+    state::wires::WireState,
+    str::ArcStaticStr,
+    vector::{Vec2f, Vec2usize},
 };
 
 #[derive(Clone)]
@@ -119,6 +124,8 @@ impl CircuitImpl for ErrorFilter {
             }
         };
 
-        ctx.instance.output.set_output(&mut ctx.state.circuits, ctx.tasks, out);
+        ctx.instance
+            .output
+            .set_output(&mut ctx.state.circuits, ctx.tasks, out);
     }
 }

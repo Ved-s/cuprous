@@ -170,7 +170,7 @@ impl SimulationCtx {
         }
     }
 
-    pub fn queue_state(&self, id: u128) {}
+    pub fn queue_state(&self, _id: u128) {}
 
     pub fn save(&self, fs: &mut dyn Filesystem, errors: &mut Vec<ErrorStrings>) {
         fs.rmdir(BOARDS_DIR.as_ref()).ok();

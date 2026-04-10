@@ -1,7 +1,6 @@
-use smoldata::{raw::RawValue, SmolReadWrite};
+use smoldata::{SmolReadWrite, raw::RawValue};
 
-use crate::{str::ArcStaticStr, vector::Vec2usize, Direction4, Direction4Half};
-
+use crate::{Direction4, Direction4Half, str::ArcStaticStr, vector::Vec2usize};
 
 #[derive(Default, SmolReadWrite)]
 pub struct CopyState {
@@ -26,5 +25,5 @@ pub struct Circuit {
     pub config: Option<RawValue>,
     pub instance: Option<RawValue>,
     pub state: Option<RawValue>,
-    pub timer: Option<(u128, Option<u128>)>
+    pub timer: Option<(u128, Option<u128>)>,
 }

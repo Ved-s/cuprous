@@ -1,14 +1,23 @@
 use std::{any::TypeId, ops::Deref, sync::Arc};
 
-use eframe::egui::{text::LayoutJob, Color32, FontFamily, FontId, TextFormat};
+use eframe::egui::{Color32, FontFamily, FontId, TextFormat, text::LayoutJob};
 use eyre::Context;
 use parking_lot::RwLock;
 use smoldata::SmolReadWrite;
 
 use crate::{
-    Direction4, Direction8, Style, WIRE_WIDTH, circuits::{
-        Circuit, CircuitCtx, CircuitImpl, CircuitPin, CircuitRenderPurpose, CircuitRenderingContext, CircuitRotationSupport, CircuitTransform, CircuitTransformSupport, CircuitUpdateReason, PinDescription, PinType, TransformSupport, props::{PropertyInfo, PropertyValue}
-    }, pool::get_pooled, state::wires::WireState, str::{ArcRefStr, ArcStaticStr}, vector::{Vec2f, Vec2usize}, vertex_renderer::{ColoredTriangleBuffer, ColoredVertexRenderer}
+    Direction4, Direction8, Style, WIRE_WIDTH,
+    circuits::{
+        Circuit, CircuitCtx, CircuitImpl, CircuitPin, CircuitRenderPurpose,
+        CircuitRenderingContext, CircuitRotationSupport, CircuitTransform, CircuitTransformSupport,
+        CircuitUpdateReason, PinDescription, PinType, TransformSupport,
+        props::{PropertyInfo, PropertyValue},
+    },
+    pool::get_pooled,
+    state::wires::WireState,
+    str::{ArcRefStr, ArcStaticStr},
+    vector::{Vec2f, Vec2usize},
+    vertex_renderer::{ColoredTriangleBuffer, ColoredVertexRenderer},
 };
 
 #[derive(Clone, SmolReadWrite)]
@@ -245,9 +254,11 @@ impl CircuitImpl for Constant {
     }
 
     fn update(&self, ctx: CircuitCtx<Self>, _reason: CircuitUpdateReason) {
-        ctx.instance
-            .pin
-            .set_output(&mut ctx.state.circuits, ctx.tasks, self.config.value.clone());
+        ctx.instance.pin.set_output(
+            &mut ctx.state.circuits,
+            ctx.tasks,
+            self.config.value.clone(),
+        );
     }
 
     fn save_config(&self) -> Option<smoldata::raw::RawValue> {

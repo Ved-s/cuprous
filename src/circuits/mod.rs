@@ -3,7 +3,8 @@ use std::{
     collections::HashMap,
     f32::consts::TAU,
     ops::Deref,
-    sync::{Arc, Weak}, time::Duration,
+    sync::{Arc, Weak},
+    time::Duration,
 };
 
 use eframe::egui::Rect;
@@ -11,7 +12,15 @@ use parking_lot::{Mutex, RwLock};
 use smoldata::{SmolReadWrite, raw::RawValue};
 
 use crate::{
-    Direction4, Direction8, PaintContext, board::{Board, Wire}, circuits::props::{PropertyInfo, PropertyValue}, io::savestate, selection::SelectionRenderer, state::{BoardState, circuits::BoardCircuitsState, sim::UpdateTaskPool, wires::WireState}, str::ArcStaticStr, time::{self, Instant, TimeProvider}, vector::{Vec2f, Vec2isize, Vec2usize}
+    Direction4, Direction8, PaintContext,
+    board::{Board, Wire},
+    circuits::props::{PropertyInfo, PropertyValue},
+    io::savestate,
+    selection::SelectionRenderer,
+    state::{BoardState, circuits::BoardCircuitsState, sim::UpdateTaskPool, wires::WireState},
+    str::ArcStaticStr,
+    time::{self, Instant, TimeProvider},
+    vector::{Vec2f, Vec2isize, Vec2usize},
 };
 
 pub mod buffer;
@@ -638,11 +647,15 @@ impl<C: CircuitImpl> CircuitCtx<'_, C> {
     }
 
     pub fn read_internal_state(&self) -> Option<&C::State> {
-        self.state.circuits.read_internal_circuit_state(self.circuit.id)
+        self.state
+            .circuits
+            .read_internal_circuit_state(self.circuit.id)
     }
 
     pub fn write_internal_state(&mut self) -> &mut C::State {
-        self.state.circuits.write_internal_circuit_state(self.circuit.id)
+        self.state
+            .circuits
+            .write_internal_circuit_state(self.circuit.id)
     }
 
     pub fn time_provider(&self) -> &dyn TimeProvider {

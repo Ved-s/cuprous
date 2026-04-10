@@ -1,12 +1,23 @@
-use std::{any::{Any, TypeId}, sync::Arc};
+use std::{
+    any::{Any, TypeId},
+    sync::Arc,
+};
 
 use eframe::egui::{
-    vec2, Color32, CursorIcon, DragValue, PointerButton, Rect, Sense, Stroke, StrokeKind, Ui, Widget
+    Color32, CursorIcon, DragValue, PointerButton, Rect, Sense, Stroke, StrokeKind, Ui, Widget,
+    vec2,
 };
-use smoldata::{raw::RawValue, SmolRead, SmolReadWrite, SmolWrite};
+use smoldata::{SmolRead, SmolReadWrite, SmolWrite, raw::RawValue};
 
 use crate::{
-    Direction4, Direction8, circuits::{CircuitUpdateReason, PropertyChangedParams, props::{PropertyInfo, PropertyValue}}, state::wires::WireState, str::{ArcRefStr, ArcStaticStr}, vector::Vec2usize
+    Direction4, Direction8,
+    circuits::{
+        CircuitUpdateReason, PropertyChangedParams,
+        props::{PropertyInfo, PropertyValue},
+    },
+    state::wires::WireState,
+    str::{ArcRefStr, ArcStaticStr},
+    vector::Vec2usize,
 };
 
 use super::{
@@ -22,7 +33,7 @@ pub struct ButtonConfig {
 
 #[derive(Default, Clone)]
 pub struct Button {
-    config: ButtonConfig
+    config: ButtonConfig,
 }
 
 #[derive(Default, SmolReadWrite)]
@@ -51,7 +62,10 @@ impl CircuitImpl for Button {
     }
 
     fn occupies_quarter(&self, _: CircuitTransform, qpos: Vec2usize) -> bool {
-        qpos.x >= 1 && qpos.x <= (self.config.width.0 - 1) * 2 && qpos.y >= 1 && qpos.y <= (self.config.height.0 - 1) * 2
+        qpos.x >= 1
+            && qpos.x <= (self.config.width.0 - 1) * 2
+            && qpos.y >= 1
+            && qpos.y <= (self.config.height.0 - 1) * 2
     }
 
     fn describe_pins(&self, _: CircuitTransform) -> Box<[PinDescription]> {
@@ -166,7 +180,7 @@ impl CircuitImpl for Button {
 
     fn pins_changed(&self, circuit: &Circuit, instance: &mut Self::Instance) {
         let pins = circuit.pins.read();
-        
+
         instance.pin = pins[0].pin.clone();
     }
 
@@ -222,18 +236,18 @@ impl CircuitImpl for Button {
 
     fn get_property_value<'a>(&'a mut self, id: &str) -> Option<&'a mut dyn PropertyValue> {
         match id {
-            "width" => Some(&mut  self.config.width),
+            "width" => Some(&mut self.config.width),
             "height" => Some(&mut self.config.height),
             _ => None,
         }
     }
 
     fn property_changed(
-            &self,
-            circuit_instance: Option<(&Circuit, &mut Self::Instance)>,
-            prop: &str,
-            params: &mut PropertyChangedParams,
-        ) {
+        &self,
+        circuit_instance: Option<(&Circuit, &mut Self::Instance)>,
+        prop: &str,
+        params: &mut PropertyChangedParams,
+    ) {
         if prop == "width" || prop == "height" {
             params.trigger_update = true;
 

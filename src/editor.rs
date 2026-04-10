@@ -12,9 +12,19 @@ use std::{
 use eframe::egui::{Rect, remap_clamp, vec2};
 
 use crate::{
-    BIG_WIRE_POINT_WIDTH, CHUNK_SIZE, Direction4Half, Direction4HalfArray, Direction8, Direction8Array, WIRE_POINT_WIDTH, WIRE_WIDTH, board::{Board, CircuitCreationOverrides, Wire, WirePoint}, circuits::{
-        Circuit, CircuitBlueprint, CircuitImplBox, CircuitPin, CircuitTransform, CircuitUpdateReason, PinType, RealizedPin, TransformSupport
-    }, containers::Chunks2D, pool::get_pooled, selection::{Selection, SelectionImpl}, state::sim::UpdateTaskPool, time::{self, Instant, TimeProvider}, vector::{Vec2f, Vec2isize, Vec2usize}
+    BIG_WIRE_POINT_WIDTH, CHUNK_SIZE, Direction4Half, Direction4HalfArray, Direction8,
+    Direction8Array, WIRE_POINT_WIDTH, WIRE_WIDTH,
+    board::{Board, CircuitCreationOverrides, Wire, WirePoint},
+    circuits::{
+        Circuit, CircuitBlueprint, CircuitImplBox, CircuitPin, CircuitTransform,
+        CircuitUpdateReason, PinType, RealizedPin, TransformSupport,
+    },
+    containers::Chunks2D,
+    pool::get_pooled,
+    selection::{Selection, SelectionImpl},
+    state::sim::UpdateTaskPool,
+    time::{self, Instant, TimeProvider},
+    vector::{Vec2f, Vec2isize, Vec2usize},
 };
 
 #[derive(Default)]

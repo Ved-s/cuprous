@@ -1,11 +1,18 @@
 use std::sync::Arc;
 
-use eframe::{egui::{Color32, Pos2}, epaint::{PathShape, PathStroke}};
+use eframe::{
+    egui::{Color32, Pos2},
+    epaint::{PathShape, PathStroke},
+};
 
 use crate::{
-    Direction8, circuits::{
-        Circuit, CircuitCtx, CircuitImpl, CircuitPin, CircuitRenderingContext, CircuitTransform, CircuitUpdateReason, PinDescription, PinType
-    }, str::ArcStaticStr, vector::Vec2usize
+    Direction8,
+    circuits::{
+        Circuit, CircuitCtx, CircuitImpl, CircuitPin, CircuitRenderingContext, CircuitTransform,
+        CircuitUpdateReason, PinDescription, PinType,
+    },
+    str::ArcStaticStr,
+    vector::Vec2usize,
 };
 
 #[derive(Clone)]
@@ -85,6 +92,8 @@ impl CircuitImpl for Buffer {
 
     fn update(&self, ctx: CircuitCtx<Self>, _reason: CircuitUpdateReason) {
         let state = ctx.instance.input.get_state(&ctx.state.circuits);
-        ctx.instance.output.set_output(&mut ctx.state.circuits, ctx.tasks, state);
+        ctx.instance
+            .output
+            .set_output(&mut ctx.state.circuits, ctx.tasks, state);
     }
 }

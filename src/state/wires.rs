@@ -1,8 +1,8 @@
 use std::{any::type_name, ops::Deref};
 
-use smoldata::{reader::ReadError, SmolRead, SmolWrite};
+use smoldata::{SmolRead, SmolWrite, reader::ReadError};
 
-use crate::{board::Wire, Style};
+use crate::{Style, board::Wire};
 
 #[derive(Clone, Default, PartialEq, Eq)]
 pub enum WireState {
@@ -105,7 +105,7 @@ impl BoardWiresState {
         style.wire_colors.get(&state)
     }
 
-     pub fn get_wire(&self, id: usize) -> WireState {
+    pub fn get_wire(&self, id: usize) -> WireState {
         self.wires.get(id).cloned().unwrap_or_default()
     }
 
@@ -130,7 +130,7 @@ impl BoardWiresState {
         self.wires[id] = state;
         true
     }
-    
+
     pub fn reset(&mut self) {
         self.wires.clear();
     }

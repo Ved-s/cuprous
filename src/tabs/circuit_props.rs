@@ -11,15 +11,17 @@ use parking_lot::{RwLock, RwLockWriteGuard};
 use crate::{
     app::{App, SelectedItem},
     circuits::{
-        CircuitBlueprint, CircuitImplData, CircuitUpdateReason, PinType, PropertyChangedParams, TransformSupport, props::{PropertyInfo, PropertyValue}
+        CircuitBlueprint, CircuitImplData, CircuitUpdateReason, PinType, PropertyChangedParams,
+        TransformSupport,
+        props::{PropertyInfo, PropertyValue},
     },
     editor::{BoardEditor, InWorldError, SelectedBoardItem},
     pool::get_pooled,
     state::sim::UpdateTaskPool,
     str::ArcStaticStr,
     tabs::{TabCreation, TabImpl},
+    time::{self, Instant, TimeProvider},
     vector::Vec2usize,
-    time::{self, Instant, TimeProvider}
 };
 
 const INWORLD_ERROR_DURATION: Duration = Duration::from_secs(5);
@@ -69,7 +71,9 @@ impl CircuitProps {
             let old_size = circuit_info.size;
             let new_size = circuit_imp.imp.size(circuit_info.transform);
 
-            let new_size = circuit_info.transform.transform_size(new_size, Some(TransformSupport::Automatic));
+            let new_size = circuit_info
+                .transform
+                .transform_size(new_size, Some(TransformSupport::Automatic));
 
             circuit_info.size = new_size;
 
@@ -134,7 +138,9 @@ impl CircuitProps {
                     disconnected_wires.insert(wire.id);
                 }
 
-                let orig_size = circuit_info.transform.transform_size(circuit_info.size, Some(TransformSupport::Automatic));
+                let orig_size = circuit_info
+                    .transform
+                    .transform_size(circuit_info.size, Some(TransformSupport::Automatic));
 
                 circuit_info.transform.transform_pins(
                     orig_size,
@@ -559,8 +565,10 @@ impl CircuitProps {
 
                     match geometry_res {
                         Err(why) => {
-                            self.value_errors
-                                .insert(id.clone(), (why, time::SYSTEM.now() + VALUE_ERROR_DURATION));
+                            self.value_errors.insert(
+                                id.clone(),
+                                (why, time::SYSTEM.now() + VALUE_ERROR_DURATION),
+                            );
                         }
                         Ok(()) => {
                             self.value_errors.remove(id);
@@ -581,7 +589,10 @@ impl CircuitProps {
                                 if params.trigger_update {
                                     let mut tasks = get_pooled::<UpdateTaskPool>();
 
-                                    tasks.add_circuit_task(circuit_id, CircuitUpdateReason::PropertyChanged(id.clone()));
+                                    tasks.add_circuit_task(
+                                        circuit_id,
+                                        CircuitUpdateReason::PropertyChanged(id.clone()),
+                                    );
 
                                     editor.board().add_tasks(&tasks);
                                 }
@@ -596,11 +607,7 @@ impl CircuitProps {
         self.value_errors.retain(|_, v| v.1 > now);
     }
 
-    fn circuit_blueprint_ui(
-        &mut self,
-        ui: &mut Ui,
-        blueprint: &mut CircuitBlueprint,
-    ) {
+    fn circuit_blueprint_ui(&mut self, ui: &mut Ui, blueprint: &mut CircuitBlueprint) {
         CircuitPropertiesUi::new(ui).show(|mut prop_ui| {
             self.blueprint_property_list.clear();
 

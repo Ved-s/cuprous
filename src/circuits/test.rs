@@ -2,9 +2,23 @@ use std::{ops::Deref, sync::Arc, time::Duration};
 
 use eframe::egui::{Color32, FontId, Rect};
 
-use crate::{Direction4, Direction8, circuits::CircuitUpdateReason, editor::QuarterPos, ext::IteratorProduct, pool::get_pooled, state::wires::WireState, str::ArcStaticStr, vector::Vec2usize, vertex_renderer::{ColoredTriangleBuffer, ColoredVertexRenderer}};
+use crate::{
+    Direction4, Direction8,
+    circuits::CircuitUpdateReason,
+    editor::QuarterPos,
+    ext::IteratorProduct,
+    pool::get_pooled,
+    state::wires::WireState,
+    str::ArcStaticStr,
+    vector::Vec2usize,
+    vertex_renderer::{ColoredTriangleBuffer, ColoredVertexRenderer},
+};
 
-use super::{Circuit, CircuitCtx, CircuitFlipSupport, CircuitImpl, CircuitPin, CircuitRenderingContext, CircuitRotationSupport, CircuitTransform, CircuitTransformSupport, FlipType, PinDescription, PinType, TransformSupport};
+use super::{
+    Circuit, CircuitCtx, CircuitFlipSupport, CircuitImpl, CircuitPin, CircuitRenderingContext,
+    CircuitRotationSupport, CircuitTransform, CircuitTransformSupport, FlipType, PinDescription,
+    PinType, TransformSupport,
+};
 
 #[allow(unused)]
 pub struct TestCircuitInstance {
@@ -178,7 +192,7 @@ impl CircuitImpl for TestCircuit {
 
     fn pins_changed(&self, circuit: &Circuit, instance: &mut Self::Instance) {
         let pins = circuit.pins.read();
-        
+
         instance.pin_a = pins[0].pin.clone();
         instance.pin_b = pins[1].pin.clone();
         instance.pin_c = pins[2].pin.clone();
@@ -195,8 +209,7 @@ impl CircuitImpl for TestCircuit {
                 if let WireState::Bool(b) = state {
                     if !b {
                         ctx.reset_timer();
-                    }
-                    else if ctx.get_timer().is_none() {
+                    } else if ctx.get_timer().is_none() {
                         ctx.set_timer(ctx.time_provider().now(), Some(Duration::from_secs(1)));
                     }
                 }

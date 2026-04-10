@@ -1,7 +1,7 @@
 use std::ops::Div;
 
 use eframe::{
-    egui::{remap, Color32, Stroke},
+    egui::{Color32, Stroke, remap},
     epaint::{PathShape, PathStroke},
 };
 
@@ -105,8 +105,8 @@ impl GateImpl for Xnor {
         let arc_inner = PointPath::new(-0.2, -0.03)
             .line_to(-0.2, -0.025)
             .cubic_bezier(
-                bez_x - 0.27, (1.0 / 5.0) * size.y, 
-                bez_x - 0.27, (4.0 / 5.0) * size.y, 
+                bez_x - 0.27, (1.0 / 5.0) * size.y,
+                bez_x - 0.27, (4.0 / 5.0) * size.y,
                 -0.2, size.y + 0.025,
                 straightness
             )
@@ -116,14 +116,14 @@ impl GateImpl for Xnor {
             .cubic_bezier(
                 bez_x - 0.22, (1.0 / 5.0) * size.y,
                 bez_x - 0.22, (4.0 / 5.0) * size.y,
-                -0.1, size.y + 0.025, 
+                -0.1, size.y + 0.025,
                 straightness
             )
             .line_to(-0.3, size.y + 0.025)
             .cubic_bezier(
                 bez_x - 0.32, (4.0 / 5.0) * size.y,
                 bez_x - 0.32, (1.0 / 5.0) * size.y,
-                -0.3, -0.025, 
+                -0.3, -0.025,
                 straightness
             )
             .line_to(-0.1, -0.025);

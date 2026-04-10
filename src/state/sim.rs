@@ -10,7 +10,8 @@ use smoldata::SmolReadWrite;
 
 use crate::{
     circuits::CircuitUpdateReason,
-    pool::{Pooled, get_pooled}, time::Instant,
+    pool::{Pooled, get_pooled},
+    time::Instant,
 };
 
 #[derive(Default)]
@@ -412,7 +413,10 @@ impl BoardSimulationState {
             return None;
         }
 
-        self.circuit_updates.iter().find(|d| d.id == id).map(|d| (d.at, d.interval))
+        self.circuit_updates
+            .iter()
+            .find(|d| d.id == id)
+            .map(|d| (d.at, d.interval))
     }
 
     pub fn stop_update(&mut self, id: usize) {
@@ -451,7 +455,10 @@ impl BoardSimulationState {
         let mut updates = BTreeMap::new();
 
         for d in self.circuit_updates.iter() {
-            let at = d.at.checked_duration_since(start).map(|d| d.as_nanos()).unwrap_or(0);
+            let at =
+                d.at.checked_duration_since(start)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0);
             let interval = d.interval.map(|d| d.as_nanos());
 
             updates.insert(d.id, (at, interval));
@@ -489,7 +496,8 @@ impl BoardSimulationState {
             let at = start + Duration::from_nanos_u128(at);
             let interval = interval.map(Duration::from_nanos_u128);
 
-            self.circuit_updates.push(CircuitUpdateDeadline { at, id, interval });
+            self.circuit_updates
+                .push(CircuitUpdateDeadline { at, id, interval });
             self.active_circuit_updates.insert(id);
         }
     }

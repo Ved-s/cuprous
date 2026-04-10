@@ -1,7 +1,14 @@
-use std::{fmt::{Debug, Display}, ops::Deref, sync::Arc};
+use std::{
+    fmt::{Debug, Display},
+    ops::Deref,
+    sync::Arc,
+};
 
 use serde::{Deserialize, Serialize};
-use smoldata::{reader::{ReadError, UnexpectedValueResultExt}, SmolRead, SmolWrite};
+use smoldata::{
+    SmolRead, SmolWrite,
+    reader::{ReadError, UnexpectedValueResultExt},
+};
 
 pub type ArcStaticStr = ArcRefStr<'static>;
 
@@ -66,7 +73,8 @@ impl Eq for ArcRefStr<'_> {}
 impl Serialize for ArcRefStr<'_> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
-        S: serde::Serializer {
+        S: serde::Serializer,
+    {
         self.deref().serialize(serializer)
     }
 }
@@ -74,7 +82,8 @@ impl Serialize for ArcRefStr<'_> {
 impl<'de> Deserialize<'de> for ArcRefStr<'_> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
-        D: serde::Deserializer<'de> {
+        D: serde::Deserializer<'de>,
+    {
         Ok(Self::Arc(<&str>::deserialize(deserializer)?.into()))
     }
 }
@@ -91,13 +100,12 @@ impl Debug for ArcRefStr<'_> {
             ArcRefStr::Ref(r) => {
                 f.write_str("ref ")?;
                 Debug::fmt(r, f)
-            },
+            }
             ArcRefStr::Arc(a) => {
                 f.write_str("arc ")?;
                 Debug::fmt(a.deref(), f)
-            },
+            }
         }
-        
     }
 }
 
@@ -118,7 +126,11 @@ impl SmolWrite for ArcRefStr<'_> {
 
 impl SmolRead for ArcRefStr<'_> {
     fn read(reader: smoldata::reader::ValueReader) -> smoldata::reader::ReadResult<Self> {
-        let str = reader.read()?.take_string().with_type_name_of::<Self>().map_err(ReadError::from)?;
+        let str = reader
+            .read()?
+            .take_string()
+            .with_type_name_of::<Self>()
+            .map_err(ReadError::from)?;
         Ok(match str.read()? {
             smoldata::str::SdString::Empty => Self::Ref(""),
             smoldata::str::SdString::Arc(a) => Self::Arc(a),

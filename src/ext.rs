@@ -23,4 +23,4 @@ pub trait IteratorProduct: Iterator + Sized {
     }
 }
 
-impl<T: Iterator> IteratorProduct for T {} 
+impl<T: Iterator> IteratorProduct for T {}

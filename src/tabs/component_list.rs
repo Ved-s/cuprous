@@ -2,7 +2,8 @@ use std::{f32::consts::PI, ops::Deref, sync::Arc};
 
 use eframe::{
     egui::{
-        pos2, vec2, CollapsingHeader, Color32, FontSelection, Painter, Pos2, Rect, Response, Sense, Shape, Stroke, StrokeKind, TextWrapMode, Ui, WidgetText
+        CollapsingHeader, Color32, FontSelection, Painter, Pos2, Rect, Response, Sense, Shape,
+        Stroke, StrokeKind, TextWrapMode, Ui, WidgetText, pos2, vec2,
     },
     epaint::{MarginF32, PathShape, PathStroke},
 };

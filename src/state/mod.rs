@@ -1,6 +1,7 @@
 use std::{
     ops::Deref,
-    sync::{Arc, Weak}, time::Duration,
+    sync::{Arc, Weak},
+    time::Duration,
 };
 
 use parking_lot::Mutex;
@@ -196,7 +197,11 @@ impl BoardState {
         }
     }
 
-    pub fn load_stage4_simulation_data(&mut self, data: &mut savestate::BoardState, start: Instant) {
+    pub fn load_stage4_simulation_data(
+        &mut self,
+        data: &mut savestate::BoardState,
+        start: Instant,
+    ) {
         self.sim.load(std::mem::take(&mut data.sim), start);
     }
 
@@ -382,7 +387,7 @@ impl BoardState {
             *queue_immediately = true;
         }
     }
-    
+
     pub fn get_timer(&self, circuit_id: usize) -> Option<(Instant, Option<Duration>)> {
         self.sim.find_update(circuit_id)
     }

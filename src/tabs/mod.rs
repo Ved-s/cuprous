@@ -1,8 +1,8 @@
 use std::{
     error::Error,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
 };
 
@@ -12,8 +12,8 @@ use serde::{Deserialize, Serialize};
 use crate::{app::App, define_tab_type, str::ArcStaticStr};
 
 mod board_view;
-mod component_list;
 mod circuit_props;
+mod component_list;
 
 define_tab_type! {
     #[derive(Clone, Copy)]
@@ -201,7 +201,11 @@ impl egui_dock::TabViewer for TabViewer<'_> {
         }
     }
 
-    fn tab_style_override(&self, tab: &Self::Tab, global_style: &egui_dock::TabStyle) -> Option<egui_dock::TabStyle> {
+    fn tab_style_override(
+        &self,
+        tab: &Self::Tab,
+        global_style: &egui_dock::TabStyle,
+    ) -> Option<egui_dock::TabStyle> {
         tab.imp.tab_style_override(global_style)
     }
 

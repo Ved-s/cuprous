@@ -1,4 +1,3 @@
-
 #[allow(clippy::approx_constant)]
 pub mod circles {
     use crate::vector::Vec2f;

@@ -1,11 +1,19 @@
 use std::sync::Arc;
 
-use eframe::{egui::{Color32, Pos2, Stroke}, epaint::{PathShape, PathStroke}};
+use eframe::{
+    egui::{Color32, Pos2, Stroke},
+    epaint::{PathShape, PathStroke},
+};
 
 use crate::{
-    Direction8, circuits::{
-        Circuit, CircuitCtx, CircuitImpl, CircuitPin, CircuitRenderingContext, CircuitTransform, CircuitUpdateReason, PinDescription, PinType
-    }, state::wires::WireState, str::ArcStaticStr, vector::Vec2usize
+    Direction8,
+    circuits::{
+        Circuit, CircuitCtx, CircuitImpl, CircuitPin, CircuitRenderingContext, CircuitTransform,
+        CircuitUpdateReason, PinDescription, PinType,
+    },
+    state::wires::WireState,
+    str::ArcStaticStr,
+    vector::Vec2usize,
 };
 
 #[derive(Clone)]
@@ -93,7 +101,7 @@ impl CircuitImpl for Not {
 
     fn pins_changed(&self, circuit: &Circuit, instance: &mut Self::Instance) {
         let pins = circuit.pins.read();
-        
+
         instance.input = pins[0].pin.clone();
         instance.output = pins[1].pin.clone();
     }
@@ -105,6 +113,8 @@ impl CircuitImpl for Not {
             WireState::Bool(b) => WireState::Bool(!b),
             WireState::Error => WireState::Error,
         };
-        ctx.instance.output.set_output(&mut ctx.state.circuits, ctx.tasks, out);
+        ctx.instance
+            .output
+            .set_output(&mut ctx.state.circuits, ctx.tasks, out);
     }
 }

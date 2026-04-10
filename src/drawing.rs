@@ -5,7 +5,11 @@ use eframe::{
     epaint::{CornerRadiusF32, PathShape, PathStroke},
 };
 
-use crate::{vector::Vec2f, vertex_renderer::{ColoredTriangleBuffer, ColoredVertex}, Direction8, PinStyle};
+use crate::{
+    Direction8, PinStyle,
+    vector::Vec2f,
+    vertex_renderer::{ColoredTriangleBuffer, ColoredVertex},
+};
 
 pub fn rotated_rect(
     rect: Rect,
@@ -49,7 +53,10 @@ pub fn pin(
                 return;
             }
 
-            let dir_angle = dir.filter(|_| *directional).map(|d| d.into_angle_xp_cw()).unwrap_or(0.0);
+            let dir_angle = dir
+                .filter(|_| *directional)
+                .map(|d| d.into_angle_xp_cw())
+                .unwrap_or(0.0);
             let angle = angle + dir_angle;
             let one_angle = TAU / *n as f32;
 

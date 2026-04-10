@@ -1,12 +1,14 @@
 #![allow(dead_code)]
 
 use std::{
-    fmt::Display, marker::PhantomData, ops::{Add, Mul}
+    fmt::Display,
+    marker::PhantomData,
+    ops::{Add, Mul},
 };
 
 use eframe::emath;
 use num_traits::{Float, FloatConst, Zero};
-use serde::{de::Visitor, Deserialize};
+use serde::{Deserialize, de::Visitor};
 use smoldata::{SmolRead, SmolWrite};
 
 #[derive(PartialEq, Eq, Copy, Clone, Debug, Hash, Default)]
@@ -29,7 +31,7 @@ impl<T> Vector2<T> {
 
     pub fn from_angle_length(angle: T, length: T) -> Self
     where
-        T: Float
+        T: Float,
     {
         Self::new(angle.cos() * length, angle.sin() * length)
     }
@@ -56,25 +58,25 @@ impl<T> Vector2<T> {
     }
 
     pub fn set_length(&mut self, length: T)
-    where 
-        T: Float + FloatConst
+    where
+        T: Float + FloatConst,
     {
         let angle = self.angle();
         *self = Self::from_angle_length(angle, length);
     }
 
     pub fn with_length(self, length: T)
-    where 
-        T: Float + FloatConst
+    where
+        T: Float + FloatConst,
     {
         let angle = self.angle();
         Self::from_angle_length(angle, length);
     }
 
-     /// 0 -> 2PI cloclwise from +X axis (default for operations)
+    /// 0 -> 2PI cloclwise from +X axis (default for operations)
     pub fn angle(self) -> T
-    where 
-        T: Float + FloatConst
+    where
+        T: Float + FloatConst,
     {
         let a = self.y.atan2(self.x);
         if a.is_sign_negative() {
@@ -133,8 +135,8 @@ impl<T> Vector2<T> {
 
     /// 0 -> τ cloclwise from +X (right) axis
     pub fn angle_to_xp(&self) -> T
-    where 
-        T: Float + FloatConst
+    where
+        T: Float + FloatConst,
     {
         // let v = self.y.atan2(self.x);
 
@@ -146,20 +148,29 @@ impl<T> Vector2<T> {
 
         (self.y.atan2(self.x) + T::TAU()) % T::TAU()
     }
-    
+
     pub fn swapped(self) -> Self {
         Self::new(self.y, self.x)
     }
 
-    pub fn floor(self) -> Self where T: Float {
+    pub fn floor(self) -> Self
+    where
+        T: Float,
+    {
         Self::new(self.x.floor(), self.y.floor())
     }
 
-    pub fn ceil(self) -> Self where T: Float {
+    pub fn ceil(self) -> Self
+    where
+        T: Float,
+    {
         Self::new(self.x.ceil(), self.y.ceil())
     }
-    
-    pub fn round(self) -> Self where T: Float {
+
+    pub fn round(self) -> Self
+    where
+        T: Float,
+    {
         Self::new(self.x.round(), self.y.round())
     }
 }
@@ -201,9 +212,7 @@ impl_op!(Mul, mul);
 impl_op!(Div, div);
 impl_op!(Rem, rem);
 
-impl<T: std::ops::Neg<Output = O>, O> std::ops::Neg
-    for Vector2<T>
-{
+impl<T: std::ops::Neg<Output = O>, O> std::ops::Neg for Vector2<T> {
     type Output = Vector2<O>;
 
     fn neg(self) -> Self::Output {
@@ -241,8 +250,7 @@ impl<'a, T: Clone> TryFrom<&'a [T]> for Vector2<T> {
     fn try_from(value: &'a [T]) -> Result<Self, Self::Error> {
         if value.len() != 2 {
             Err(())
-        }
-        else {
+        } else {
             Ok(Self::new(value[0].clone(), value[1].clone()))
         }
     }
@@ -254,8 +262,7 @@ impl<T> TryFrom<Vec<T>> for Vector2<T> {
     fn try_from(mut value: Vec<T>) -> Result<Self, Self::Error> {
         if value.len() != 2 {
             Err(value)
-        }
-        else {
+        } else {
             let y = value.pop().unwrap();
             let x = value.pop().unwrap();
             Ok(Self::new(x, y))
@@ -281,7 +288,6 @@ impl<T> From<Vector2<T>> for (T, T) {
         (val.x, val.y)
     }
 }
-
 
 impl From<Vec2f> for emath::Pos2 {
     fn from(val: Vec2f) -> Self {
@@ -336,7 +342,7 @@ impl<T> std::convert::AsMut<[T; 2]> for Vector2<T> {
 
 impl<T> std::ops::Deref for Vector2<T> {
     type Target = [T; 2];
-    
+
     fn deref(&self) -> &Self::Target {
         self.as_ref()
     }
@@ -367,7 +373,7 @@ impl<T> std::ops::Index<usize> for Vector2<T> {
         match index {
             0 => &self.x,
             1 => &self.y,
-            _ => panic!("component index {index} is out of bounds for 2d vector")
+            _ => panic!("component index {index} is out of bounds for 2d vector"),
         }
     }
 }
@@ -376,7 +382,7 @@ impl<T> std::ops::IndexMut<usize> for Vector2<T> {
         match index {
             0 => &mut self.x,
             1 => &mut self.y,
-            _ => panic!("component index {index} is out of bounds for 2d vector")
+            _ => panic!("component index {index} is out of bounds for 2d vector"),
         }
     }
 }
@@ -390,9 +396,7 @@ impl<T: serde::Serialize> serde::Serialize for Vector2<T> {
     }
 }
 
-impl<'de, T: serde::Deserialize<'de> + Zero> serde::Deserialize<'de>
-    for Vector2<T>
-{
+impl<'de, T: serde::Deserialize<'de> + Zero> serde::Deserialize<'de> for Vector2<T> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -408,8 +412,9 @@ impl<'de, T: Deserialize<'de> + Zero> Visitor<'de> for Vector2Visitor<T> {
     type Value = Vector2<T>;
 
     fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
-        where
-            A: serde::de::SeqAccess<'de>, {
+    where
+        A: serde::de::SeqAccess<'de>,
+    {
         let x = seq.next_element()?.unwrap_or(T::zero());
         let y = seq.next_element()?.unwrap_or(T::zero());
         Ok(Vector2::new(x, y))
@@ -420,8 +425,7 @@ impl<'de, T: Deserialize<'de> + Zero> Visitor<'de> for Vector2Visitor<T> {
     }
 }
 
-impl<T: geo_nd::Float + Default> geo_nd::Vector<T, 2> for Vector2<T>
-{
+impl<T: geo_nd::Float + Default> geo_nd::Vector<T, 2> for Vector2<T> {
     fn is_zero(&self) -> bool {
         Zero::is_zero(self)
     }

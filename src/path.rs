@@ -23,11 +23,7 @@ pub trait Path: Sized {
     ) -> BezierLine<Self> {
         BezierLine {
             before: self,
-            points: [
-                Vec2f::new(x1, y1),
-                Vec2f::new(x2, y2),
-                Vec2f::zero()
-            ],
+            points: [Vec2f::new(x1, y1), Vec2f::new(x2, y2), Vec2f::zero()],
             quadratic: true,
             straightness,
         }
@@ -46,11 +42,7 @@ pub trait Path: Sized {
     ) -> BezierLine<Self> {
         BezierLine {
             before: self,
-            points: [
-                Vec2f::new(x1, y1),
-                Vec2f::new(x2, y2),
-                Vec2f::new(x3, y3),
-            ],
+            points: [Vec2f::new(x1, y1), Vec2f::new(x2, y2), Vec2f::new(x3, y3)],
             quadratic: false,
             straightness,
         }

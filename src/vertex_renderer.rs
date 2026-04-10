@@ -1,8 +1,4 @@
-use std::{
-    f32::consts::TAU,
-    marker::PhantomData,
-    sync::OnceLock,
-};
+use std::{f32::consts::TAU, marker::PhantomData, sync::OnceLock};
 
 use glow::{Buffer, Context, HasContext, Program, UniformLocation, VertexArray};
 use parking_lot::{Mutex, MutexGuard};

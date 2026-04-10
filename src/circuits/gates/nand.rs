@@ -1,8 +1,14 @@
 use std::ops::Div;
 
-use eframe::{egui::{Color32, Stroke}, epaint::{PathShape, PathStroke}};
+use eframe::{
+    egui::{Color32, Stroke},
+    epaint::{PathShape, PathStroke},
+};
 
-use crate::{circuits::CircuitRenderingContext, path::{Path, PointPath}};
+use crate::{
+    circuits::CircuitRenderingContext,
+    path::{Path, PointPath},
+};
 
 use super::{GateImpl, GateOutput};
 
@@ -41,15 +47,26 @@ impl GateImpl for Nand {
 
         let border_color = Color32::BLACK;
         let fill_color = Color32::from_gray(200);
-        let straightness = (0.3 / (ctx.paint.screen.scale.sqrt())).div(size.y).max(0.02);
+        let straightness = (0.3 / (ctx.paint.screen.scale.sqrt()))
+            .div(size.y)
+            .max(0.02);
 
         let path = PointPath::new(0.5, 0.0)
             .line_to(size.x * 0.4, 0.0)
-            .quadratic_bezier(size.x - 0.75, 0.0, size.x - 0.75, size.y / 2.0, straightness)
+            .quadratic_bezier(
+                size.x - 0.75,
+                0.0,
+                size.x - 0.75,
+                size.y / 2.0,
+                straightness,
+            )
             .quadratic_bezier(size.x - 0.75, size.y, size.x * 0.4, size.y, straightness)
             .line_to(0.5, size.y);
 
-        let points = path.iter_points(|v| ctx.transform_pos(v)).map(Into::into).collect();
+        let points = path
+            .iter_points(|v| ctx.transform_pos(v))
+            .map(Into::into)
+            .collect();
 
         let path = PathShape {
             points,

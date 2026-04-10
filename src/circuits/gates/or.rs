@@ -1,7 +1,7 @@
 use std::ops::Div;
 
 use eframe::{
-    egui::{remap, Color32},
+    egui::{Color32, remap},
     epaint::{PathShape, PathStroke},
 };
 
