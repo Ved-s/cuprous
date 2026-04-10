@@ -4,7 +4,7 @@ use eframe::egui::{Color32, FontId, Rect};
 
 use crate::{
     Direction4, Direction8,
-    circuits::CircuitUpdateReason,
+    components::ComponentUpdateReason,
     editor::QuarterPos,
     ext::IteratorProduct,
     pool::get_pooled,
@@ -15,46 +15,46 @@ use crate::{
 };
 
 use super::{
-    Circuit, CircuitCtx, CircuitFlipSupport, CircuitImpl, CircuitPin, CircuitRenderingContext,
-    CircuitRotationSupport, CircuitTransform, CircuitTransformSupport, FlipType, PinDescription,
+    Component, ComponentCtx, ComponentFlipSupport, ComponentImpl, ComponentPin, ComponentRenderingContext,
+    ComponentRotationSupport, ComponentTransform, ComponentTransformSupport, FlipType, PinDescription,
     PinType, TransformSupport,
 };
 
 #[allow(unused)]
-pub struct TestCircuitInstance {
-    pin_a: Arc<CircuitPin>,
-    pin_b: Arc<CircuitPin>,
-    pin_c: Arc<CircuitPin>,
-    pin_d: Arc<CircuitPin>,
-    pin_e: Arc<CircuitPin>,
+pub struct TestComponentInstance {
+    pin_a: Arc<ComponentPin>,
+    pin_b: Arc<ComponentPin>,
+    pin_c: Arc<ComponentPin>,
+    pin_d: Arc<ComponentPin>,
+    pin_e: Arc<ComponentPin>,
 }
 
 #[derive(Default)]
-pub struct TestCircuitState {
+pub struct TestComponentState {
     count: usize,
     clock: bool,
 }
 
 #[derive(Clone)]
-pub struct TestCircuit;
+pub struct Test;
 
-impl CircuitImpl for TestCircuit {
-    type State = TestCircuitState;
-    type Instance = TestCircuitInstance;
+impl ComponentImpl for Test {
+    type State = TestComponentState;
+    type Instance = TestComponentInstance;
 
     fn id(&self) -> ArcStaticStr {
         "test".into()
     }
 
     fn display_name(&self) -> ArcStaticStr {
-        "Test circuit".into()
+        "Test component".into()
     }
 
-    fn size(&self, _transform: CircuitTransform) -> Vec2usize {
+    fn size(&self, _transform: ComponentTransform) -> Vec2usize {
         [4, 3].into()
     }
 
-    fn occupies_quarter(&self, _transform: CircuitTransform, qpos: Vec2usize) -> bool {
+    fn occupies_quarter(&self, _transform: ComponentTransform, qpos: Vec2usize) -> bool {
         const QUARTERS: [[usize; 8]; 6] = [
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 1, 1, 1, 1, 1, 0, 0],
@@ -67,7 +67,7 @@ impl CircuitImpl for TestCircuit {
         QUARTERS[qpos.y][qpos.x] != 0
     }
 
-    fn draw(&self, circuit: Option<CircuitCtx<Self>>, render: &CircuitRenderingContext) {
+    fn draw(&self, component: Option<ComponentCtx<Self>>, render: &ComponentRenderingContext) {
         let size = self.size(render.transform);
 
         let mut buffer = get_pooled::<ColoredTriangleBuffer>();
@@ -105,7 +105,7 @@ impl CircuitImpl for TestCircuit {
             );
         });
 
-        let count = circuit
+        let count = component
             .as_ref()
             .and_then(|c| c.read_internal_state().map(|s| s.count));
 
@@ -125,7 +125,7 @@ impl CircuitImpl for TestCircuit {
         }
     }
 
-    fn describe_pins(&self, _transform: CircuitTransform) -> Box<[PinDescription]> {
+    fn describe_pins(&self, _transform: ComponentTransform) -> Box<[PinDescription]> {
         [
             PinDescription {
                 pos: [0, 0].into(),
@@ -166,22 +166,22 @@ impl CircuitImpl for TestCircuit {
         .into()
     }
 
-    fn transform_support(&self) -> CircuitTransformSupport {
-        CircuitTransformSupport {
-            rotation: Some(CircuitRotationSupport {
+    fn transform_support(&self) -> ComponentTransformSupport {
+        ComponentTransformSupport {
+            rotation: Some(ComponentRotationSupport {
                 support: TransformSupport::Automatic,
                 default_dir: Direction4::Right,
             }),
-            flip: Some(CircuitFlipSupport {
+            flip: Some(ComponentFlipSupport {
                 support: TransformSupport::Automatic,
                 ty: FlipType::Vertical,
             }),
         }
     }
 
-    fn create_instance(&self, circuit: &Arc<Circuit>) -> Self::Instance {
-        let pins = circuit.pins.read();
-        TestCircuitInstance {
+    fn create_instance(&self, component: &Arc<Component>) -> Self::Instance {
+        let pins = component.pins.read();
+        TestComponentInstance {
             pin_a: pins[0].pin.clone(),
             pin_b: pins[1].pin.clone(),
             pin_c: pins[2].pin.clone(),
@@ -190,8 +190,8 @@ impl CircuitImpl for TestCircuit {
         }
     }
 
-    fn pins_changed(&self, circuit: &Circuit, instance: &mut Self::Instance) {
-        let pins = circuit.pins.read();
+    fn pins_changed(&self, component: &Component, instance: &mut Self::Instance) {
+        let pins = component.pins.read();
 
         instance.pin_a = pins[0].pin.clone();
         instance.pin_b = pins[1].pin.clone();
@@ -200,8 +200,8 @@ impl CircuitImpl for TestCircuit {
         instance.pin_e = pins[4].pin.clone();
     }
 
-    fn update(&self, mut ctx: CircuitCtx<Self>, reason: CircuitUpdateReason) {
-        if let CircuitUpdateReason::ChangedPin(pin) = reason {
+    fn update(&self, mut ctx: ComponentCtx<Self>, reason: ComponentUpdateReason) {
+        if let ComponentUpdateReason::ChangedPin(pin) = reason {
             ctx.write_internal_state().count += 1;
 
             if pin == 1 {
@@ -216,7 +216,7 @@ impl CircuitImpl for TestCircuit {
             }
         }
 
-        if let CircuitUpdateReason::Timer = reason {
+        if let ComponentUpdateReason::Timer = reason {
             let state = ctx.write_internal_state();
             state.clock = !state.clock;
             let clock = state.clock;

@@ -10,8 +10,8 @@ use parking_lot::{RwLock, RwLockWriteGuard};
 
 use crate::{
     app::{App, SelectedItem},
-    circuits::{
-        CircuitBlueprint, CircuitImplData, CircuitUpdateReason, PinType, PropertyChangedParams,
+    components::{
+        ComponentBlueprint, ComponentImplData, ComponentUpdateReason, PinType, PropertyChangedParams,
         TransformSupport,
         props::{PropertyInfo, PropertyValue},
     },
@@ -28,7 +28,7 @@ const INWORLD_ERROR_DURATION: Duration = Duration::from_secs(5);
 const VALUE_ERROR_DURATION: Duration = Duration::from_secs(5);
 const VALUE_ERROR_FADE_TIME: Duration = Duration::from_millis(500);
 
-pub struct CircuitProps {
+pub struct ComponentProps {
     last_selection_counter: Option<usize>,
     last_editor: Option<Weak<RwLock<BoardEditor>>>,
 
@@ -37,71 +37,71 @@ pub struct CircuitProps {
 
     value_errors: HashMap<ArcStaticStr, (String, Instant)>,
 
-    new_circuit_property_list: Vec<ArcStaticStr>,
-    new_circuit_property_map: HashMap<ArcStaticStr, PropertyInfo>,
+    new_component_property_list: Vec<ArcStaticStr>,
+    new_component_property_map: HashMap<ArcStaticStr, PropertyInfo>,
 
     old_value_error_id_range: Option<Range<usize>>,
 
     blueprint_property_list: Vec<PropertyInfo>,
 }
 
-struct OldCircuitGeometryData {
+struct OldComponentGeometryData {
     /// None when size didn't change
     size: Option<Vec2usize>,
 }
 
-impl CircuitProps {
+impl ComponentProps {
     fn try_applying_geometry_and_pin_changes(
         editor: &mut BoardEditor,
-        circuit_locks: &mut BTreeMap<usize, RwLockWriteGuard<'_, CircuitImplData>>,
-        reset: impl FnOnce(&mut BTreeMap<usize, RwLockWriteGuard<'_, CircuitImplData>>),
+        component_locks: &mut BTreeMap<usize, RwLockWriteGuard<'_, ComponentImplData>>,
+        reset: impl FnOnce(&mut BTreeMap<usize, RwLockWriteGuard<'_, ComponentImplData>>),
         in_world_errors: &mut Vec<InWorldError>,
     ) -> Result<(), String> {
-        let mut changed_geometry_circuits = BTreeMap::new();
+        let mut changed_geometry_components = BTreeMap::new();
         let board = editor.board().clone();
-        let circuits = board.circuits().read();
+        let components = board.components().read();
 
         let mut error = None::<String>;
         let mut multiple_errors = false;
 
-        // Find circuits with changed deometry, remove them
-        for (&id, circuit_imp) in circuit_locks.iter_mut() {
-            let mut circuit_info = circuits.get(id).unwrap().info.write();
+        // Find components with changed deometry, remove them
+        for (&id, component_imp) in component_locks.iter_mut() {
+            let mut component_info = components.get(id).unwrap().info.write();
 
-            let old_size = circuit_info.size;
-            let new_size = circuit_imp.imp.size(circuit_info.transform);
+            let old_size = component_info.size;
+            let new_size = component_imp.imp.size(component_info.transform);
 
-            let new_size = circuit_info
+            let new_size = component_info
                 .transform
                 .transform_size(new_size, Some(TransformSupport::Automatic));
 
-            circuit_info.size = new_size;
+            component_info.size = new_size;
 
             if old_size != new_size {
-                editor.tiles.remove_circuit(id, circuit_info.pos, old_size);
-                changed_geometry_circuits.insert(
+                editor.tiles.remove_component(id, component_info.pos, old_size);
+                changed_geometry_components.insert(
                     id,
-                    OldCircuitGeometryData {
+                    OldComponentGeometryData {
                         size: Some(old_size),
                     },
                 );
                 continue;
             }
 
-            let valid = editor.tiles.validate_circuit_geometry(
+            let valid = editor.tiles.validate_component_geometry(
                 id,
-                circuit_info.pos,
-                circuit_info.size,
-                circuit_info.transform,
-                &circuit_imp.imp,
+                component_info.pos,
+                component_info.size,
+                component_info.transform,
+                &component_imp.imp,
             );
             if !valid {
-                editor.tiles.remove_circuit(id, circuit_info.pos, old_size);
-                changed_geometry_circuits.insert(id, OldCircuitGeometryData { size: None });
+                editor.tiles.remove_component(id, component_info.pos, old_size);
+                changed_geometry_components.insert(id, OldComponentGeometryData { size: None });
             }
         }
 
-        let mut old_circuit_pins = BTreeMap::new();
+        let mut old_component_pins = BTreeMap::new();
 
         let mut fail = false;
 
@@ -109,21 +109,21 @@ impl CircuitProps {
 
         let mut tasks = get_pooled::<UpdateTaskPool>();
 
-        // Update pins, place circuits with changed geometry
-        for (&id, circuit_imp) in circuit_locks.iter_mut() {
-            let circuit = circuits.get(id).unwrap();
-            let circuit_info = circuit.info.read();
-            let mut new_pins = circuit_imp.imp.describe_pins(circuit_info.transform);
-            let mut circuit_pins = circuit.pins.write();
+        // Update pins, place components with changed geometry
+        for (&id, component_imp) in component_locks.iter_mut() {
+            let component = components.get(id).unwrap();
+            let component_info = component.info.read();
+            let mut new_pins = component_imp.imp.describe_pins(component_info.transform);
+            let mut component_pins = component.pins.write();
 
-            let pins_eq = circuit_pins.len() == new_pins.len()
+            let pins_eq = component_pins.len() == new_pins.len()
                 && new_pins
                     .iter()
-                    .zip(circuit_pins.iter())
+                    .zip(component_pins.iter())
                     .all(|(n, o)| n.functionally_equals(&o.desc));
 
             if !pins_eq {
-                for p in circuit_pins.iter() {
+                for p in component_pins.iter() {
                     let Some(wire) = p.pin.wire.write().take() else {
                         continue;
                     };
@@ -131,18 +131,18 @@ impl CircuitProps {
                     wire.remove_pin(id, p.pin.id);
 
                     editor.remove_needless_wire_point(
-                        circuit_info.pos + p.desc.pos.convert(|v| v as isize),
+                        component_info.pos + p.desc.pos.convert(|v| v as isize),
                         &mut tasks,
                     );
                     tasks.clear(); // We do tasks manually in the correct order
                     disconnected_wires.insert(wire.id);
                 }
 
-                let orig_size = circuit_info
+                let orig_size = component_info
                     .transform
-                    .transform_size(circuit_info.size, Some(TransformSupport::Automatic));
+                    .transform_size(component_info.size, Some(TransformSupport::Automatic));
 
-                circuit_info.transform.transform_pins(
+                component_info.transform.transform_pins(
                     orig_size,
                     &mut new_pins.iter_mut().map(|p| p.pos_dir_mut()),
                     Some(TransformSupport::Automatic),
@@ -151,21 +151,21 @@ impl CircuitProps {
                 let realized_pins = new_pins
                     .into_iter()
                     .enumerate()
-                    .map(|(id, pin)| pin.into_realized(circuit.clone(), id))
+                    .map(|(id, pin)| pin.into_realized(component.clone(), id))
                     .collect();
 
-                let old_pins = std::mem::replace(circuit_pins.deref_mut(), realized_pins);
-                old_circuit_pins.insert(id, old_pins);
+                let old_pins = std::mem::replace(component_pins.deref_mut(), realized_pins);
+                old_component_pins.insert(id, old_pins);
             }
 
-            let res = if changed_geometry_circuits.contains_key(&id) {
-                let res = editor.tiles.place_circuit(
-                    board.circuits().read().get(id).unwrap(),
-                    circuit_info.pos,
-                    circuit_info.size,
-                    circuit_info.transform,
-                    &circuit_imp.imp,
-                    &circuit_pins,
+            let res = if changed_geometry_components.contains_key(&id) {
+                let res = editor.tiles.place_component(
+                    board.components().read().get(id).unwrap(),
+                    component_info.pos,
+                    component_info.size,
+                    component_info.transform,
+                    &component_imp.imp,
+                    &component_pins,
                     false,
                 );
 
@@ -175,9 +175,9 @@ impl CircuitProps {
                     .tiles
                     .replace_pins(
                         id,
-                        circuit_info.pos,
-                        circuit_info.size,
-                        circuit_pins.deref(),
+                        component_info.pos,
+                        component_info.size,
+                        component_pins.deref(),
                     )
                     .map_err(Into::into)
             } else {
@@ -197,8 +197,8 @@ impl CircuitProps {
                 }
                 in_world_errors.push(InWorldError::new(
                     Rect::from_min_size(
-                        circuit_info.pos.convert(|v| v as f32).into(),
-                        circuit_info.size.convert(|v| v as f32).into(),
+                        component_info.pos.convert(|v| v as f32).into(),
+                        component_info.size.convert(|v| v as f32).into(),
                     ),
                     INWORLD_ERROR_DURATION,
                     str,
@@ -208,68 +208,68 @@ impl CircuitProps {
 
         // Roll everything back
         if fail {
-            for (&id, data) in changed_geometry_circuits.iter() {
-                let mut circuit_info = circuits.get(id).unwrap().info.upgradable_read();
+            for (&id, data) in changed_geometry_components.iter() {
+                let mut component_info = components.get(id).unwrap().info.upgradable_read();
 
                 editor
                     .tiles
-                    .remove_circuit(id, circuit_info.pos, circuit_info.size);
+                    .remove_component(id, component_info.pos, component_info.size);
 
                 if let Some(old_size) = data.size {
-                    circuit_info.with_upgraded(|i| {
+                    component_info.with_upgraded(|i| {
                         i.size = old_size;
                     });
                 }
             }
 
-            for (&id, pins) in old_circuit_pins.iter_mut() {
-                if !changed_geometry_circuits.contains_key(&id) {
-                    let info = circuits.get(id).unwrap().info.read();
+            for (&id, pins) in old_component_pins.iter_mut() {
+                if !changed_geometry_components.contains_key(&id) {
+                    let info = components.get(id).unwrap().info.read();
                     editor
                         .tiles
                         .replace_pins(id, info.pos, info.size, pins)
                         .ok();
                 }
 
-                *circuits.get(id).unwrap().pins.write() = std::mem::take(pins);
+                *components.get(id).unwrap().pins.write() = std::mem::take(pins);
             }
 
-            reset(circuit_locks);
+            reset(component_locks);
 
-            for &id in changed_geometry_circuits.keys() {
-                let circuit = circuits.get(id).unwrap();
-                let circuit_info = circuit.info.read();
-                let circuit_pins = circuit.pins.read();
-                let circuit_imp = circuit_locks.get(&id).unwrap();
+            for &id in changed_geometry_components.keys() {
+                let component = components.get(id).unwrap();
+                let component_info = component.info.read();
+                let component_pins = component.pins.read();
+                let component_imp = component_locks.get(&id).unwrap();
 
-                editor.tiles.place_circuit(
-                    board.circuits().read().get(id).unwrap(),
-                    circuit_info.pos,
-                    circuit_info.size,
-                    circuit_info.transform,
-                    &circuit_imp.imp,
-                    &circuit_pins,
+                editor.tiles.place_component(
+                    board.components().read().get(id).unwrap(),
+                    component_info.pos,
+                    component_info.size,
+                    component_info.transform,
+                    &component_imp.imp,
+                    &component_pins,
                     true, // it worked before all of this so must be fine now!
                 );
             }
         }
 
-        // At this point everything is there but circuits with changed pins have them disconnected from the wires
+        // At this point everything is there but components with changed pins have them disconnected from the wires
 
         let mut connected_wires = BTreeSet::new();
 
         // Connect pins and place wires
-        for &id in circuit_locks.keys() {
-            if !old_circuit_pins.contains_key(&id) {
+        for &id in component_locks.keys() {
+            if !old_component_pins.contains_key(&id) {
                 continue;
             }
 
-            let circuit = circuits.get(id).unwrap();
-            let circuit_info = circuit.info.read();
-            let circuit_pins = circuit.pins.read();
+            let component = components.get(id).unwrap();
+            let component_info = component.info.read();
+            let component_pins = component.pins.read();
 
-            for p in circuit_pins.iter() {
-                let pos = circuit_info.pos + p.desc.pos.convert(|v| v as isize);
+            for p in component_pins.iter() {
+                let pos = component_info.pos + p.desc.pos.convert(|v| v as isize);
                 if editor.tiles.should_pin_wire_point_exist(pos) {
                     let wire = editor.set_wire_point(pos, None, true, &mut tasks);
                     connected_wires.insert(wire.id);
@@ -281,15 +281,15 @@ impl CircuitProps {
         // Add relevant state tasks
 
         // Update pin states
-        for &id in circuit_locks.keys() {
-            if !old_circuit_pins.contains_key(&id) {
+        for &id in component_locks.keys() {
+            if !old_component_pins.contains_key(&id) {
                 continue;
             }
 
-            let circuit = circuits.get(id).unwrap();
-            let circuit_pins = circuit.pins.read();
+            let component = components.get(id).unwrap();
+            let component_pins = component.pins.read();
 
-            for p in circuit_pins.iter() {
+            for p in component_pins.iter() {
                 let wire = p.pin.wire.read().clone();
                 match p.pin.ty {
                     PinType::Inside => {
@@ -299,12 +299,12 @@ impl CircuitProps {
                                 tasks.add_update_input_task(id, p.pin.id, false);
                             }
                         } else {
-                            tasks.add_drop_circuit_task(id, Some(p.pin.id));
+                            tasks.add_drop_component_task(id, Some(p.pin.id));
                         }
                     }
                     PinType::Outside => {
-                        // Circuit will be updated later, for now just drop it
-                        tasks.add_drop_circuit_task(id, Some(p.pin.id));
+                        // Component will be updated later, for now just drop it
+                        tasks.add_drop_component_task(id, Some(p.pin.id));
                     }
                 }
             }
@@ -315,32 +315,32 @@ impl CircuitProps {
             tasks.add_wire_task(w, false);
         }
 
-        // Update circuits
+        // Update components
         if !fail {
-            for (id, lock) in &mut *circuit_locks {
-                if !old_circuit_pins.contains_key(id) {
+            for (id, lock) in &mut *component_locks {
+                if !old_component_pins.contains_key(id) {
                     continue;
                 }
 
-                let circuit = circuits.get(*id).unwrap();
+                let component = components.get(*id).unwrap();
 
-                tasks.add_circuit_task(*id, CircuitUpdateReason::NewPins);
+                tasks.add_component_task(*id, ComponentUpdateReason::NewPins);
 
                 let lock = lock.deref_mut();
 
-                lock.imp.pins_changed(circuit, &mut lock.instance);
+                lock.imp.pins_changed(component, &mut lock.instance);
             }
         }
 
         board.add_tasks(&tasks);
 
-        for &id in circuit_locks.keys() {
-            let circuit = circuits.get(id).unwrap();
-            let mut circuit_info = circuit.info.write();
+        for &id in component_locks.keys() {
+            let component = components.get(id).unwrap();
+            let mut component_info = component.info.write();
 
-            circuit_info.render_size = circuit_info
+            component_info.render_size = component_info
                 .transform
-                .transform_size(circuit_info.size, Some(TransformSupport::Automatic));
+                .transform_size(component_info.size, Some(TransformSupport::Automatic));
         }
 
         if multiple_errors {
@@ -352,7 +352,7 @@ impl CircuitProps {
         }
     }
 
-    fn in_world_circuits_ui(&mut self, app: &mut App, ui: &mut Ui) {
+    fn in_world_components_ui(&mut self, app: &mut App, ui: &mut Ui) {
         let Some(editor) = app.last_active_editor.as_ref().and_then(Weak::upgrade) else {
             ui.centered_and_justified(|ui| {
                 Label::new("No active editor").ui(ui);
@@ -375,7 +375,7 @@ impl CircuitProps {
                     "\
                     Nothing selected.\n\
                     Select some citcuits on the board using the Selection tool \
-                    or pick a configurable circuit from the component list.\
+                    or pick a configurable component from the component list.\
                 ",
                 )
                 .wrap_mode(TextWrapMode::Wrap)
@@ -398,7 +398,7 @@ impl CircuitProps {
 
         let mut editor = editor.write();
         let board = editor.board().clone();
-        let board_circuits = board.circuits().read();
+        let board_components = board.components().read();
 
         if changed {
             self.visible_property_list.clear();
@@ -408,37 +408,37 @@ impl CircuitProps {
             let mut first = true;
 
             for &item in editor_data.selection.iter() {
-                let SelectedBoardItem::Circuit { id, .. } = item else {
+                let SelectedBoardItem::Component { id, .. } = item else {
                     continue;
                 };
 
-                let Some(circuit) = board_circuits.get(id) else {
+                let Some(component) = board_components.get(id) else {
                     continue;
                 };
 
-                self.new_circuit_property_list.clear();
-                self.new_circuit_property_map.clear();
+                self.new_component_property_list.clear();
+                self.new_component_property_map.clear();
 
-                let imp = circuit.imp.read();
+                let imp = component.imp.read();
                 imp.imp.enum_properties(&mut |p| {
-                    if self.new_circuit_property_map.contains_key(&p.id) {
+                    if self.new_component_property_map.contains_key(&p.id) {
                         return;
                     };
 
-                    self.new_circuit_property_list.push(p.id.clone());
-                    self.new_circuit_property_map
+                    self.new_component_property_list.push(p.id.clone());
+                    self.new_component_property_map
                         .insert(p.id.clone(), p.clone());
                 });
 
                 if first {
                     self.visible_property_list
-                        .clone_from(&self.new_circuit_property_list);
+                        .clone_from(&self.new_component_property_list);
                     self.visible_property_map
-                        .clone_from(&self.new_circuit_property_map);
+                        .clone_from(&self.new_component_property_map);
                     first = false;
                 } else {
                     self.visible_property_map.retain(|id, prop| {
-                        let new = self.new_circuit_property_map.get(id);
+                        let new = self.new_component_property_map.get(id);
                         let Some(new) = new else {
                             return false;
                         };
@@ -457,8 +457,8 @@ impl CircuitProps {
                 }
             }
 
-            self.new_circuit_property_list.clear();
-            self.new_circuit_property_map.clear();
+            self.new_component_property_list.clear();
+            self.new_component_property_map.clear();
         }
 
         if self.visible_property_list.is_empty() {
@@ -466,7 +466,7 @@ impl CircuitProps {
                 Label::new(
                     "\
                     Select some citcuits on the board using the Selection tool \
-                    or pick a configurable circuit from the component list.\
+                    or pick a configurable component from the component list.\
                 ",
                 )
                 .wrap_mode(TextWrapMode::Wrap)
@@ -475,19 +475,19 @@ impl CircuitProps {
             return;
         }
 
-        CircuitPropertiesUi::new(ui).show(|mut prop_ui| {
-            let mut circuit_locks = BTreeMap::new();
+        ComponentPropertiesUi::new(ui).show(|mut prop_ui| {
+            let mut component_locks = BTreeMap::new();
             for &item in editor_data.selection.iter() {
-                let SelectedBoardItem::Circuit { id, .. } = item else {
+                let SelectedBoardItem::Component { id, .. } = item else {
                     continue;
                 };
 
-                let Some(circuit) = board_circuits.get(id) else {
+                let Some(component) = board_components.get(id) else {
                     continue;
                 };
 
-                let imp_lock = circuit.imp.write();
-                circuit_locks.insert(id, imp_lock);
+                let imp_lock = component.imp.write();
+                component_locks.insert(id, imp_lock);
             }
 
             for id in self.visible_property_list.iter() {
@@ -495,8 +495,8 @@ impl CircuitProps {
                     continue;
                 };
 
-                let first_circuit = circuit_locks.values_mut().next().expect("any circuit");
-                let prop_value = first_circuit.imp.get_property_value(id);
+                let first_component = component_locks.values_mut().next().expect("any component");
+                let prop_value = first_component.imp.get_property_value(id);
 
                 let error_text = if let Some((error, time)) = self.value_errors.get(id) {
                     let remaining_secs = time
@@ -521,15 +521,15 @@ impl CircuitProps {
                     let mut old_values = BTreeMap::new();
 
                     {
-                        for (&circuit_id, circuit) in circuit_locks.iter_mut() {
-                            let Some(prop) = circuit.imp.get_property_value(id) else {
+                        for (&component_id, component) in component_locks.iter_mut() {
+                            let Some(prop) = component.imp.get_property_value(id) else {
                                 continue;
                             };
 
                             let old = prop.clone_dyn();
                             new.clone_into_dyn(prop);
 
-                            old_values.insert(circuit_id, old);
+                            old_values.insert(component_id, old);
                         }
                     }
 
@@ -545,11 +545,11 @@ impl CircuitProps {
                         let next_error_id = InWorldError::read_next_id();
                         let res = Self::try_applying_geometry_and_pin_changes(
                             &mut editor,
-                            &mut circuit_locks,
+                            &mut component_locks,
                             |cl| {
-                                for (circuit_id, old) in old_values {
-                                    let circuit = cl.get_mut(&circuit_id).unwrap();
-                                    let value = circuit.imp.get_property_value(id).unwrap();
+                                for (component_id, old) in old_values {
+                                    let component = cl.get_mut(&component_id).unwrap();
+                                    let value = component.imp.get_property_value(id).unwrap();
                                     old.clone_into_dyn(value);
                                 }
                             },
@@ -572,15 +572,15 @@ impl CircuitProps {
                         }
                         Ok(()) => {
                             self.value_errors.remove(id);
-                            for (&circuit_id, circuit) in circuit_locks.iter_mut() {
-                                let circuit = circuit.deref_mut();
+                            for (&component_id, component) in component_locks.iter_mut() {
+                                let component = component.deref_mut();
 
                                 let mut params = PropertyChangedParams::default();
 
-                                circuit.imp.property_changed(
+                                component.imp.property_changed(
                                     Some((
-                                        board_circuits.get(circuit_id).unwrap(),
-                                        &mut circuit.instance,
+                                        board_components.get(component_id).unwrap(),
+                                        &mut component.instance,
                                     )),
                                     id,
                                     &mut params,
@@ -589,9 +589,9 @@ impl CircuitProps {
                                 if params.trigger_update {
                                     let mut tasks = get_pooled::<UpdateTaskPool>();
 
-                                    tasks.add_circuit_task(
-                                        circuit_id,
-                                        CircuitUpdateReason::PropertyChanged(id.clone()),
+                                    tasks.add_component_task(
+                                        component_id,
+                                        ComponentUpdateReason::PropertyChanged(id.clone()),
                                     );
 
                                     editor.board().add_tasks(&tasks);
@@ -607,8 +607,8 @@ impl CircuitProps {
         self.value_errors.retain(|_, v| v.1 > now);
     }
 
-    fn circuit_blueprint_ui(&mut self, ui: &mut Ui, blueprint: &mut CircuitBlueprint) {
-        CircuitPropertiesUi::new(ui).show(|mut prop_ui| {
+    fn component_blueprint_ui(&mut self, ui: &mut Ui, blueprint: &mut ComponentBlueprint) {
+        ComponentPropertiesUi::new(ui).show(|mut prop_ui| {
             self.blueprint_property_list.clear();
 
             blueprint.imp.enum_properties(&mut |info| {
@@ -638,7 +638,7 @@ impl CircuitProps {
     }
 }
 
-impl TabCreation for CircuitProps {
+impl TabCreation for ComponentProps {
     fn new(_: &mut App) -> Self {
         Self {
             last_selection_counter: None,
@@ -649,8 +649,8 @@ impl TabCreation for CircuitProps {
 
             value_errors: Default::default(),
 
-            new_circuit_property_list: Default::default(),
-            new_circuit_property_map: Default::default(),
+            new_component_property_list: Default::default(),
+            new_component_property_map: Default::default(),
 
             old_value_error_id_range: None,
             blueprint_property_list: Default::default(),
@@ -658,33 +658,33 @@ impl TabCreation for CircuitProps {
     }
 }
 
-impl TabImpl for CircuitProps {
+impl TabImpl for ComponentProps {
     fn update(&mut self, app: &mut App, ui: &mut Ui) {
-        let Some(SelectedItem::Circuit(selected_circuit)) = &app.selected_item else {
-            self.in_world_circuits_ui(app, ui);
+        let Some(SelectedItem::Component(selected_component)) = &app.selected_item else {
+            self.in_world_components_ui(app, ui);
             return;
         };
 
-        self.circuit_blueprint_ui(ui, &mut selected_circuit.write());
+        self.component_blueprint_ui(ui, &mut selected_component.write());
     }
 }
 
-struct CircuitPropertiesUi<'a>(&'a mut Ui);
-struct CircuitPropertiesUiInner<'a>(&'a mut Ui);
+struct ComponentPropertiesUi<'a>(&'a mut Ui);
+struct ComponentPropertiesUiInner<'a>(&'a mut Ui);
 
-impl<'a> CircuitPropertiesUi<'a> {
+impl<'a> ComponentPropertiesUi<'a> {
     fn new(ui: &'a mut Ui) -> Self {
         Self(ui)
     }
 
-    fn show(self, add_contents: impl FnOnce(CircuitPropertiesUiInner)) {
+    fn show(self, add_contents: impl FnOnce(ComponentPropertiesUiInner)) {
         Grid::new("properties").num_columns(2).show(self.0, |ui| {
-            add_contents(CircuitPropertiesUiInner(ui));
+            add_contents(ComponentPropertiesUiInner(ui));
         });
     }
 }
 
-impl CircuitPropertiesUiInner<'_> {
+impl ComponentPropertiesUiInner<'_> {
     fn show_property(
         &mut self,
         info: &PropertyInfo,
@@ -699,7 +699,7 @@ impl CircuitPropertiesUiInner<'_> {
                 ui.horizontal_wrapped(|ui| {
                     ui.label(
                         RichText::new(format!(
-                            "Circuit enumerated this property (\"{}\") but returned no value",
+                            "Component enumerated this property (\"{}\") but returned no value",
                             info.id
                         ))
                         .color(Color32::RED),

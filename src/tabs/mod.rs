@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::{app::App, define_tab_type, str::ArcStaticStr};
 
 mod board_view;
-mod circuit_props;
+mod component_props;
 mod component_list;
 
 define_tab_type! {
@@ -30,11 +30,11 @@ define_tab_type! {
         #[closeable = false]
         BoardView,
 
-        #[id = "circuit_props"]
-        #[impl = circuit_props::CircuitProps, loadable = false]
-        #[title = "Circuit properties"]
+        #[id = "component_props"]
+        #[impl = component_props::ComponentProps, loadable = false]
+        #[title = "Component properties"]
         #[closeable = false]
-        CircuitProps,
+        ComponentProps,
     }
 }
 

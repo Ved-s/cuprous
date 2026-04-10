@@ -1,27 +1,29 @@
 use std::ops::Div;
 
 use eframe::{
-    egui::{Color32, Stroke, remap},
+    egui::{Color32, remap},
     epaint::{PathShape, PathStroke},
 };
 
 use crate::{
-    circuits::CircuitRenderingContext,
+    components::ComponentRenderingContext,
     path::{Path, PointPath},
 };
 
 use super::{GateImpl, GateOutput};
 
-#[derive(Clone)]
-pub struct Nor;
+pub const EGUI_BEZIER_OVERDRAW_HACK: bool = true;
 
-impl GateImpl for Nor {
+#[derive(Clone)]
+pub struct Or;
+
+impl GateImpl for Or {
     fn id() -> &'static str {
-        "gate_nor"
+        "gate_or"
     }
 
     fn display_name() -> &'static str {
-        "NOR gate"
+        "OR gate"
     }
 
     fn init_state() -> bool {
@@ -29,21 +31,21 @@ impl GateImpl for Nor {
     }
 
     fn fold(_: &mut bool, input: bool) -> GateOutput {
-        if !input {
+        if input {
             GateOutput {
                 out: true,
-                fin: false,
+                fin: true,
             }
         } else {
             GateOutput {
                 out: false,
-                fin: true,
+                fin: false,
             }
         }
     }
 
     #[rustfmt::skip]
-    fn draw(ctx: &CircuitRenderingContext) {
+    fn draw(ctx: &ComponentRenderingContext) {
         let size = ctx.world_size().convert(|v| v as f32);
 
         let border_color = Color32::BLACK;
@@ -54,7 +56,7 @@ impl GateImpl for Nor {
 
         let bez_x = remap(size.x, 4.0..=5.0, 1.0..=1.2);
 
-        let path = PointPath::new(size.x - 0.75, size.y / 2.0)
+        let path = PointPath::new(size.x - 0.5, size.y / 2.0)
             .quadratic_bezier((3.0 / 5.0) * size.x, 0.0, 0.25, 0.0, straightness)
             .cubic_bezier(
                 bez_x, (1.0 / 5.0) * size.y,
@@ -64,7 +66,7 @@ impl GateImpl for Nor {
             )
             .quadratic_bezier(
                 (3.0 / 5.0) * size.x, size.y,
-                size.x - 0.75, size.y / 2.0,
+                size.x - 0.5, size.y / 2.0,
                 straightness,
             );
 
@@ -73,7 +75,7 @@ impl GateImpl for Nor {
             .map(Into::into)
             .collect();
 
-        if super::or::EGUI_BEZIER_OVERDRAW_HACK {
+        if EGUI_BEZIER_OVERDRAW_HACK {
             ctx.paint.painter.add(PathShape {
                 points: points.clone(),
                 closed: true,
@@ -95,13 +97,5 @@ impl GateImpl for Nor {
                 stroke: PathStroke::new(0.15 * ctx.paint.screen.scale, border_color),
             });
         }
-
-        let circle_pos = ctx.transform_pos([size.x - 0.68, size.y / 2.0].into());
-        ctx.paint.circle(
-            circle_pos.into(),
-            0.2 * ctx.paint.screen.scale,
-            fill_color,
-            Stroke::new(0.15 * ctx.paint.screen.scale, border_color),
-        );
     }
 }

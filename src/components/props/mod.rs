@@ -13,7 +13,7 @@ pub struct PropertyInfo {
     pub display_name: ArcStaticStr,
     pub type_id: TypeId,
 
-    /// Changing this property affects circuit size, which tiles circuit occupies, or circuit pins in any way
+    /// Changing this property affects component size, which tiles component occupies, or component pins in any way
     pub affects_geometry_or_pins: bool,
 }
 

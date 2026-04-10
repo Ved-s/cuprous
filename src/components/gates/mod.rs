@@ -4,8 +4,8 @@ use traitbox::traitbox;
 
 use crate::{
     Direction4, Direction8,
-    circuits::{
-        CircuitFlipSupport, CircuitRotationSupport, CircuitTransformSupport, CircuitUpdateReason,
+    components::{
+        ComponentFlipSupport, ComponentRotationSupport, ComponentTransformSupport, ComponentUpdateReason,
         FlipType, TransformSupport,
     },
     state::wires::WireState,
@@ -14,7 +14,7 @@ use crate::{
 };
 
 use super::{
-    Circuit, CircuitCtx, CircuitImpl, CircuitPin, CircuitRenderingContext, CircuitTransform,
+    Component, ComponentCtx, ComponentImpl, ComponentPin, ComponentRenderingContext, ComponentTransform,
     PinDescription, PinType,
 };
 
@@ -37,7 +37,7 @@ trait GateImpl {
 
     fn init_state() -> bool;
     fn fold(state: &mut bool, input: bool) -> GateOutput;
-    fn draw(ctx: &CircuitRenderingContext);
+    fn draw(ctx: &ComponentRenderingContext);
 }
 
 traitbox! {
@@ -49,7 +49,7 @@ traitbox! {
         fn display_name() -> &'static str;
         fn init_state() -> bool;
         fn fold(state: &mut bool, input: bool) -> GateOutput;
-        fn draw(ctx: &CircuitRenderingContext);
+        fn draw(ctx: &ComponentRenderingContext);
     }
 
     trait Clone {
@@ -104,11 +104,11 @@ impl Gate {
 }
 
 pub struct GateInstance {
-    inputs: Box<[Arc<CircuitPin>]>,
-    output: Arc<CircuitPin>,
+    inputs: Box<[Arc<ComponentPin>]>,
+    output: Arc<ComponentPin>,
 }
 
-impl CircuitImpl for Gate {
+impl ComponentImpl for Gate {
     type State = ();
 
     type Instance = GateInstance;
@@ -121,29 +121,29 @@ impl CircuitImpl for Gate {
         self.imp.display_name().into()
     }
 
-    fn size(&self, _: CircuitTransform) -> Vec2usize {
+    fn size(&self, _: ComponentTransform) -> Vec2usize {
         [4, 3].into()
     }
 
     // TODO: more precise occupation check
-    fn occupies_quarter(&self, _: CircuitTransform, qpos: Vec2usize) -> bool {
+    fn occupies_quarter(&self, _: ComponentTransform, qpos: Vec2usize) -> bool {
         qpos.x != 0 && qpos.x != 7
     }
 
-    fn transform_support(&self) -> CircuitTransformSupport {
-        CircuitTransformSupport {
-            rotation: Some(CircuitRotationSupport {
+    fn transform_support(&self) -> ComponentTransformSupport {
+        ComponentTransformSupport {
+            rotation: Some(ComponentRotationSupport {
                 support: TransformSupport::Automatic,
                 default_dir: Direction4::Up,
             }),
-            flip: Some(CircuitFlipSupport {
+            flip: Some(ComponentFlipSupport {
                 support: TransformSupport::Automatic,
                 ty: FlipType::Horizontal,
             }),
         }
     }
 
-    fn describe_pins(&self, _: CircuitTransform) -> Box<[PinDescription]> {
+    fn describe_pins(&self, _: ComponentTransform) -> Box<[PinDescription]> {
         [
             PinDescription {
                 pos: [0, 0].into(),
@@ -170,12 +170,12 @@ impl CircuitImpl for Gate {
         .into()
     }
 
-    fn draw(&self, _: Option<CircuitCtx<Self>>, render: &CircuitRenderingContext) {
+    fn draw(&self, _: Option<ComponentCtx<Self>>, render: &ComponentRenderingContext) {
         self.imp.draw(render);
     }
 
-    fn create_instance(&self, circuit: &Arc<Circuit>) -> Self::Instance {
-        let pins = circuit.pins.read();
+    fn create_instance(&self, component: &Arc<Component>) -> Self::Instance {
+        let pins = component.pins.read();
 
         GateInstance {
             inputs: pins[..pins.len() - 1]
@@ -186,8 +186,8 @@ impl CircuitImpl for Gate {
         }
     }
 
-    fn pins_changed(&self, circuit: &Circuit, instance: &mut Self::Instance) {
-        let pins = circuit.pins.read();
+    fn pins_changed(&self, component: &Component, instance: &mut Self::Instance) {
+        let pins = component.pins.read();
 
         instance.inputs = pins[..pins.len() - 1]
             .iter()
@@ -198,7 +198,7 @@ impl CircuitImpl for Gate {
 
     // TODO: let user select what to do with None inputs
 
-    fn update(&self, mut ctx: CircuitCtx<Self>, _: CircuitUpdateReason) {
+    fn update(&self, mut ctx: ComponentCtx<Self>, _: ComponentUpdateReason) {
         let inputs = &ctx.instance.inputs;
 
         let output = 'compute: {

@@ -15,7 +15,7 @@ use smoldata::{SmolRead, raw::RawValue};
 use crate::{
     Style,
     board::Board,
-    circuits::{CircuitBlueprint, CircuitImplBox},
+    components::{ComponentBlueprint, ComponentImplBox},
     editor::{BoardEditor, BoardEditorSharedState},
     io::copystate,
     simulation::SimulationCtx,
@@ -64,7 +64,7 @@ pub struct App {
     pub gl: Arc<glow::Context>,
     pub selected_item: Option<SelectedItem>,
     pub selected_tab: Option<TabType>,
-    pub blueprints: HashMap<ArcStaticStr, Arc<RwLock<CircuitBlueprint>>>,
+    pub blueprints: HashMap<ArcStaticStr, Arc<RwLock<ComponentBlueprint>>>,
     pub blueprint_order: Vec<ArcStaticStr>,
 
     pub style: Arc<Style>,
@@ -88,19 +88,19 @@ impl App {
         egui_storage: Box<dyn Storage>,
     ) -> Self {
         // TODO: save and load blueprint data
-        let mut blueprints: Vec<CircuitImplBox> = vec![
-            crate::circuits::test::TestCircuit.into(),
-            crate::circuits::button::Button::default().into(),
-            crate::circuits::gates::Gate::and().into(),
-            crate::circuits::gates::Gate::nand().into(),
-            crate::circuits::gates::Gate::or().into(),
-            crate::circuits::gates::Gate::nor().into(),
-            crate::circuits::gates::Gate::xor().into(),
-            crate::circuits::gates::Gate::xnor().into(),
-            crate::circuits::gates::not::Not.into(),
-            crate::circuits::constant::Constant::new(WireState::Bool(false)).into(),
-            crate::circuits::buffer::Buffer.into(),
-            crate::circuits::error_filter::ErrorFilter.into(),
+        let mut blueprints: Vec<ComponentImplBox> = vec![
+            crate::components::test::Test.into(),
+            crate::components::button::Button::default().into(),
+            crate::components::gates::Gate::and().into(),
+            crate::components::gates::Gate::nand().into(),
+            crate::components::gates::Gate::or().into(),
+            crate::components::gates::Gate::nor().into(),
+            crate::components::gates::Gate::xor().into(),
+            crate::components::gates::Gate::xnor().into(),
+            crate::components::gates::not::Not.into(),
+            crate::components::constant::Constant::new(WireState::Bool(false)).into(),
+            crate::components::buffer::Buffer.into(),
+            crate::components::error_filter::ErrorFilter.into(),
         ];
 
         let mut loaded_blueprints = HashMap::new();
@@ -153,7 +153,7 @@ impl App {
                 ));
             }
 
-            let b = Arc::new(RwLock::new(CircuitBlueprint::new(b)));
+            let b = Arc::new(RwLock::new(ComponentBlueprint::new(b)));
             blueprint_order.push(id.clone());
 
             assert!(
@@ -255,15 +255,15 @@ impl App {
                 }
             };
 
-            let pasted_circuits: Vec<_> = paste
-                .circuits
+            let pasted_components: Vec<_> = paste
+                .components
                 .into_iter()
                 .filter_map(|c| {
                     let blueprint = self.blueprints.get(&c.id).map(|b| b.read().clone());
 
                     let Some(mut blueprint) = blueprint else {
                         self.errors
-                            .push(eyre!("unknown circuit id \"{}\"", c.id).into());
+                            .push(eyre!("unknown component id \"{}\"", c.id).into());
                         return None;
                     };
 
@@ -275,7 +275,7 @@ impl App {
                     {
                         self.errors.push(
                             e.wrap_err(format!(
-                                "loading circuit config for \"{}\" ({})",
+                                "loading component config for \"{}\" ({})",
                                 blueprint.display_name, blueprint.id
                             ))
                             .into(),
@@ -284,7 +284,7 @@ impl App {
 
                     blueprint.recalculate();
 
-                    Some(PasteCircuit {
+                    Some(PasteComponent {
                         pos: c.pos,
                         blueprint,
                         instance: c.instance,
@@ -296,7 +296,7 @@ impl App {
 
             let mut size = Vec2usize::single_value(0);
 
-            for c in &pasted_circuits {
+            for c in &pasted_components {
                 let max = c.pos + c.blueprint.transformed_size;
                 size = [max.x.max(size.x), max.y.max(size.y)].into();
             }
@@ -322,7 +322,7 @@ impl App {
             let paste = Paste {
                 wire_parts: paste.wire_parts,
                 wire_points: paste.wire_points,
-                circuits: pasted_circuits,
+                components: pasted_components,
                 size,
             };
 
@@ -452,12 +452,12 @@ impl eframe::App for DockedApp {
 
         'b: {
             for tab in self.dock.iter_all_tabs() {
-                if matches!(tab.1.ty(), SafeTabType::Loaded(TabType::CircuitProps)) {
+                if matches!(tab.1.ty(), SafeTabType::Loaded(TabType::ComponentProps)) {
                     break 'b;
                 }
             }
 
-            let tab = Tab::new(TabType::CircuitProps, &mut self.app);
+            let tab = Tab::new(TabType::ComponentProps, &mut self.app);
 
             let surface = self.dock.main_surface_mut();
 
@@ -563,9 +563,9 @@ impl eframe::App for DockedApp {
     }
 }
 
-pub struct PasteCircuit {
+pub struct PasteComponent {
     pub pos: Vec2usize,
-    pub blueprint: CircuitBlueprint,
+    pub blueprint: ComponentBlueprint,
     pub instance: Option<RawValue>,
     pub state: Option<RawValue>,
     pub timer: Option<(u128, Option<u128>)>,
@@ -574,13 +574,13 @@ pub struct PasteCircuit {
 pub struct Paste {
     pub wire_parts: Vec<copystate::WirePart>,
     pub wire_points: Vec<Vec2usize>,
-    pub circuits: Vec<PasteCircuit>,
+    pub components: Vec<PasteComponent>,
     pub size: Vec2usize,
 }
 
 pub enum SelectedItem {
     Wires,
     Selection,
-    Circuit(Arc<RwLock<CircuitBlueprint>>),
+    Component(Arc<RwLock<ComponentBlueprint>>),
     Paste(Paste),
 }

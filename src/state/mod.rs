@@ -9,13 +9,13 @@ use parking_lot::Mutex;
 use crate::{
     Style,
     board::{Board, Wire},
-    circuits::{CircuitPin, CircuitUpdateReason, PinType, UntypedCircuitCtx},
+    components::{ComponentPin, ComponentUpdateReason, PinType, UntypedComponentCtx},
     io::savestate,
     pool::get_pooled,
     state::{
-        circuits::{BoardCircuitsState, CircuitState},
+        components::{BoardComponentsState, ComponentState},
         sim::{
-            BoardSimulationState, CircuitUpdateTask, ExternalTaskPool, InputUpdateTask, UpdateTask,
+            BoardSimulationState, ComponentUpdateTask, ExternalTaskPool, InputUpdateTask, UpdateTask,
             UpdateTaskPool, WireUpdateTask,
         },
         wires::{BoardWiresState, WireState},
@@ -23,14 +23,14 @@ use crate::{
     time::{self, Instant, TimeProvider},
 };
 
-pub mod circuits;
+pub mod components;
 pub mod sim;
 pub mod wires;
 
 pub struct BoardState {
     id: u128,
     pub wires: BoardWiresState,
-    pub circuits: BoardCircuitsState,
+    pub components: BoardComponentsState,
     sim: BoardSimulationState,
 
     board: Weak<Board>,
@@ -46,7 +46,7 @@ impl BoardState {
         Self {
             id,
             wires: Default::default(),
-            circuits: Default::default(),
+            components: Default::default(),
             sim: BoardSimulationState::new(),
             board: Arc::downgrade(board),
         }
@@ -68,7 +68,7 @@ impl BoardState {
 
     pub fn reset(&mut self) {
         self.wires.reset();
-        self.circuits.reset();
+        self.components.reset();
         self.sim.reset();
     }
 
@@ -79,7 +79,7 @@ impl BoardState {
             .expect("tried to save state without attached board");
 
         let wires = board.wires().read();
-        let circuits = board.circuits().read();
+        let components = board.components().read();
 
         savestate::BoardState {
             uid: self.id,
@@ -93,18 +93,18 @@ impl BoardState {
                     false => WireState::None,
                 })
                 .collect(),
-            circuits: self
-                .circuits
+            components: self
+                .components
                 .inner
                 .inner
                 .iter()
                 .enumerate()
                 .map(|(i, v)| {
                     let v = v.as_ref()?;
-                    let circuit = circuits.get(i)?;
-                    let pins = circuit.pins.read();
+                    let component = components.get(i)?;
+                    let pins = component.pins.read();
 
-                    Some(savestate::CircuitState {
+                    Some(savestate::ComponentState {
                         pins: v
                             .pins
                             .iter()
@@ -114,8 +114,8 @@ impl BoardState {
                             .collect(),
                         internal: {
                             v.internal.as_ref().and_then(|int| {
-                                let imp = circuit.imp.read();
-                                imp.imp.save_state(circuit, &imp.instance, int)
+                                let imp = component.imp.read();
+                                imp.imp.save_state(component, &imp.instance, int)
                             })
                         },
                     })
@@ -129,27 +129,27 @@ impl BoardState {
         self.wires.wires.clone_from(&data.wires);
     }
 
-    pub fn load_stage2_circuits(&mut self, data: &mut savestate::BoardState) {
+    pub fn load_stage2_components(&mut self, data: &mut savestate::BoardState) {
         let board = self
             .board
             .upgrade()
             .expect("tried to load state without attached board");
 
-        let board_circuits = board.circuits();
-        let board_circuits = board_circuits.read();
-        for (i, circuit_data) in data.circuits.iter().enumerate() {
-            let Some(circuit_data) = circuit_data else {
+        let board_components = board.components();
+        let board_components = board_components.read();
+        for (i, component_data) in data.components.iter().enumerate() {
+            let Some(component_data) = component_data else {
                 continue;
             };
 
-            let board_circuit = board_circuits.get(i).expect("loaded circuits");
+            let board_component = board_components.get(i).expect("loaded components");
 
-            let pins = board_circuit
+            let pins = board_component
                 .pins
                 .read()
                 .iter()
                 .map(|p| {
-                    circuit_data
+                    component_data
                         .pins
                         .get(&p.desc.id)
                         .cloned()
@@ -157,43 +157,43 @@ impl BoardState {
                 })
                 .collect();
 
-            let circuit = CircuitState {
+            let component = ComponentState {
                 pins,
                 internal: Default::default(),
             };
 
-            self.circuits.inner.set(i, circuit);
+            self.components.inner.set(i, component);
         }
     }
 
-    pub fn load_stage3_circuit_states(&mut self, data: &mut savestate::BoardState) {
+    pub fn load_stage3_component_states(&mut self, data: &mut savestate::BoardState) {
         let board = self
             .board
             .upgrade()
             .expect("tried to load state without attached board");
 
-        let board_circuits = board.circuits();
-        let board_circuits = board_circuits.read();
-        for (i, circuit_data) in data.circuits.iter().enumerate() {
-            let Some(circuit_data) = circuit_data else {
+        let board_components = board.components();
+        let board_components = board_components.read();
+        for (i, component_data) in data.components.iter().enumerate() {
+            let Some(component_data) = component_data else {
                 continue;
             };
 
-            let Some(state_data) = &circuit_data.internal else {
+            let Some(state_data) = &component_data.internal else {
                 continue;
             };
 
-            let board_circuit = board_circuits.get(i).expect("loaded circuits");
-            let circuit = self.circuits.inner.get_mut(i).expect("loaded circuits");
+            let board_component = board_components.get(i).expect("loaded components");
+            let component = self.components.inner.get_mut(i).expect("loaded components");
 
-            let imp = board_circuit.imp.read();
+            let imp = board_component.imp.read();
 
             // todo: errors
             let state = imp
                 .imp
-                .load_state(board_circuit, &imp.instance, state_data)
+                .load_state(board_component, &imp.instance, state_data)
                 .ok();
-            circuit.internal = state;
+            component.internal = state;
         }
     }
 
@@ -205,12 +205,12 @@ impl BoardState {
         self.sim.load(std::mem::take(&mut data.sim), start);
     }
 
-    pub fn pin_color(&self, pin: &CircuitPin, style: &Style) -> eframe::egui::Color32 {
+    pub fn pin_color(&self, pin: &ComponentPin, style: &Style) -> eframe::egui::Color32 {
         let connected_wire = pin.wire.read().clone();
         match connected_wire {
             None => style
                 .wire_colors
-                .get(&self.circuits.get_pin(pin.circuit.id, pin.id)),
+                .get(&self.components.get_pin(pin.component.id, pin.id)),
             Some(wire) => {
                 // TODO: do something when wire state and pin state don't match
                 self.wires.wire_color(&wire, style)
@@ -239,11 +239,11 @@ impl BoardState {
             let mut meta = None;
 
             if let Ok(id) = self.sim.next_update(time_provider.now()) {
-                let task = CircuitUpdateTask {
+                let task = ComponentUpdateTask {
                     id,
-                    reason: CircuitUpdateReason::Timer,
+                    reason: ComponentUpdateReason::Timer,
                 };
-                self.update_circuit(task, &mut tasks);
+                self.update_component(task, &mut tasks);
             } else {
                 let Some((task, m)) = self.sim.next_task() else {
                     break 'main_loop;
@@ -254,14 +254,14 @@ impl BoardState {
                     UpdateTask::Wire(w) => {
                         self.update_wire(w, &mut tasks);
                     }
-                    UpdateTask::Circuit(c) => {
-                        self.update_circuit(c, &mut tasks);
+                    UpdateTask::Component(c) => {
+                        self.update_component(c, &mut tasks);
                     }
                     UpdateTask::Input(i) => {
                         self.update_input(i, &mut tasks, &mut queue_immediately);
                     }
-                    UpdateTask::DropCircuit(d) => {
-                        self.circuits.drop_circuit(d.id, d.pin_only);
+                    UpdateTask::DropComponent(d) => {
+                        self.components.drop_component(d.id, d.pin_only);
                     }
                 }
             }
@@ -279,7 +279,7 @@ impl BoardState {
             this: &mut BoardState,
             wire: Arc<Wire>,
             force_pin_updates: bool,
-            pins: &[Arc<CircuitPin>],
+            pins: &[Arc<ComponentPin>],
             tasks: &mut UpdateTaskPool,
         ) {
             let mut state = WireState::default();
@@ -289,7 +289,7 @@ impl BoardState {
                 match pin.ty {
                     PinType::Inside => {}
                     PinType::Outside => {
-                        state.combine(&this.circuits.get_pin(pin.circuit.id, pin.id));
+                        state.combine(&this.components.get_pin(pin.component.id, pin.id));
                     }
                 }
             }
@@ -307,11 +307,11 @@ impl BoardState {
             for pin in pins {
                 match pin.ty {
                     PinType::Inside => {
-                        let changed = this.circuits.set_pin(pin.circuit.id, pin.id, state.clone());
+                        let changed = this.components.set_pin(pin.component.id, pin.id, state.clone());
                         if changed {
-                            tasks.add_circuit_task(
-                                pin.circuit.id,
-                                CircuitUpdateReason::ChangedPin(pin.id),
+                            tasks.add_component_task(
+                                pin.component.id,
+                                ComponentUpdateReason::ChangedPin(pin.id),
                             );
                         }
                     }
@@ -337,16 +337,16 @@ impl BoardState {
         tasks.shuffle();
     }
 
-    fn update_circuit(&mut self, task: CircuitUpdateTask, tasks: &mut UpdateTaskPool) {
-        let Some(circuit) = self.board().circuits().read().get(task.id).cloned() else {
+    fn update_component(&mut self, task: ComponentUpdateTask, tasks: &mut UpdateTaskPool) {
+        let Some(component) = self.board().components().read().get(task.id).cloned() else {
             return;
         };
 
-        let imp = circuit.imp.read();
+        let imp = component.imp.read();
 
-        let ctx = UntypedCircuitCtx {
+        let ctx = UntypedComponentCtx {
             state: self,
-            circuit: &circuit,
+            component: &component,
             tasks,
             instance: imp.instance.deref(),
         };
@@ -362,9 +362,9 @@ impl BoardState {
     ) {
         let pin_input_wire = self
             .board()
-            .circuits()
+            .components()
             .read()
-            .get(task.circuit)
+            .get(task.component)
             .and_then(|c| {
                 c.pins.read().get(task.pin).map(|p| match p.desc.ty {
                     PinType::Inside => Ok(p.pin.wire.read().clone()),
@@ -380,24 +380,24 @@ impl BoardState {
             Ok(Some(wire)) => self.wires.get_wire(wire.id),
         };
 
-        let changed = self.circuits.set_pin(task.circuit, task.pin, state);
+        let changed = self.components.set_pin(task.component, task.pin, state);
 
-        if changed && task.update_circuit {
-            tasks.add_circuit_task(task.circuit, CircuitUpdateReason::ChangedPin(task.pin));
+        if changed && task.update_component {
+            tasks.add_component_task(task.component, ComponentUpdateReason::ChangedPin(task.pin));
             *queue_immediately = true;
         }
     }
 
-    pub fn get_timer(&self, circuit_id: usize) -> Option<(Instant, Option<Duration>)> {
-        self.sim.find_update(circuit_id)
+    pub fn get_timer(&self, component_id: usize) -> Option<(Instant, Option<Duration>)> {
+        self.sim.find_update(component_id)
     }
 
-    pub fn set_timer(&mut self, circuit_id: usize, at: Instant, interval: Option<Duration>) {
-        self.sim.schedule_update(circuit_id, at, interval);
+    pub fn set_timer(&mut self, component_id: usize, at: Instant, interval: Option<Duration>) {
+        self.sim.schedule_update(component_id, at, interval);
     }
 
-    pub fn reset_timer(&mut self, circuit_id: usize) {
-        self.sim.stop_update(circuit_id);
+    pub fn reset_timer(&mut self, component_id: usize) {
+        self.sim.stop_update(component_id);
     }
 }
 
@@ -504,25 +504,25 @@ impl BoardStateCollection {
         }
     }
 
-    pub fn load_stage2_circuits(&self, data: &savestate::BoardStates) {
+    pub fn load_stage2_components(&self, data: &savestate::BoardStates) {
         for (i, state_data) in data.iter().enumerate() {
             let Some(state_data) = state_data else {
                 continue;
             };
 
             let state = self.get(i).expect("preloaded state collection");
-            state.load_stage2_circuits(state_data);
+            state.load_stage2_components(state_data);
         }
     }
 
-    pub fn load_stage3_circuit_states(&self, data: &savestate::BoardStates) {
+    pub fn load_stage3_component_states(&self, data: &savestate::BoardStates) {
         for (i, state_data) in data.iter().enumerate() {
             let Some(state_data) = state_data else {
                 continue;
             };
 
             let state = self.get(i).expect("preloaded state collection");
-            state.load_stage3_circuit_states(state_data);
+            state.load_stage3_component_states(state_data);
         }
     }
 }

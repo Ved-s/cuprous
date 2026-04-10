@@ -14,7 +14,7 @@ pub struct Board {
     pub uid: u128,
     pub name: String,
     pub wires: Vec<Option<Wire>>,
-    pub circuits: Vec<Option<Circuit>>,
+    pub components: Vec<Option<Component>>,
     pub states: Vec<u128>,
 }
 
@@ -26,12 +26,12 @@ pub struct Wire {
 
 #[derive(SmolReadWrite)]
 pub struct PinId {
-    pub circuit: usize,
+    pub component: usize,
     pub name: ArcStaticStr,
 }
 
 #[derive(SmolReadWrite)]
-pub struct Circuit {
+pub struct Component {
     pub id: ArcStaticStr,
     pub pos: Vec2isize,
     pub dir: Direction4,
@@ -44,12 +44,12 @@ pub struct Circuit {
 pub struct BoardState {
     pub uid: u128,
     pub wires: Vec<WireState>,
-    pub circuits: Vec<Option<CircuitState>>,
+    pub components: Vec<Option<ComponentState>>,
     pub sim: BoardStateSimulation,
 }
 
 #[derive(SmolReadWrite)]
-pub struct CircuitState {
+pub struct ComponentState {
     pub pins: HashMap<ArcStaticStr, WireState>,
     pub internal: Option<RawValue>,
 }

@@ -11,7 +11,7 @@ use eframe::{
 use crate::{
     PaintContext, Screen, Style,
     app::SelectedItem,
-    circuits::{CircuitRenderPurpose, CircuitRenderingContext},
+    components::{ComponentRenderPurpose, ComponentRenderingContext},
     vector::Vec2f,
 };
 
@@ -52,11 +52,11 @@ impl TabImpl for ComponentList {
                 }
             });
 
-        CollapsingHeader::new("Circuits")
+        CollapsingHeader::new("Components")
             .default_open(true)
             .show(ui, |ui| {
                 let selected = app.selected_item.as_ref().and_then(|i| match i {
-                    SelectedItem::Circuit(c) => Some(c),
+                    SelectedItem::Component(c) => Some(c),
                     _ => None,
                 });
                 let mut new_selected = None;
@@ -77,13 +77,13 @@ impl TabImpl for ComponentList {
 
                         let screen = Screen::new(rect, 0.0.into(), scale);
                         let ctx = PaintContext::new(ui, screen, app.gl.clone(), app.style.clone());
-                        let ctx = CircuitRenderingContext::new(
+                        let ctx = ComponentRenderingContext::new(
                             &ctx,
                             rect,
                             blueprint.inner_size,
                             None,
                             blueprint.transform,
-                            CircuitRenderPurpose::Icon,
+                            ComponentRenderPurpose::Icon,
                         );
 
                         blueprint.imp.draw(None, &ctx);
@@ -101,7 +101,7 @@ impl TabImpl for ComponentList {
                         if selected {
                             new_selected = Some(None);
                         } else {
-                            new_selected = Some(Some(SelectedItem::Circuit(blueprint.clone())));
+                            new_selected = Some(Some(SelectedItem::Component(blueprint.clone())));
                         }
                     }
                 }

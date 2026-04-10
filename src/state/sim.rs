@@ -9,7 +9,7 @@ use parking_lot::Mutex;
 use smoldata::SmolReadWrite;
 
 use crate::{
-    circuits::CircuitUpdateReason,
+    components::ComponentUpdateReason,
     pool::{Pooled, get_pooled},
     time::Instant,
 };
@@ -37,20 +37,20 @@ impl UpdateTaskPool {
         })
     }
 
-    pub fn add_circuit_task(&mut self, id: usize, reason: CircuitUpdateReason) {
-        self.add(CircuitUpdateTask { id, reason })
+    pub fn add_component_task(&mut self, id: usize, reason: ComponentUpdateReason) {
+        self.add(ComponentUpdateTask { id, reason })
     }
 
-    pub fn add_update_input_task(&mut self, circuit: usize, pin: usize, update_circuit: bool) {
+    pub fn add_update_input_task(&mut self, component: usize, pin: usize, update_component: bool) {
         self.add(InputUpdateTask {
-            circuit,
+            component,
             pin,
-            update_circuit,
+            update_component,
         });
     }
 
-    pub fn add_drop_circuit_task(&mut self, id: usize, pin_only: Option<usize>) {
-        self.add(DropCircuitTask { id, pin_only });
+    pub fn add_drop_component_task(&mut self, id: usize, pin_only: Option<usize>) {
+        self.add(DropComponentTask { id, pin_only });
     }
 
     pub fn add(&mut self, task: impl Into<UpdateTask>) {
@@ -134,16 +134,16 @@ impl Iterator for ExternalTaskPoolBatch<'_> {
 }
 
 #[derive(Clone, Hash, PartialEq, Eq, SmolReadWrite)]
-pub struct DropCircuitTask {
+pub struct DropComponentTask {
     pub id: usize,
     pub pin_only: Option<usize>,
 }
 
 #[derive(Clone, Hash, PartialEq, Eq, SmolReadWrite)]
 pub struct InputUpdateTask {
-    pub circuit: usize,
+    pub component: usize,
     pub pin: usize,
-    pub update_circuit: bool,
+    pub update_component: bool,
 }
 
 #[derive(Clone, Hash, PartialEq, Eq, SmolReadWrite)]
@@ -153,17 +153,17 @@ pub struct WireUpdateTask {
 }
 
 #[derive(Clone, Hash, PartialEq, Eq, SmolReadWrite)]
-pub struct CircuitUpdateTask {
+pub struct ComponentUpdateTask {
     pub id: usize,
-    pub reason: CircuitUpdateReason,
+    pub reason: ComponentUpdateReason,
 }
 
 #[derive(Clone, Hash, PartialEq, Eq, SmolReadWrite)]
 pub enum UpdateTask {
     Wire(WireUpdateTask),
-    Circuit(CircuitUpdateTask),
+    Component(ComponentUpdateTask),
     Input(InputUpdateTask),
-    DropCircuit(DropCircuitTask),
+    DropComponent(DropComponentTask),
 }
 
 impl From<WireUpdateTask> for UpdateTask {
@@ -172,9 +172,9 @@ impl From<WireUpdateTask> for UpdateTask {
     }
 }
 
-impl From<CircuitUpdateTask> for UpdateTask {
-    fn from(value: CircuitUpdateTask) -> Self {
-        Self::Circuit(value)
+impl From<ComponentUpdateTask> for UpdateTask {
+    fn from(value: ComponentUpdateTask) -> Self {
+        Self::Component(value)
     }
 }
 
@@ -184,9 +184,9 @@ impl From<InputUpdateTask> for UpdateTask {
     }
 }
 
-impl From<DropCircuitTask> for UpdateTask {
-    fn from(value: DropCircuitTask) -> Self {
-        Self::DropCircuit(value)
+impl From<DropComponentTask> for UpdateTask {
+    fn from(value: DropComponentTask) -> Self {
+        Self::DropComponent(value)
     }
 }
 
@@ -196,25 +196,25 @@ pub struct UpdateTaskMetadata {
 }
 
 #[derive(Clone, Copy)]
-struct CircuitUpdateDeadline {
+struct ComponentUpdateDeadline {
     at: Instant,
     id: usize,
     interval: Option<Duration>,
 }
 
-impl std::cmp::Eq for CircuitUpdateDeadline {}
-impl std::cmp::PartialEq for CircuitUpdateDeadline {
+impl std::cmp::Eq for ComponentUpdateDeadline {}
+impl std::cmp::PartialEq for ComponentUpdateDeadline {
     fn eq(&self, other: &Self) -> bool {
         self.at == other.at || self.id == other.id
     }
 }
 
-impl std::cmp::PartialOrd for CircuitUpdateDeadline {
+impl std::cmp::PartialOrd for ComponentUpdateDeadline {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
-impl std::cmp::Ord for CircuitUpdateDeadline {
+impl std::cmp::Ord for ComponentUpdateDeadline {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.at.cmp(&other.at).reverse()
     }
@@ -229,9 +229,9 @@ pub struct BoardSimulationState {
 
     external_tasks: Option<Arc<Mutex<ExternalTaskPool>>>,
 
-    // (deadline, circuit id) => interval
-    circuit_updates: BinaryHeap<CircuitUpdateDeadline>,
-    active_circuit_updates: BTreeSet<usize>,
+    // (deadline, component id) => interval
+    component_updates: BinaryHeap<ComponentUpdateDeadline>,
+    active_component_updates: BTreeSet<usize>,
 }
 
 impl BoardSimulationState {
@@ -244,8 +244,8 @@ impl BoardSimulationState {
 
             external_tasks: None,
 
-            circuit_updates: Default::default(),
-            active_circuit_updates: Default::default(),
+            component_updates: Default::default(),
+            active_component_updates: Default::default(),
         }
     }
 
@@ -265,7 +265,7 @@ impl BoardSimulationState {
             if let Some(task) = self.current_tasks.pop_front() {
                 let meta = UpdateTaskMetadata {
                     epoch: self.current_epoch,
-                    can_be_a_bit_late: matches!(task, UpdateTask::Circuit(_)),
+                    can_be_a_bit_late: matches!(task, UpdateTask::Component(_)),
                 };
                 break Some((task, meta));
             }
@@ -327,33 +327,33 @@ impl BoardSimulationState {
         //     return;
         // }
 
-        // let mut circuits = get_pooled::<Vec<CircuitUpdateTask>>();
+        // let mut components = get_pooled::<Vec<ComponentUpdateTask>>();
         // let mut wires = get_pooled::<Vec<WireUpdateTask>>();
         // let mut hasher = get_pooled::<DefaultHasher>();
 
         // for task in tasks {
         //     match task {
         //         UpdateTask::Wire(w) => wires.push(w),
-        //         UpdateTask::Circuit(c) => circuits.push(c),
+        //         UpdateTask::Component(c) => components.push(c),
         //         UpdateTask::Input(i) => todo!(),
         //                     }
         // }
 
-        // if !circuits.is_empty() {
-        //     hasher.write_usize(circuits.len());
-        //     for i in 0..circuits.len() {
+        // if !components.is_empty() {
+        //     hasher.write_usize(components.len());
+        //     for i in 0..components.len() {
         //         hasher.write_usize(i);
-        //         let other = hasher.finish() as usize % circuits.len();
+        //         let other = hasher.finish() as usize % components.len();
         //         if other == i {
         //             continue;
         //         }
 
-        //         circuits.swap(i, other);
+        //         components.swap(i, other);
         //     }
         // }
 
         // self.wires.extend(wires.drain(..));
-        // self.circuits.extend(circuits.drain(..));
+        // self.components.extend(components.drain(..));
     }
 
     pub fn has_jobs(&self) -> bool {
@@ -371,7 +371,7 @@ impl BoardSimulationState {
     }
 
     pub fn next_update(&mut self, now: Instant) -> Result<usize, Option<Instant>> {
-        let Some(&first) = self.circuit_updates.peek() else {
+        let Some(&first) = self.component_updates.peek() else {
             return Err(None);
         };
 
@@ -379,17 +379,17 @@ impl BoardSimulationState {
             return Err(Some(first.at));
         }
 
-        self.circuit_updates.pop();
+        self.component_updates.pop();
 
         match first.interval {
             Some(interval) => {
-                self.circuit_updates.push(CircuitUpdateDeadline {
+                self.component_updates.push(ComponentUpdateDeadline {
                     at: first.at + interval,
                     ..first
                 });
             }
             None => {
-                self.active_circuit_updates.remove(&first.id);
+                self.active_component_updates.remove(&first.id);
             }
         }
 
@@ -397,38 +397,38 @@ impl BoardSimulationState {
     }
 
     pub fn schedule_update(&mut self, id: usize, at: Instant, interval: Option<Duration>) {
-        let active = self.active_circuit_updates.contains(&id);
+        let active = self.active_component_updates.contains(&id);
         if active {
-            self.circuit_updates.retain(|d| d.id != id);
+            self.component_updates.retain(|d| d.id != id);
         } else {
-            self.active_circuit_updates.insert(id);
+            self.active_component_updates.insert(id);
         }
 
-        self.circuit_updates
-            .push(CircuitUpdateDeadline { at, id, interval });
+        self.component_updates
+            .push(ComponentUpdateDeadline { at, id, interval });
     }
 
     pub fn find_update(&self, id: usize) -> Option<(Instant, Option<Duration>)> {
-        if !self.active_circuit_updates.contains(&id) {
+        if !self.active_component_updates.contains(&id) {
             return None;
         }
 
-        self.circuit_updates
+        self.component_updates
             .iter()
             .find(|d| d.id == id)
             .map(|d| (d.at, d.interval))
     }
 
     pub fn stop_update(&mut self, id: usize) {
-        if !self.active_circuit_updates.contains(&id) {
+        if !self.active_component_updates.contains(&id) {
             return;
         }
 
-        self.circuit_updates.retain(|d| d.id != id);
+        self.component_updates.retain(|d| d.id != id);
     }
 
     pub fn next_update_time(&self) -> Option<Instant> {
-        self.circuit_updates.peek().map(|d| d.at)
+        self.component_updates.peek().map(|d| d.at)
     }
 
     pub fn save(&mut self, start: Instant) -> crate::io::savestate::BoardStateSimulation {
@@ -454,7 +454,7 @@ impl BoardSimulationState {
 
         let mut updates = BTreeMap::new();
 
-        for d in self.circuit_updates.iter() {
+        for d in self.component_updates.iter() {
             let at =
                 d.at.checked_duration_since(start)
                     .map(|d| d.as_nanos())
@@ -496,9 +496,9 @@ impl BoardSimulationState {
             let at = start + Duration::from_nanos_u128(at);
             let interval = interval.map(Duration::from_nanos_u128);
 
-            self.circuit_updates
-                .push(CircuitUpdateDeadline { at, id, interval });
-            self.active_circuit_updates.insert(id);
+            self.component_updates
+                .push(ComponentUpdateDeadline { at, id, interval });
+            self.active_component_updates.insert(id);
         }
     }
 }
@@ -522,7 +522,7 @@ generate_pool! {
 }
 
 generate_pool! {
-    Vec<CircuitUpdateTask>,
+    Vec<ComponentUpdateTask>,
     CIRCUIT_UPDATE_TASK_VEC_POOL,
     |v| v.clear()
 }

@@ -6,42 +6,44 @@ use eframe::{
 };
 
 use crate::{
-    circuits::CircuitRenderingContext,
+    components::ComponentRenderingContext,
     path::{Path, PointPath},
 };
 
 use super::{GateImpl, GateOutput};
 
 #[derive(Clone)]
-pub struct Xnor;
+pub struct Nor;
 
-impl GateImpl for Xnor {
+impl GateImpl for Nor {
     fn id() -> &'static str {
-        "gate_xnor"
+        "gate_nor"
     }
 
     fn display_name() -> &'static str {
-        "XNOR gate"
+        "NOR gate"
     }
 
     fn init_state() -> bool {
-        true
+        false
     }
 
-    // TODO: =1 mode
-    fn fold(state: &mut bool, input: bool) -> GateOutput {
-        if input {
-            *state = !*state;
-        }
-
-        GateOutput {
-            out: *state,
-            fin: false,
+    fn fold(_: &mut bool, input: bool) -> GateOutput {
+        if !input {
+            GateOutput {
+                out: true,
+                fin: false,
+            }
+        } else {
+            GateOutput {
+                out: false,
+                fin: true,
+            }
         }
     }
 
     #[rustfmt::skip]
-    fn draw(ctx: &CircuitRenderingContext) {
+    fn draw(ctx: &ComponentRenderingContext) {
         let size = ctx.world_size().convert(|v| v as f32);
 
         let border_color = Color32::BLACK;
@@ -101,58 +103,5 @@ impl GateImpl for Xnor {
             fill_color,
             Stroke::new(0.15 * ctx.paint.screen.scale, border_color),
         );
-
-        let arc_inner = PointPath::new(-0.2, -0.03)
-            .line_to(-0.2, -0.025)
-            .cubic_bezier(
-                bez_x - 0.27, (1.0 / 5.0) * size.y,
-                bez_x - 0.27, (4.0 / 5.0) * size.y,
-                -0.2, size.y + 0.025,
-                straightness
-            )
-            .line_to(-0.2, size.y + 0.03);
-
-        let arc_outer = PointPath::new(-0.1, -0.025)
-            .cubic_bezier(
-                bez_x - 0.22, (1.0 / 5.0) * size.y,
-                bez_x - 0.22, (4.0 / 5.0) * size.y,
-                -0.1, size.y + 0.025,
-                straightness
-            )
-            .line_to(-0.3, size.y + 0.025)
-            .cubic_bezier(
-                bez_x - 0.32, (4.0 / 5.0) * size.y,
-                bez_x - 0.32, (1.0 / 5.0) * size.y,
-                -0.3, -0.025,
-                straightness
-            )
-            .line_to(-0.1, -0.025);
-
-        let points_inner = arc_inner
-            .iter_points(|v| ctx.transform_pos(v))
-            .map(Into::into)
-            .collect();
-
-        let path_inner = PathShape {
-            points: points_inner,
-            closed: false,
-            fill: Color32::TRANSPARENT,
-            stroke: PathStroke::new(0.1 * ctx.paint.screen.scale, fill_color),
-        };
-
-        let points_outer = arc_outer
-            .iter_points(|v| ctx.transform_pos(v))
-            .map(Into::into)
-            .collect();
-
-        let path_outer = PathShape {
-            points: points_outer,
-            closed: true,
-            fill: Color32::TRANSPARENT,
-            stroke: PathStroke::new(0.08 * ctx.paint.screen.scale, border_color),
-        };
-
-        ctx.paint.painter.add(path_inner);
-        ctx.paint.painter.add(path_outer);
     }
 }

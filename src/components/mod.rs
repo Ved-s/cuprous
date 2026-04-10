@@ -14,10 +14,10 @@ use smoldata::{SmolReadWrite, raw::RawValue};
 use crate::{
     Direction4, Direction8, PaintContext,
     board::{Board, Wire},
-    circuits::props::{PropertyInfo, PropertyValue},
+    components::props::{PropertyInfo, PropertyValue},
     io::savestate,
     selection::SelectionRenderer,
-    state::{BoardState, circuits::BoardCircuitsState, sim::UpdateTaskPool, wires::WireState},
+    state::{BoardState, components::BoardComponentsState, sim::UpdateTaskPool, wires::WireState},
     str::ArcStaticStr,
     time::{self, Instant, TimeProvider},
     vector::{Vec2f, Vec2isize, Vec2usize},
@@ -32,20 +32,20 @@ pub mod test;
 
 pub mod props;
 
-pub struct Circuit {
+pub struct Component {
     pub id: usize,
     pub board: Weak<Board>,
-    pub info: RwLock<CircuitInfo>,
-    pub imp: RwLock<CircuitImplData>,
+    pub info: RwLock<ComponentInfo>,
+    pub imp: RwLock<ComponentImplData>,
     pub pins: RwLock<Box<[RealizedPin]>>,
 }
 
-impl Circuit {
-    pub fn save(&self) -> savestate::Circuit {
+impl Component {
+    pub fn save(&self) -> savestate::Component {
         let imp = self.imp.read();
         let info = self.info.read();
 
-        savestate::Circuit {
+        savestate::Component {
             id: imp.imp.id(),
             pos: info.pos,
             dir: info.transform.dir,
@@ -58,27 +58,27 @@ impl Circuit {
     pub fn preload(
         id: usize,
         board: &Arc<Board>,
-        circuit_data: &savestate::Circuit,
-        blueprints: &HashMap<ArcStaticStr, Arc<RwLock<CircuitBlueprint>>>,
-    ) -> Circuit {
-        let Some(blueprint) = blueprints.get(&circuit_data.id) else {
-            todo!("unloaded circuit");
+        component_data: &savestate::Component,
+        blueprints: &HashMap<ArcStaticStr, Arc<RwLock<ComponentBlueprint>>>,
+    ) -> Component {
+        let Some(blueprint) = blueprints.get(&component_data.id) else {
+            todo!("unloaded component");
         };
 
         let blueprint = blueprint.read();
 
-        let info = CircuitInfo {
-            pos: circuit_data.pos,
+        let info = ComponentInfo {
+            pos: component_data.pos,
             render_size: 0.into(), // calculated later
             size: 0.into(),        // calculated later
-            transform: CircuitTransform {
+            transform: ComponentTransform {
                 support: blueprint.transform.support,
-                dir: circuit_data.dir,
-                flip: circuit_data.flip,
+                dir: component_data.dir,
+                flip: component_data.flip,
             },
         };
 
-        let imp = CircuitImplData {
+        let imp = ComponentImplData {
             imp: blueprint.imp.clone(),
             instance: Box::new(()), // loaded later
         };
@@ -92,7 +92,7 @@ impl Circuit {
         }
     }
 
-    pub fn load_finish(self: &Arc<Self>, data: &savestate::Circuit) {
+    pub fn load_finish(self: &Arc<Self>, data: &savestate::Component) {
         let mut imp = self.imp.write();
         let mut info = self.info.write();
 
@@ -120,10 +120,10 @@ impl Circuit {
             .into_iter()
             .enumerate()
             .map(|(id, desc)| RealizedPin {
-                pin: Arc::new(CircuitPin {
+                pin: Arc::new(ComponentPin {
                     id,
                     ty: desc.ty,
-                    circuit: self.clone(),
+                    component: self.clone(),
                     wire: RwLock::new(None),
                 }),
                 desc,
@@ -140,17 +140,17 @@ impl Circuit {
 }
 
 #[derive(Clone)]
-pub struct CircuitInfo {
+pub struct ComponentInfo {
     pub pos: Vec2isize,
 
     /// Size before transformations
     pub render_size: Vec2usize,
     pub size: Vec2usize,
-    pub transform: CircuitTransform,
+    pub transform: ComponentTransform,
 }
 
-pub struct CircuitImplData {
-    pub imp: CircuitImplBox,
+pub struct ComponentImplData {
+    pub imp: ComponentImplBox,
     pub instance: Box<dyn Any + Send + Sync>,
 }
 
@@ -181,40 +181,40 @@ impl PinDescription {
         self.id == other.id && self.pos == other.pos && self.ty == other.ty
     }
 
-    pub fn into_realized(self, circuit: Arc<Circuit>, id: usize) -> RealizedPin {
+    pub fn into_realized(self, component: Arc<Component>, id: usize) -> RealizedPin {
         RealizedPin {
-            pin: Arc::new(CircuitPin {
+            pin: Arc::new(ComponentPin {
                 id,
                 wire: RwLock::new(None),
                 ty: self.ty,
-                circuit,
+                component,
             }),
             desc: self,
         }
     }
 }
 
-pub struct CircuitPin {
+pub struct ComponentPin {
     pub id: usize,
     pub ty: PinType,
-    pub circuit: Arc<Circuit>,
+    pub component: Arc<Component>,
     pub wire: RwLock<Option<Arc<Wire>>>,
 }
-impl CircuitPin {
+impl ComponentPin {
     pub fn set_output(
         &self,
-        board_state: &mut BoardCircuitsState,
+        board_state: &mut BoardComponentsState,
         tasks: &mut UpdateTaskPool,
         state: WireState,
     ) {
-        let changed = board_state.set_pin(self.circuit.id, self.id, state);
+        let changed = board_state.set_pin(self.component.id, self.id, state);
         if changed && let Some(wire) = self.wire.read().as_ref().map(|w| w.id) {
             tasks.add_wire_task(wire, false);
         }
     }
 
-    pub fn get_state(&self, state: &BoardCircuitsState) -> WireState {
-        state.get_pin(self.circuit.id, self.id)
+    pub fn get_state(&self, state: &BoardComponentsState) -> WireState {
+        state.get_pin(self.component.id, self.id)
     }
 
     pub(crate) fn disconnect(&self, tasks: &mut UpdateTaskPool) {
@@ -223,7 +223,7 @@ impl CircuitPin {
             return;
         };
 
-        wire.remove_pin(self.circuit.id, self.id);
+        wire.remove_pin(self.component.id, self.id);
         let id = wire.id;
 
         *pin_wire = None;
@@ -234,11 +234,11 @@ impl CircuitPin {
     pub(crate) fn connect(self: &Arc<Self>, wire: Arc<Wire>, tasks: &mut UpdateTaskPool) {
         let mut pin_wire = self.wire.write();
         if let Some(wire) = pin_wire.deref() {
-            wire.remove_pin(self.circuit.id, self.id);
+            wire.remove_pin(self.component.id, self.id);
             self.handle_disconnect(wire.id, tasks);
         };
 
-        wire.add_pin(self.circuit.clone(), self.clone());
+        wire.add_pin(self.component.clone(), self.clone());
         let id = wire.id;
         *pin_wire = Some(wire);
         self.handle_connect(id, tasks);
@@ -247,7 +247,7 @@ impl CircuitPin {
     fn handle_disconnect(&self, old_wire: usize, tasks: &mut UpdateTaskPool) {
         match self.ty {
             PinType::Inside => {
-                tasks.add_update_input_task(self.circuit.id, self.id, true);
+                tasks.add_update_input_task(self.component.id, self.id, true);
             }
             PinType::Outside => {
                 tasks.add_wire_task(old_wire, true);
@@ -261,7 +261,7 @@ impl CircuitPin {
                 tasks.add_wire_task(wire, true);
             }
             PinType::Inside => {
-                tasks.add_update_input_task(self.circuit.id, self.id, true);
+                tasks.add_update_input_task(self.component.id, self.id, true);
             }
         }
     }
@@ -269,27 +269,27 @@ impl CircuitPin {
 
 pub struct RealizedPin {
     pub desc: PinDescription,
-    pub pin: Arc<CircuitPin>,
+    pub pin: Arc<ComponentPin>,
 }
 
-pub struct CircuitSelectionRenderingContext<'a> {
+pub struct ComponentSelectionRenderingContext<'a> {
     pub renderer: Arc<Mutex<SelectionRenderer>>,
     pub custom_selection: &'a mut bool,
 }
 
 #[derive(Clone, Copy)]
-pub enum CircuitRenderPurpose {
+pub enum ComponentRenderPurpose {
     Icon,
     PlacementPreview,
     InWorld,
 }
 
-pub struct CircuitRenderingContext<'a> {
+pub struct ComponentRenderingContext<'a> {
     pub paint: &'a PaintContext<'a>,
     pub screen_rect: Rect,
-    pub selection: Option<CircuitSelectionRenderingContext<'a>>,
-    pub transform: CircuitTransform,
-    pub purpose: CircuitRenderPurpose,
+    pub selection: Option<ComponentSelectionRenderingContext<'a>>,
+    pub transform: ComponentTransform,
+    pub purpose: ComponentRenderPurpose,
 
     // internal for transform_pos
     world_size: Vec2usize,
@@ -297,14 +297,14 @@ pub struct CircuitRenderingContext<'a> {
     flip: Option<FlipType>,
 }
 
-impl<'a> CircuitRenderingContext<'a> {
+impl<'a> ComponentRenderingContext<'a> {
     pub fn new(
         ctx: &'a PaintContext,
         screen_rect: Rect,
         render_size: Vec2usize,
-        selection: Option<CircuitSelectionRenderingContext<'a>>,
-        transform: CircuitTransform,
-        purpose: CircuitRenderPurpose,
+        selection: Option<ComponentSelectionRenderingContext<'a>>,
+        transform: ComponentTransform,
+        purpose: ComponentRenderPurpose,
     ) -> Self {
         let flip = transform
             .flip
@@ -336,7 +336,7 @@ impl<'a> CircuitRenderingContext<'a> {
         }
     }
 
-    /// Transform circuit coordinate [0..size] to screen coordinate
+    /// Transform component coordinate [0..size] to screen coordinate
     pub fn transform_pos(&self, pos: Vec2f) -> Vec2f {
         let norm = pos / self.world_size.convert(|v| v as f32);
 
@@ -392,24 +392,24 @@ impl FlipType {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct CircuitRotationSupport {
+pub struct ComponentRotationSupport {
     pub support: TransformSupport,
     pub default_dir: Direction4,
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct CircuitFlipSupport {
+pub struct ComponentFlipSupport {
     pub support: TransformSupport,
     pub ty: FlipType,
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct CircuitTransformSupport {
-    pub rotation: Option<CircuitRotationSupport>,
-    pub flip: Option<CircuitFlipSupport>,
+pub struct ComponentTransformSupport {
+    pub rotation: Option<ComponentRotationSupport>,
+    pub flip: Option<ComponentFlipSupport>,
 }
 
-impl CircuitTransformSupport {
+impl ComponentTransformSupport {
     pub fn rotation_default_dir(&self, support: Option<TransformSupport>) -> Option<Direction4> {
         let rot = self.rotation?;
         if support.is_some_and(|s| rot.support != s) {
@@ -428,12 +428,12 @@ impl CircuitTransformSupport {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct CircuitTransform {
-    pub support: CircuitTransformSupport,
+pub struct ComponentTransform {
+    pub support: ComponentTransformSupport,
     pub dir: Direction4,
     pub flip: bool,
 }
-impl CircuitTransform {
+impl ComponentTransform {
     pub fn transform_size(&self, size: Vec2usize, support: Option<TransformSupport>) -> Vec2usize {
         let Some(default_dir) = self.support.rotation_default_dir(support) else {
             return size;
@@ -599,63 +599,63 @@ impl Default for PropertyChangedParams {
 }
 
 #[derive(Debug, Clone, SmolReadWrite, Hash, PartialEq, Eq)]
-pub enum CircuitUpdateReason {
+pub enum ComponentUpdateReason {
     ChangedPin(usize),
     PropertyChanged(ArcStaticStr),
     NewPins,
-    CircuitPlaced,
+    ComponentPlaced,
     StateReset,
     Timer,
 }
 
 // TODO: read-only state for draws (depends on widgets)
-pub struct UntypedCircuitCtx<'a> {
+pub struct UntypedComponentCtx<'a> {
     pub state: &'a mut BoardState,
-    pub circuit: &'a Arc<Circuit>,
+    pub component: &'a Arc<Component>,
     pub tasks: &'a mut UpdateTaskPool,
     pub instance: &'a dyn Any,
 }
 
-impl<'a> UntypedCircuitCtx<'a> {
-    pub fn make_typed<C: CircuitImpl>(self) -> CircuitCtx<'a, C> {
-        CircuitCtx {
+impl<'a> UntypedComponentCtx<'a> {
+    pub fn make_typed<C: ComponentImpl>(self) -> ComponentCtx<'a, C> {
+        ComponentCtx {
             state: self.state,
-            circuit: self.circuit,
+            component: self.component,
             tasks: self.tasks,
             instance: self
                 .instance
                 .downcast_ref::<C::Instance>()
-                .expect("correct instance for a circuit"),
+                .expect("correct instance for a component"),
         }
     }
 }
 
-pub struct CircuitCtx<'a, C: CircuitImpl> {
+pub struct ComponentCtx<'a, C: ComponentImpl> {
     pub state: &'a mut BoardState,
-    pub circuit: &'a Arc<Circuit>,
+    pub component: &'a Arc<Component>,
     pub tasks: &'a mut UpdateTaskPool,
     pub instance: &'a C::Instance,
 }
 
-impl<C: CircuitImpl> CircuitCtx<'_, C> {
-    pub fn set_pin_output(&mut self, pin: &CircuitPin, state: WireState) {
-        pin.set_output(&mut self.state.circuits, self.tasks, state);
+impl<C: ComponentImpl> ComponentCtx<'_, C> {
+    pub fn set_pin_output(&mut self, pin: &ComponentPin, state: WireState) {
+        pin.set_output(&mut self.state.components, self.tasks, state);
     }
 
-    pub fn get_pin_input(&self, pin: &CircuitPin) -> WireState {
-        pin.get_state(&self.state.circuits)
+    pub fn get_pin_input(&self, pin: &ComponentPin) -> WireState {
+        pin.get_state(&self.state.components)
     }
 
     pub fn read_internal_state(&self) -> Option<&C::State> {
         self.state
-            .circuits
-            .read_internal_circuit_state(self.circuit.id)
+            .components
+            .read_internal_component_state(self.component.id)
     }
 
     pub fn write_internal_state(&mut self) -> &mut C::State {
         self.state
-            .circuits
-            .write_internal_circuit_state(self.circuit.id)
+            .components
+            .write_internal_component_state(self.component.id)
     }
 
     pub fn time_provider(&self) -> &dyn TimeProvider {
@@ -664,40 +664,40 @@ impl<C: CircuitImpl> CircuitCtx<'_, C> {
     }
 
     pub fn get_timer(&self) -> Option<(Instant, Option<Duration>)> {
-        self.state.get_timer(self.circuit.id)
+        self.state.get_timer(self.component.id)
     }
 
     pub fn set_timer(&mut self, at: Instant, interval: Option<Duration>) {
-        self.state.set_timer(self.circuit.id, at, interval)
+        self.state.set_timer(self.component.id, at, interval)
     }
 
     pub fn reset_timer(&mut self) {
-        self.state.reset_timer(self.circuit.id)
+        self.state.reset_timer(self.component.id)
     }
 }
 
-pub trait CircuitImpl: Clone + Send + Sync {
+pub trait ComponentImpl: Clone + Send + Sync {
     type State: Default + Send + Sync + 'static;
     type Instance: Send + Sync + 'static;
 
     fn id(&self) -> ArcStaticStr;
     fn display_name(&self) -> ArcStaticStr;
 
-    /// Ignore `transform` if circuit doesn't support transforms, or supports auto transforms
-    fn size(&self, transform: CircuitTransform) -> Vec2usize;
+    /// Ignore `transform` if component doesn't support transforms, or supports auto transforms
+    fn size(&self, transform: ComponentTransform) -> Vec2usize;
 
-    /// Ignore `transform` if circuit doesn't support transforms, or supports auto transforms
-    fn occupies_quarter(&self, transform: CircuitTransform, qpos: Vec2usize) -> bool {
+    /// Ignore `transform` if component doesn't support transforms, or supports auto transforms
+    fn occupies_quarter(&self, transform: ComponentTransform, qpos: Vec2usize) -> bool {
         let _ = (transform, qpos);
         true
     }
 
-    /// Ignore `transform` if circuit doesn't support transforms, or supports auto transforms
-    fn describe_pins(&self, transform: CircuitTransform) -> Box<[PinDescription]>;
+    /// Ignore `transform` if component doesn't support transforms, or supports auto transforms
+    fn describe_pins(&self, transform: ComponentTransform) -> Box<[PinDescription]>;
 
-    fn transform_support(&self) -> CircuitTransformSupport {
-        CircuitTransformSupport {
-            rotation: Some(CircuitRotationSupport {
+    fn transform_support(&self) -> ComponentTransformSupport {
+        ComponentTransformSupport {
+            rotation: Some(ComponentRotationSupport {
                 support: TransformSupport::Automatic,
                 default_dir: Direction4::Up,
             }),
@@ -705,32 +705,32 @@ pub trait CircuitImpl: Clone + Send + Sync {
         }
     }
 
-    fn draw(&self, circuit: Option<CircuitCtx<Self>>, render: &CircuitRenderingContext);
+    fn draw(&self, component: Option<ComponentCtx<Self>>, render: &ComponentRenderingContext);
 
-    fn create_instance(&self, circuit: &Arc<Circuit>) -> Self::Instance;
+    fn create_instance(&self, component: &Arc<Component>) -> Self::Instance;
 
-    fn update(&self, ctx: CircuitCtx<Self>, reason: CircuitUpdateReason);
+    fn update(&self, ctx: ComponentCtx<Self>, reason: ComponentUpdateReason);
 
-    fn pins_changed(&self, circuit: &Circuit, instance: &mut Self::Instance) {
-        let _ = (circuit, instance);
+    fn pins_changed(&self, component: &Component, instance: &mut Self::Instance) {
+        let _ = (component, instance);
     }
 
     fn save_config(&self) -> Option<RawValue> {
         None
     }
 
-    fn save_instance(&self, circuit: &Circuit, instance: &Self::Instance) -> Option<RawValue> {
-        let _ = (circuit, instance);
+    fn save_instance(&self, component: &Component, instance: &Self::Instance) -> Option<RawValue> {
+        let _ = (component, instance);
         None
     }
 
     fn save_state(
         &self,
-        circuit: &Circuit,
+        component: &Component,
         instance: &Self::Instance,
         state: &Self::State,
     ) -> Option<RawValue> {
-        let _ = (circuit, instance, state);
+        let _ = (component, instance, state);
         None
     }
 
@@ -741,20 +741,20 @@ pub trait CircuitImpl: Clone + Send + Sync {
 
     fn load_instance(
         &self,
-        circuit: &Arc<Circuit>,
+        component: &Arc<Component>,
         data: &RawValue,
     ) -> Result<Self::Instance, eyre::Report> {
         let _ = data;
-        Ok(self.create_instance(circuit))
+        Ok(self.create_instance(component))
     }
 
     fn load_state(
         &self,
-        circuit: &Arc<Circuit>,
+        component: &Arc<Component>,
         instance: &Self::Instance,
         data: &RawValue,
     ) -> Result<Self::State, eyre::Report> {
-        let _ = (circuit, instance, data);
+        let _ = (component, instance, data);
 
         Ok(Self::State::default())
     }
@@ -774,73 +774,73 @@ pub trait CircuitImpl: Clone + Send + Sync {
 
     fn property_changed(
         &self,
-        circuit_instance: Option<(&Circuit, &mut Self::Instance)>,
+        component_instance: Option<(&Component, &mut Self::Instance)>,
         prop: &str,
         params: &mut PropertyChangedParams,
     ) {
-        let _ = (circuit_instance, prop, params);
+        let _ = (component_instance, prop, params);
     }
 }
 
 traitbox::traitbox! {
-    pub box CircuitImplBox;
+    pub box ComponentImplBox;
 
     #[as_impl]
-    trait CircuitImpl {
+    trait ComponentImpl {
         fn id(&self) -> ArcStaticStr;
         fn display_name(&self) -> ArcStaticStr;
-        fn size(&self, transform: CircuitTransform) -> Vec2usize;
-        fn occupies_quarter(&self, transform: CircuitTransform, qpos: Vec2usize) -> bool;
-        fn describe_pins(&self, transform: CircuitTransform) -> Box<[PinDescription]>;
-        fn transform_support(&self) -> CircuitTransformSupport;
+        fn size(&self, transform: ComponentTransform) -> Vec2usize;
+        fn occupies_quarter(&self, transform: ComponentTransform, qpos: Vec2usize) -> bool;
+        fn describe_pins(&self, transform: ComponentTransform) -> Box<[PinDescription]>;
+        fn transform_support(&self) -> ComponentTransformSupport;
         fn draw_blueprint_pins(&self) -> bool;
         fn enum_properties(&self, f: &mut dyn FnMut(&PropertyInfo));
         fn get_property_value<'a>(&'a mut self, id: &str) -> Option<&'a mut dyn PropertyValue>;
     }
 
     impl {
-        fn create_instance<C: CircuitImpl>(this: &C, circuit: &Arc<Circuit>) -> Box<dyn Any + Send + Sync> {
-            Box::new(this.create_instance(circuit))
+        fn create_instance<C: ComponentImpl>(this: &C, component: &Arc<Component>) -> Box<dyn Any + Send + Sync> {
+            Box::new(this.create_instance(component))
         }
 
-        fn update<C: CircuitImpl>(this: &C, ctx: UntypedCircuitCtx, reason: CircuitUpdateReason) {
+        fn update<C: ComponentImpl>(this: &C, ctx: UntypedComponentCtx, reason: ComponentUpdateReason) {
             this.update(ctx.make_typed(), reason);
         }
 
-        fn pins_changed<C: CircuitImpl>(this: &C, circuit: &Circuit, instance: &mut Box<dyn Any + Send + Sync>) {
-            this.pins_changed(circuit, instance.downcast_mut().expect("incorrect circuit instance"));
+        fn pins_changed<C: ComponentImpl>(this: &C, component: &Component, instance: &mut Box<dyn Any + Send + Sync>) {
+            this.pins_changed(component, instance.downcast_mut().expect("incorrect component instance"));
         }
 
-        fn draw<C: CircuitImpl>(this: &C, circuit: Option<UntypedCircuitCtx>, render: &CircuitRenderingContext) {
-            this.draw(circuit.map(|c| c.make_typed()), render);
+        fn draw<C: ComponentImpl>(this: &C, component: Option<UntypedComponentCtx>, render: &ComponentRenderingContext) {
+            this.draw(component.map(|c| c.make_typed()), render);
         }
 
-        fn save_config<C: CircuitImpl>(this: &C) -> Option<RawValue> {
+        fn save_config<C: ComponentImpl>(this: &C) -> Option<RawValue> {
             this.save_config()
         }
 
-        fn save_instance<C: CircuitImpl>(this: &C, circuit: &Circuit, instance: &Box<dyn Any + Send + Sync>) -> Option<RawValue> {
-            this.save_instance(circuit, instance.downcast_ref()?)
+        fn save_instance<C: ComponentImpl>(this: &C, component: &Component, instance: &Box<dyn Any + Send + Sync>) -> Option<RawValue> {
+            this.save_instance(component, instance.downcast_ref()?)
         }
 
-        fn save_state<C: CircuitImpl>(this: &C, circuit: &Circuit, instance: &Box<dyn Any + Send + Sync>, state: &Box<dyn Any + Send + Sync>) -> Option<RawValue> {
-            this.save_state(circuit, instance.downcast_ref()?, state.downcast_ref()?)
+        fn save_state<C: ComponentImpl>(this: &C, component: &Component, instance: &Box<dyn Any + Send + Sync>, state: &Box<dyn Any + Send + Sync>) -> Option<RawValue> {
+            this.save_state(component, instance.downcast_ref()?, state.downcast_ref()?)
         }
 
-        fn load_config<C: CircuitImpl>(this: &mut C, data: &RawValue) -> Result<(), eyre::Report> {
+        fn load_config<C: ComponentImpl>(this: &mut C, data: &RawValue) -> Result<(), eyre::Report> {
             this.load_config(data)
         }
 
-        fn load_instance<C: CircuitImpl>(this: &C, circuit: &Arc<Circuit>, data: &RawValue) -> Result<Box<dyn Any + Send + Sync>, eyre::Report> {
-            this.load_instance(circuit, data).map(|i| Box::new(i) as Box<_>)
+        fn load_instance<C: ComponentImpl>(this: &C, component: &Arc<Component>, data: &RawValue) -> Result<Box<dyn Any + Send + Sync>, eyre::Report> {
+            this.load_instance(component, data).map(|i| Box::new(i) as Box<_>)
         }
 
-        fn load_state<C: CircuitImpl>(this: &C, circuit: &Arc<Circuit>, instance: &Box<dyn Any + Send + Sync>, data: &RawValue) -> Result<Box<dyn Any + Send + Sync>, eyre::Report> {
-            this.load_state(circuit, instance.downcast_ref().expect("incorrect circuit instance"), data).map(|i| Box::new(i) as Box<_>)
+        fn load_state<C: ComponentImpl>(this: &C, component: &Arc<Component>, instance: &Box<dyn Any + Send + Sync>, data: &RawValue) -> Result<Box<dyn Any + Send + Sync>, eyre::Report> {
+            this.load_state(component, instance.downcast_ref().expect("incorrect component instance"), data).map(|i| Box::new(i) as Box<_>)
         }
 
-        fn property_changed<C: CircuitImpl>(this: &C, circuit_instance: Option<(&Circuit, &mut Box<dyn Any + Send + Sync>)>, prop: &str, params: &mut PropertyChangedParams) {
-            this.property_changed(circuit_instance.map(|(c, i)| (c, i.downcast_mut().expect("incorrect circuit instance"))), prop, params)
+        fn property_changed<C: ComponentImpl>(this: &C, component_instance: Option<(&Component, &mut Box<dyn Any + Send + Sync>)>, prop: &str, params: &mut PropertyChangedParams) {
+            this.property_changed(component_instance.map(|(c, i)| (c, i.downcast_mut().expect("incorrect component instance"))), prop, params)
         }
     }
 
@@ -853,24 +853,24 @@ traitbox::traitbox! {
 }
 
 #[derive(Clone)]
-pub struct CircuitBlueprint {
+pub struct ComponentBlueprint {
     pub id: ArcStaticStr,
     pub display_name: ArcStaticStr,
-    pub imp: CircuitImplBox,
+    pub imp: ComponentImplBox,
     pub inner_size: Vec2usize,
     pub transformed_size: Vec2usize,
     pub pins: Box<[PinDescription]>,
-    pub transform: CircuitTransform,
+    pub transform: ComponentTransform,
 }
 
-impl CircuitBlueprint {
-    pub fn new(imp: CircuitImplBox) -> Self {
+impl ComponentBlueprint {
+    pub fn new(imp: ComponentImplBox) -> Self {
         let trans_support = imp.transform_support();
         let dir = trans_support
             .rotation
             .map(|r| r.default_dir)
             .unwrap_or(Direction4::Up);
-        let transform = CircuitTransform {
+        let transform = ComponentTransform {
             support: trans_support,
             dir,
             flip: false,
@@ -905,9 +905,9 @@ impl CircuitBlueprint {
     }
 }
 
-impl<T: CircuitImpl + 'static> From<T> for CircuitBlueprint {
+impl<T: ComponentImpl + 'static> From<T> for ComponentBlueprint {
     fn from(value: T) -> Self {
-        Self::new(CircuitImplBox::new(value))
+        Self::new(ComponentImplBox::new(value))
     }
 }
 
@@ -933,12 +933,12 @@ mod tests {
     fn test_transforms() {
         for start_dir in Direction4::ALL {
             for flip in [FlipType::Horizontal, FlipType::Vertical, FlipType::Both] {
-                let support = CircuitTransformSupport {
-                    rotation: Some(CircuitRotationSupport {
+                let support = ComponentTransformSupport {
+                    rotation: Some(ComponentRotationSupport {
                         support: TransformSupport::Automatic,
                         default_dir: start_dir,
                     }),
-                    flip: Some(CircuitFlipSupport {
+                    flip: Some(ComponentFlipSupport {
                         support: TransformSupport::Automatic,
                         ty: flip,
                     }),
@@ -946,7 +946,7 @@ mod tests {
 
                 for dir in Direction4::ALL {
                     for flip in [false, true] {
-                        let tr = CircuitTransform { support, dir, flip };
+                        let tr = ComponentTransform { support, dir, flip };
 
                         for dir2 in Direction8::ALL {
                             let int = tr.transform_dir(dir2, None);

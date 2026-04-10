@@ -22,10 +22,10 @@ use crate::{
     BIG_WIRE_POINT_WIDTH, CHUNK_SIZE, CustomPaintContext, Direction4Half, Direction8,
     Direction8Array, PaintContext, Screen, WIRE_POINT_WIDTH, WIRE_WIDTH,
     app::{App, COPY_PASTE_BOARD_ITEMS_PREFIX, SelectedItem},
-    board::{Board, CircuitCreationOverrides},
-    circuits::{
-        CircuitBlueprint, CircuitRenderPurpose, CircuitRenderingContext,
-        CircuitSelectionRenderingContext, CircuitUpdateReason, TransformSupport, UntypedCircuitCtx,
+    board::{Board, ComponentCreationOverrides},
+    components::{
+        ComponentBlueprint, ComponentRenderPurpose, ComponentRenderingContext,
+        ComponentSelectionRenderingContext, ComponentUpdateReason, TransformSupport, UntypedComponentCtx,
     },
     drawing::{self, rotated_rect},
     editor::{BoardEditor, BoardSelection, InWorldError, QuarterPos, SelectedBoardItem},
@@ -56,7 +56,7 @@ pub struct BoardView {
 
     fixed_screen_pos: Option<(Rect, PanAndZoom)>,
     wire_debug: bool,
-    circuit_debug: bool,
+    component_debug: bool,
 
     grid_buffer: Arc<Mutex<ColoredLineBuffer>>,
     wire_part_buffer: Arc<Mutex<ColoredTriangleBuffer>>,
@@ -64,7 +64,7 @@ pub struct BoardView {
 
     selection_renderer: Arc<Mutex<SelectionRenderer>>,
 
-    circuits_drawn: HashSet<usize>,
+    components_drawn: HashSet<usize>,
     wire_colors: BTreeMap<usize, Color32>,
 
     camera_move_velocity: Vec2f,
@@ -101,7 +101,7 @@ impl TabCreation for BoardView {
 
             fixed_screen_pos: None,
             wire_debug: false,
-            circuit_debug: false,
+            component_debug: false,
 
             grid_buffer: Arc::new(Mutex::new(ColoredLineBuffer::new(1.0))),
             wire_part_buffer: Default::default(),
@@ -109,7 +109,7 @@ impl TabCreation for BoardView {
 
             selection_renderer: Arc::new(Mutex::new(SelectionRenderer::new(&app.gl))),
 
-            circuits_drawn: HashSet::new(),
+            components_drawn: HashSet::new(),
             wire_colors: BTreeMap::new(),
 
             camera_move_velocity: Vec2f::zero(),
@@ -137,10 +137,10 @@ impl TabImpl for BoardView {
                 self.state.reset();
 
                 let board = self.editor.read().board().clone();
-                let circuits = board.circuits().read();
+                let components = board.components().read();
                 let mut tasks = get_pooled::<UpdateTaskPool>();
-                for c in circuits.iter() {
-                    tasks.add_circuit_task(c.id, CircuitUpdateReason::StateReset);
+                for c in components.iter() {
+                    tasks.add_component_task(c.id, ComponentUpdateReason::StateReset);
                 }
 
                 self.state.add_tasks(&mut tasks.drain());
@@ -265,7 +265,7 @@ impl TabImpl for BoardView {
             self.draw_pins(&ctx);
 
             state.with_upgraded(|state| {
-                self.draw_circuits(selection, state, &ctx);
+                self.draw_components(selection, state, &ctx);
             })
         }
 
@@ -273,8 +273,8 @@ impl TabImpl for BoardView {
             self.draw_wire_debug(&ctx);
         }
 
-        if self.circuit_debug {
-            self.draw_circuit_debug(&ctx);
+        if self.component_debug {
+            self.draw_component_debug(&ctx);
         }
 
         app.editor_shared
@@ -290,8 +290,8 @@ impl TabImpl for BoardView {
         );
 
         #[allow(clippy::collapsible_if)]
-        if let Some(SelectedItem::Circuit(c)) = app.selected_item.as_ref() {
-            if let Err(e) = self.handle_circuit_placement(&interaction, &ctx, c.read().deref()) {
+        if let Some(SelectedItem::Component(c)) = app.selected_item.as_ref() {
+            if let Err(e) = self.handle_component_placement(&interaction, &ctx, c.read().deref()) {
                 app.editor_shared
                     .entry(self.board.uid())
                     .or_default()
@@ -761,13 +761,13 @@ impl BoardView {
         });
     }
 
-    fn draw_circuits(
+    fn draw_components(
         &mut self,
         selection: &BoardSelection,
         state: &mut BoardState,
         ctx: &PaintContext,
     ) {
-        self.circuits_drawn.clear();
+        self.components_drawn.clear();
 
         let editor = self.editor.read();
         let mut pin_buffer = self.pin_buffer.lock();
@@ -775,7 +775,7 @@ impl BoardView {
 
         for (pos, node) in editor
             .tiles
-            .circuits()
+            .components()
             .iter_area(ctx.tile_bounds_tl, ctx.tile_bounds_size)
         {
             let draw_pins = node.quarters.values().any(|q| q.is_none());
@@ -785,12 +785,12 @@ impl BoardView {
                     continue;
                 };
 
-                let circuit = &quarter.circuit;
+                let component = &quarter.component;
 
                 if let Some(pin) = quarter.pin.as_ref().filter(|_| draw_pins) {
                     let center = pos.convert(|v| v as f32 + 0.5);
 
-                    let dir = circuit.pins.read().get(pin.id).and_then(|p| p.desc.dir);
+                    let dir = component.pins.read().get(pin.id).and_then(|p| p.desc.dir);
 
                     drawing::pin(
                         ctx.screen.world_to_screen(center),
@@ -802,48 +802,48 @@ impl BoardView {
                     );
                 }
 
-                if self.circuits_drawn.contains(&circuit.id) {
+                if self.components_drawn.contains(&component.id) {
                     continue;
                 }
 
-                let circuit_pos = circuit.info.read().pos;
+                let component_pos = component.info.read().pos;
 
-                let selected = selection.contains(&SelectedBoardItem::Circuit {
-                    id: circuit.id,
-                    pos: circuit_pos,
+                let selected = selection.contains(&SelectedBoardItem::Component {
+                    id: component.id,
+                    pos: component_pos,
                 });
 
-                let info = circuit.info.read().deref().clone();
+                let info = component.info.read().deref().clone();
 
                 let mut custom_selection = false;
-                let selection = selected.then(|| CircuitSelectionRenderingContext {
+                let selection = selected.then(|| ComponentSelectionRenderingContext {
                     renderer: self.selection_renderer.clone(),
                     custom_selection: &mut custom_selection,
                 });
 
-                let imp = circuit.imp.read();
+                let imp = component.imp.read();
 
-                let rect = ctx.screen.world_to_screen_tile_rect(circuit_pos, info.size);
+                let rect = ctx.screen.world_to_screen_tile_rect(component_pos, info.size);
 
-                let render_ctx = CircuitRenderingContext::new(
+                let render_ctx = ComponentRenderingContext::new(
                     ctx,
                     rect,
                     info.render_size,
                     selection,
                     info.transform,
-                    CircuitRenderPurpose::InWorld,
+                    ComponentRenderPurpose::InWorld,
                 );
 
                 let mut update_tasks = get_pooled::<UpdateTaskPool>();
 
-                let circuit_ctx = UntypedCircuitCtx {
+                let component_ctx = UntypedComponentCtx {
                     state,
-                    circuit,
+                    component,
                     tasks: &mut update_tasks,
                     instance: imp.instance.deref(),
                 };
 
-                imp.imp.draw(Some(circuit_ctx), &render_ctx);
+                imp.imp.draw(Some(component_ctx), &render_ctx);
 
                 drop(imp);
 
@@ -855,13 +855,13 @@ impl BoardView {
                 if selected && !custom_selection {
                     let mut renderer = self.selection_renderer.lock();
 
-                    for (pos, node) in editor.tiles.circuits().iter_area(circuit_pos, info.size) {
+                    for (pos, node) in editor.tiles.components().iter_area(component_pos, info.size) {
                         for qpos in QuarterPos::ALL {
                             if node
                                 .quarters
                                 .get(qpos)
                                 .as_ref()
-                                .is_none_or(|q| q.circuit.id != circuit.id)
+                                .is_none_or(|q| q.component.id != component.id)
                             {
                                 continue;
                             }
@@ -887,7 +887,7 @@ impl BoardView {
                     }
                 }
 
-                self.circuits_drawn.insert(circuit.id);
+                self.components_drawn.insert(component.id);
             }
         }
     }
@@ -1029,11 +1029,11 @@ impl BoardView {
         }
     }
 
-    fn draw_circuit_debug(&self, ctx: &PaintContext) {
+    fn draw_component_debug(&self, ctx: &PaintContext) {
         let editor = self.editor.read();
         for (pos, node) in editor
             .tiles
-            .circuits()
+            .components()
             .iter_area(ctx.tile_bounds_tl, ctx.tile_bounds_size)
         {
             for qpos in QuarterPos::ALL {
@@ -1045,9 +1045,9 @@ impl BoardView {
                     + qpos.into_position().convert(|v| v as f32 / 2.0)
                     + 0.25;
 
-                let circuit = &quarter.circuit;
+                let component = &quarter.component;
 
-                let text = WidgetText::from(format!("{}", circuit.id));
+                let text = WidgetText::from(format!("{}", component.id));
                 let galley = text.into_galley(
                     ctx.ui,
                     Some(TextWrapMode::Truncate),
@@ -1055,14 +1055,14 @@ impl BoardView {
                     TextStyle::Monospace,
                 );
 
-                let correct_circuit = editor
+                let correct_component = editor
                     .board()
-                    .circuits()
+                    .components()
                     .read()
-                    .get(circuit.id)
-                    .is_some_and(|ec| Arc::ptr_eq(ec, circuit));
+                    .get(component.id)
+                    .is_some_and(|ec| Arc::ptr_eq(ec, component));
 
-                let info = circuit.info.read();
+                let info = component.info.read();
 
                 let correct_offset_x = quarter.offset.x < info.size.x
                     && quarter.offset.x as isize == (pos.x - info.pos.x);
@@ -1082,7 +1082,7 @@ impl BoardView {
                     rgb[1] = 255;
                 }
 
-                if correct_circuit {
+                if correct_component {
                     rgb[2] = 255;
                 }
 
@@ -1130,11 +1130,11 @@ impl BoardView {
                     let properly_connected_backend = wire.is_none()
                         || wire.is_some_and(|w| {
                             w.connected_pins.read().iter().any(|p| {
-                                Arc::ptr_eq(&p.circuit, &quarter.circuit) && Arc::ptr_eq(p, pin)
+                                Arc::ptr_eq(&p.component, &quarter.component) && Arc::ptr_eq(p, pin)
                             })
                         });
 
-                    let correct_quarter_pin = circuit
+                    let correct_quarter_pin = component
                         .pins
                         .read()
                         .get(pin.id)
@@ -1289,23 +1289,23 @@ impl BoardView {
         }
     }
 
-    fn draw_circuit_for_placement(
+    fn draw_component_for_placement(
         pos: Vec2isize,
-        blueprint: &CircuitBlueprint,
+        blueprint: &ComponentBlueprint,
         ctx: &PaintContext,
     ) {
         let rect = ctx
             .screen
             .world_to_screen_tile_rect(pos, blueprint.transformed_size);
-        let circuit_ctx = CircuitRenderingContext::new(
+        let component_ctx = ComponentRenderingContext::new(
             ctx,
             rect,
             blueprint.inner_size,
             None,
             blueprint.transform,
-            CircuitRenderPurpose::PlacementPreview,
+            ComponentRenderPurpose::PlacementPreview,
         );
-        blueprint.imp.draw(None, &circuit_ctx);
+        blueprint.imp.draw(None, &component_ctx);
 
         if blueprint.imp.draw_blueprint_pins() {
             let mut blueprint_pins = get_pooled::<ColoredTriangleBuffer>();
@@ -1355,11 +1355,11 @@ impl BoardView {
         }
     }
 
-    fn handle_circuit_placement(
+    fn handle_component_placement(
         &mut self,
         interaction: &Response,
         ctx: &PaintContext,
-        blueprint: &CircuitBlueprint,
+        blueprint: &ComponentBlueprint,
     ) -> Result<(), InWorldError> {
         let world_mouse = ctx
             .ui
@@ -1373,7 +1373,7 @@ impl BoardView {
         let world_place_pos = world_mouse - blueprint.transformed_size.convert(|v| v as f32 / 2.0);
         let world_place_tile = world_place_pos.convert(|v| v.round() as isize);
 
-        Self::draw_circuit_for_placement(world_place_tile, blueprint, ctx);
+        Self::draw_component_for_placement(world_place_tile, blueprint, ctx);
 
         let mut overlap_buffer = None;
         let editor = self.editor.read();
@@ -1398,7 +1398,7 @@ impl BoardView {
 
             let world_pos = pos.convert(|v| v as isize) + world_place_tile;
 
-            let Some(node) = editor.tiles.circuits().get(world_pos) else {
+            let Some(node) = editor.tiles.components().get(world_pos) else {
                 continue;
             };
 
@@ -1443,7 +1443,7 @@ impl BoardView {
             let res = self
                 .editor
                 .write()
-                .place_circuit(world_place_tile, blueprint);
+                .place_component(world_place_tile, blueprint);
 
             if let Err(e) = res {
                 let rect = Rect::from_min_size(
@@ -1490,16 +1490,16 @@ impl BoardView {
         }
 
         if ui.input(|input| input.key_pressed(Key::F9)) {
-            match (self.wire_debug, self.circuit_debug) {
+            match (self.wire_debug, self.component_debug) {
                 (false, false) => self.wire_debug = true,
                 (true, false) => {
                     self.wire_debug = false;
-                    self.circuit_debug = true;
+                    self.component_debug = true;
                 }
-                (false, true) => self.circuit_debug = false,
+                (false, true) => self.component_debug = false,
                 (true, true) => {
                     self.wire_debug = false;
-                    self.circuit_debug = false;
+                    self.component_debug = false;
                 }
             }
         }
@@ -1509,7 +1509,7 @@ impl BoardView {
         }
 
         if ui.input(|input| input.key_pressed(Key::R))
-            && let Some(SelectedItem::Circuit(blueprint)) = &app.selected_item
+            && let Some(SelectedItem::Component(blueprint)) = &app.selected_item
         {
             let mut blueprint = blueprint.write();
             if blueprint.transform.support.rotation.is_some() {
@@ -1519,7 +1519,7 @@ impl BoardView {
         }
 
         if ui.input(|input| input.key_pressed(Key::F))
-            && let Some(SelectedItem::Circuit(blueprint)) = &app.selected_item
+            && let Some(SelectedItem::Component(blueprint)) = &app.selected_item
         {
             let mut blueprint = blueprint.write();
             if blueprint.transform.support.flip.is_some() {
@@ -1594,14 +1594,14 @@ impl BoardView {
                     SelectedBoardItem::WirePoint { pos } => {
                         editor.remove_wire_point_with_parts(*pos);
                     }
-                    SelectedBoardItem::Circuit { id, pos } => {
-                        let Some(circuit) = editor.board().circuits().read().get(*id).cloned()
+                    SelectedBoardItem::Component { id, pos } => {
+                        let Some(component) = editor.board().components().read().get(*id).cloned()
                         else {
                             continue;
                         };
 
-                        if circuit.info.read().pos == *pos {
-                            editor.remove_circuit(&circuit);
+                        if component.info.read().pos == *pos {
+                            editor.remove_component(&component);
                         }
                     }
                 }
@@ -1623,7 +1623,7 @@ impl BoardView {
         }
 
         let editor = self.editor.read();
-        let circuits = editor.board().circuits().read();
+        let components = editor.board().components().read();
         let state = self.state.state().read();
 
         let mut min_pos = Vec2usize::single_value(usize::MAX);
@@ -1700,16 +1700,16 @@ impl BoardView {
 
                     pos.convert(offset_range)
                 }
-                SelectedBoardItem::Circuit { id, pos } => {
-                    let Some(circuit) = circuits.get(id) else {
+                SelectedBoardItem::Component { id, pos } => {
+                    let Some(component) = components.get(id) else {
                         continue;
                     };
 
-                    let info = circuit.info.read();
-                    let imp = circuit.imp.read();
+                    let info = component.info.read();
+                    let imp = component.imp.read();
 
                     let inner_state = state
-                        .circuits
+                        .components
                         .inner
                         .get(id)
                         .and_then(|s| s.internal.as_ref());
@@ -1723,15 +1723,15 @@ impl BoardView {
                         )
                     });
 
-                    data.circuits.push(copystate::Circuit {
+                    data.components.push(copystate::Component {
                         id: imp.imp.id(),
                         pos: pos.convert(offset_range),
                         dir: info.transform.dir,
                         flip: info.transform.flip,
                         config: imp.imp.save_config(),
-                        instance: imp.imp.save_instance(circuit, &imp.instance),
+                        instance: imp.imp.save_instance(component, &imp.instance),
                         state: inner_state
-                            .and_then(|s| imp.imp.save_state(circuit, &imp.instance, s)),
+                            .and_then(|s| imp.imp.save_state(component, &imp.instance, s)),
                         timer,
                     });
 
@@ -1750,7 +1750,7 @@ impl BoardView {
             *p -= min_pos;
         }
 
-        for c in &mut data.circuits {
+        for c in &mut data.components {
             c.pos -= min_pos;
         }
 
@@ -1830,17 +1830,17 @@ impl BoardView {
 
         let mut any_overlap = false;
 
-        for circuit in &paste.circuits {
-            let circuit_pos = world_place_tile + circuit.pos.convert(|v| v as isize);
-            Self::draw_circuit_for_placement(circuit_pos, &circuit.blueprint, ctx);
+        for component in &paste.components {
+            let component_pos = world_place_tile + component.pos.convert(|v| v as isize);
+            Self::draw_component_for_placement(component_pos, &component.blueprint, ctx);
 
-            for ((y, x), q) in (0..circuit.blueprint.transformed_size.y)
-                .product_clone(0..circuit.blueprint.transformed_size.x)
+            for ((y, x), q) in (0..component.blueprint.transformed_size.y)
+                .product_clone(0..component.blueprint.transformed_size.x)
                 .product_clone(QuarterPos::ALL.iter().copied())
             {
-                let world_pos = circuit_pos + [x as isize, y as isize];
+                let world_pos = component_pos + [x as isize, y as isize];
 
-                let Some(node) = editor.tiles.circuits().get(world_pos) else {
+                let Some(node) = editor.tiles.components().get(world_pos) else {
                     continue;
                 };
 
@@ -1850,16 +1850,16 @@ impl BoardView {
 
                 let pos = Vec2usize::new(x, y);
                 let quarter_pos = pos * 2 + q.into_position();
-                let quarter_pos = circuit.blueprint.transform.backtransform_pos(
-                    circuit.blueprint.inner_size * 2,
+                let quarter_pos = component.blueprint.transform.backtransform_pos(
+                    component.blueprint.inner_size * 2,
                     quarter_pos,
                     Some(TransformSupport::Automatic),
                 );
 
-                if !circuit
+                if !component
                     .blueprint
                     .imp
-                    .occupies_quarter(circuit.blueprint.transform, quarter_pos)
+                    .occupies_quarter(component.blueprint.transform, quarter_pos)
                 {
                     continue;
                 }
@@ -1922,17 +1922,17 @@ impl BoardView {
             // todo: correct time provider
             let paste_time = time::SYSTEM.now();
 
-            for c in &paste.circuits {
+            for c in &paste.components {
                 let pos = world_place_tile + c.pos.convert(|v| v as isize);
 
-                let overrides = CircuitCreationOverrides {
+                let overrides = ComponentCreationOverrides {
                     dir: None,
                     flip: None,
                     config: None,
                     instance: c.instance.as_ref(),
                 };
 
-                let res = editor.place_circuit_manual(pos, &c.blueprint, overrides, &mut tasks);
+                let res = editor.place_component_manual(pos, &c.blueprint, overrides, &mut tasks);
 
                 match res {
                     Err(e) => {
@@ -1950,16 +1950,16 @@ impl BoardView {
                                 e.to_string(),
                             ));
                     }
-                    Ok(circuit) => {
+                    Ok(component) => {
                         if c.state.is_some() || c.timer.is_some() {
-                            let imp = circuit.imp.read();
+                            let imp = component.imp.read();
                             for state in editor.board().states().read().iter() {
                                 let Some(state) = state.upgrade() else {
                                     continue;
                                 };
                                 let mut state = state.state().write();
                                 if let Some(state_data) = &c.state {
-                                    match imp.imp.load_state(&circuit, &imp.instance, state_data) {
+                                    match imp.imp.load_state(&component, &imp.instance, state_data) {
                                         Err(e) => {
                                             let rect = Rect::from_min_size(
                                                 world_place_tile.convert(|v| v as f32).into(),
@@ -1975,15 +1975,15 @@ impl BoardView {
                                                 .push(InWorldError::new(
                                                     rect,
                                                     PLACEMENT_ERROR_DURATION,
-                                                    e.wrap_err("loading circuit state").to_string(),
+                                                    e.wrap_err("loading component state").to_string(),
                                                 ));
                                         }
                                         Ok(s) => {
-                                            let circuit_state = state
-                                                .circuits
+                                            let component_state = state
+                                                .components
                                                 .inner
-                                                .get_or_create_mut(circuit.id, Default::default);
-                                            circuit_state.internal = Some(s);
+                                                .get_or_create_mut(component.id, Default::default);
+                                            component_state.internal = Some(s);
                                         }
                                     }
                                 }
@@ -1991,7 +1991,7 @@ impl BoardView {
                                     let at = paste_time + Duration::from_nanos_u128(timer_data.0);
                                     let interval = timer_data.1.map(Duration::from_nanos_u128);
 
-                                    state.set_timer(circuit.id, at, interval);
+                                    state.set_timer(component.id, at, interval);
                                 }
                             }
                         }

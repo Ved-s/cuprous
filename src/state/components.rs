@@ -3,58 +3,58 @@ use std::any::Any;
 use crate::{containers::FixedVec, state::wires::WireState};
 
 #[derive(Default)]
-pub struct CircuitState {
+pub struct ComponentState {
     pub pins: Vec<WireState>,
     pub internal: Option<Box<dyn Any + Send + Sync>>,
 }
 
 #[derive(Default)]
-pub struct BoardCircuitsState {
-    pub inner: FixedVec<CircuitState>,
+pub struct BoardComponentsState {
+    pub inner: FixedVec<ComponentState>,
 }
 
-impl BoardCircuitsState {
-    pub fn get_pin(&self, circuit: usize, id: usize) -> WireState {
+impl BoardComponentsState {
+    pub fn get_pin(&self, component: usize, id: usize) -> WireState {
         self.inner
-            .get(circuit)
+            .get(component)
             .and_then(|c| c.pins.get(id).cloned())
             .unwrap_or_default()
     }
 
     /// Returns true if value was changed
-    pub fn set_pin(&mut self, circuit: usize, id: usize, state: WireState) -> bool {
-        let circuit = self.inner.get_or_create_mut(circuit, Default::default);
+    pub fn set_pin(&mut self, component: usize, id: usize, state: WireState) -> bool {
+        let component = self.inner.get_or_create_mut(component, Default::default);
 
-        if circuit.pins.len() <= id {
+        if component.pins.len() <= id {
             if state == WireState::default() {
                 return false;
             }
 
-            let add = id - circuit.pins.len() + 1;
-            circuit.pins.reserve(add);
+            let add = id - component.pins.len() + 1;
+            component.pins.reserve(add);
             for _ in 0..add {
-                circuit.pins.push(WireState::default());
+                component.pins.push(WireState::default());
             }
         }
 
-        if circuit.pins[id] == state {
+        if component.pins[id] == state {
             return false;
         }
 
-        circuit.pins[id] = state;
+        component.pins[id] = state;
         true
     }
 
-    pub fn read_internal_circuit_state<S>(&self, id: usize) -> Option<&S>
+    pub fn read_internal_component_state<S>(&self, id: usize) -> Option<&S>
     where
         S: 'static,
     {
-        let circuit = self.inner.get(id)?;
-        let internal = circuit.internal.as_ref()?.downcast_ref()?;
+        let component = self.inner.get(id)?;
+        let internal = component.internal.as_ref()?.downcast_ref()?;
         Some(internal)
     }
 
-    pub fn write_internal_circuit_state<S>(&mut self, id: usize) -> &mut S
+    pub fn write_internal_component_state<S>(&mut self, id: usize) -> &mut S
     where
         S: Default + Send + Sync + 'static,
     {
@@ -71,11 +71,11 @@ impl BoardCircuitsState {
         state.downcast_mut().unwrap()
     }
 
-    pub fn drop_circuit(&mut self, id: usize, pin: Option<usize>) {
+    pub fn drop_component(&mut self, id: usize, pin: Option<usize>) {
         match pin {
             Some(p) => {
-                if let Some(circuit) = self.inner.get_mut(id)
-                    && let Some(pin) = circuit.pins.get_mut(p)
+                if let Some(component) = self.inner.get_mut(id)
+                    && let Some(pin) = component.pins.get_mut(p)
                 {
                     *pin = WireState::None;
                 }

@@ -7,10 +7,10 @@ use smoldata::SmolReadWrite;
 
 use crate::{
     Direction4, Direction8, Style, WIRE_WIDTH,
-    circuits::{
-        Circuit, CircuitCtx, CircuitImpl, CircuitPin, CircuitRenderPurpose,
-        CircuitRenderingContext, CircuitRotationSupport, CircuitTransform, CircuitTransformSupport,
-        CircuitUpdateReason, PinDescription, PinType, TransformSupport,
+    components::{
+        Component, ComponentCtx, ComponentImpl, ComponentPin, ComponentRenderPurpose,
+        ComponentRenderingContext, ComponentRotationSupport, ComponentTransform, ComponentTransformSupport,
+        ComponentUpdateReason, PinDescription, PinType, TransformSupport,
         props::{PropertyInfo, PropertyValue},
     },
     pool::get_pooled,
@@ -106,10 +106,10 @@ impl Constant {
 }
 
 pub struct ConstantInstance {
-    pin: Arc<CircuitPin>,
+    pin: Arc<ComponentPin>,
 }
 
-impl CircuitImpl for Constant {
+impl ComponentImpl for Constant {
     type State = ();
 
     type Instance = ConstantInstance;
@@ -141,13 +141,13 @@ impl CircuitImpl for Constant {
         arc.into()
     }
 
-    fn size(&self, _transform: CircuitTransform) -> Vec2usize {
+    fn size(&self, _transform: ComponentTransform) -> Vec2usize {
         [1, 1].into()
     }
 
-    fn transform_support(&self) -> CircuitTransformSupport {
-        CircuitTransformSupport {
-            rotation: Some(CircuitRotationSupport {
+    fn transform_support(&self) -> ComponentTransformSupport {
+        ComponentTransformSupport {
+            rotation: Some(ComponentRotationSupport {
                 support: TransformSupport::Automatic,
                 default_dir: Direction4::Right,
             }),
@@ -155,7 +155,7 @@ impl CircuitImpl for Constant {
         }
     }
 
-    fn describe_pins(&self, _transform: CircuitTransform) -> Box<[PinDescription]> {
+    fn describe_pins(&self, _transform: ComponentTransform) -> Box<[PinDescription]> {
         [PinDescription {
             pos: [0, 0].into(),
             id: "pin".into(),
@@ -170,10 +170,10 @@ impl CircuitImpl for Constant {
         false
     }
 
-    fn draw(&self, circuit: Option<CircuitCtx<Self>>, render: &CircuitRenderingContext) {
-        let icon = matches!(render.purpose, CircuitRenderPurpose::Icon);
+    fn draw(&self, component: Option<ComponentCtx<Self>>, render: &ComponentRenderingContext) {
+        let icon = matches!(render.purpose, ComponentRenderPurpose::Icon);
 
-        let draw_pin = !icon && circuit.is_none_or(|c| c.instance.pin.wire.read().is_none());
+        let draw_pin = !icon && component.is_none_or(|c| c.instance.pin.wire.read().is_none());
 
         if draw_pin {
             let mut pin_buffer = get_pooled::<ColoredTriangleBuffer>();
@@ -241,21 +241,21 @@ impl CircuitImpl for Constant {
         }
     }
 
-    fn create_instance(&self, circuit: &Arc<Circuit>) -> Self::Instance {
-        let pins = circuit.pins.read();
+    fn create_instance(&self, component: &Arc<Component>) -> Self::Instance {
+        let pins = component.pins.read();
         ConstantInstance {
             pin: pins[0].pin.clone(),
         }
     }
 
-    fn pins_changed(&self, circuit: &Circuit, instance: &mut Self::Instance) {
-        let pins = circuit.pins.read();
+    fn pins_changed(&self, component: &Component, instance: &mut Self::Instance) {
+        let pins = component.pins.read();
         instance.pin = pins[0].pin.clone();
     }
 
-    fn update(&self, ctx: CircuitCtx<Self>, _reason: CircuitUpdateReason) {
+    fn update(&self, ctx: ComponentCtx<Self>, _reason: ComponentUpdateReason) {
         ctx.instance.pin.set_output(
-            &mut ctx.state.circuits,
+            &mut ctx.state.components,
             ctx.tasks,
             self.config.value.clone(),
         );
@@ -280,7 +280,7 @@ impl CircuitImpl for Constant {
 
     fn property_changed(
         &self,
-        _circuit_instance: Option<(&Circuit, &mut Self::Instance)>,
+        _component_instance: Option<(&Component, &mut Self::Instance)>,
         prop: &str,
         params: &mut super::PropertyChangedParams,
     ) {

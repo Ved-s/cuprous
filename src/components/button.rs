@@ -11,8 +11,8 @@ use smoldata::{SmolRead, SmolReadWrite, SmolWrite, raw::RawValue};
 
 use crate::{
     Direction4, Direction8,
-    circuits::{
-        CircuitUpdateReason, PropertyChangedParams,
+    components::{
+        ComponentUpdateReason, PropertyChangedParams,
         props::{PropertyInfo, PropertyValue},
     },
     state::wires::WireState,
@@ -21,8 +21,8 @@ use crate::{
 };
 
 use super::{
-    Circuit, CircuitCtx, CircuitImpl, CircuitPin, CircuitRenderingContext, CircuitRotationSupport,
-    CircuitTransform, CircuitTransformSupport, PinDescription, PinType, TransformSupport,
+    Component, ComponentCtx, ComponentImpl, ComponentPin, ComponentRenderingContext, ComponentRotationSupport,
+    ComponentTransform, ComponentTransformSupport, PinDescription, PinType, TransformSupport,
 };
 
 #[derive(Default, Clone, SmolReadWrite)]
@@ -42,10 +42,10 @@ pub struct ButtonState {
 }
 
 pub struct ButtonInstance {
-    pin: Arc<CircuitPin>,
+    pin: Arc<ComponentPin>,
 }
 
-impl CircuitImpl for Button {
+impl ComponentImpl for Button {
     type State = ButtonState;
     type Instance = ButtonInstance;
 
@@ -57,18 +57,18 @@ impl CircuitImpl for Button {
         "Button".into()
     }
 
-    fn size(&self, _: CircuitTransform) -> Vec2usize {
+    fn size(&self, _: ComponentTransform) -> Vec2usize {
         [self.config.width.0, self.config.height.0].into()
     }
 
-    fn occupies_quarter(&self, _: CircuitTransform, qpos: Vec2usize) -> bool {
+    fn occupies_quarter(&self, _: ComponentTransform, qpos: Vec2usize) -> bool {
         qpos.x >= 1
             && qpos.x <= (self.config.width.0 - 1) * 2
             && qpos.y >= 1
             && qpos.y <= (self.config.height.0 - 1) * 2
     }
 
-    fn describe_pins(&self, _: CircuitTransform) -> Box<[PinDescription]> {
+    fn describe_pins(&self, _: ComponentTransform) -> Box<[PinDescription]> {
         [PinDescription {
             pos: [self.config.width.0 - 1, (self.config.height.0 - 1) / 2].into(),
             id: "out".into(),
@@ -79,9 +79,9 @@ impl CircuitImpl for Button {
         .into()
     }
 
-    fn transform_support(&self) -> CircuitTransformSupport {
-        CircuitTransformSupport {
-            rotation: Some(CircuitRotationSupport {
+    fn transform_support(&self) -> ComponentTransformSupport {
+        ComponentTransformSupport {
+            rotation: Some(ComponentRotationSupport {
                 support: TransformSupport::Automatic,
                 default_dir: Direction4::Right,
             }),
@@ -89,7 +89,7 @@ impl CircuitImpl for Button {
         }
     }
 
-    fn draw(&self, mut circuit: Option<CircuitCtx<Self>>, render: &CircuitRenderingContext) {
+    fn draw(&self, mut component: Option<ComponentCtx<Self>>, render: &ComponentRenderingContext) {
         let semi_transparent = false;
         let color = Color32::from_rgb(0xff, 0x5c, 0x1a);
 
@@ -102,7 +102,7 @@ impl CircuitImpl for Button {
         );
 
         let color_mul = if semi_transparent { 0.5 } else { 1.0 };
-        let state = circuit
+        let state = component
             .as_ref()
             .and_then(|c| c.read_internal_state().map(|s| s.state))
             .unwrap_or_default();
@@ -146,10 +146,10 @@ impl CircuitImpl for Button {
         //     visuals.font_color,
         // );
 
-        if let Some(cir) = &mut circuit {
+        if let Some(cir) = &mut component {
             let ui = render.paint.ui;
 
-            let id = ui.id().with("buttoninteraction").with(cir.circuit.id);
+            let id = ui.id().with("buttoninteraction").with(cir.component.id);
 
             let size = diameter * render.paint.screen.scale;
 
@@ -171,25 +171,25 @@ impl CircuitImpl for Button {
         }
     }
 
-    fn create_instance(&self, circuit: &Arc<Circuit>) -> Self::Instance {
-        let pins = circuit.pins.read();
+    fn create_instance(&self, component: &Arc<Component>) -> Self::Instance {
+        let pins = component.pins.read();
         ButtonInstance {
             pin: pins[0].pin.clone(),
         }
     }
 
-    fn pins_changed(&self, circuit: &Circuit, instance: &mut Self::Instance) {
-        let pins = circuit.pins.read();
+    fn pins_changed(&self, component: &Component, instance: &mut Self::Instance) {
+        let pins = component.pins.read();
 
         instance.pin = pins[0].pin.clone();
     }
 
-    fn update(&self, mut circuit: CircuitCtx<Self>, _: CircuitUpdateReason) {
-        let state = circuit
+    fn update(&self, mut component: ComponentCtx<Self>, _: ComponentUpdateReason) {
+        let state = component
             .read_internal_state()
             .map(|s| s.state)
             .unwrap_or(false);
-        circuit.set_pin_output(&circuit.instance.pin, WireState::Bool(state));
+        component.set_pin_output(&component.instance.pin, WireState::Bool(state));
     }
 
     fn save_config(&self) -> Option<RawValue> {
@@ -203,7 +203,7 @@ impl CircuitImpl for Button {
 
     fn save_state(
         &self,
-        _circuit: &Circuit,
+        _component: &Component,
         _instance: &Self::Instance,
         state: &Self::State,
     ) -> Option<smoldata::raw::RawValue> {
@@ -212,7 +212,7 @@ impl CircuitImpl for Button {
 
     fn load_state(
         &self,
-        _circuit: &Arc<Circuit>,
+        _component: &Arc<Component>,
         _instance: &Self::Instance,
         data: &RawValue,
     ) -> Result<Self::State, eyre::Report> {
@@ -244,15 +244,15 @@ impl CircuitImpl for Button {
 
     fn property_changed(
         &self,
-        circuit_instance: Option<(&Circuit, &mut Self::Instance)>,
+        component_instance: Option<(&Component, &mut Self::Instance)>,
         prop: &str,
         params: &mut PropertyChangedParams,
     ) {
         if prop == "width" || prop == "height" {
             params.trigger_update = true;
 
-            if let Some((circuit, instance)) = circuit_instance {
-                instance.pin = circuit.pins.read()[0].pin.clone();
+            if let Some((component, instance)) = component_instance {
+                instance.pin = component.pins.read()[0].pin.clone();
             }
         }
     }

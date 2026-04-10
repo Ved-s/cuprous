@@ -7,9 +7,9 @@ use eframe::{
 
 use crate::{
     Direction8,
-    circuits::{
-        Circuit, CircuitCtx, CircuitImpl, CircuitPin, CircuitRenderingContext, CircuitTransform,
-        CircuitUpdateReason, PinDescription, PinType,
+    components::{
+        Component, ComponentCtx, ComponentImpl, ComponentPin, ComponentRenderingContext, ComponentTransform,
+        ComponentUpdateReason, PinDescription, PinType,
     },
     state::wires::WireState,
     str::ArcStaticStr,
@@ -20,11 +20,11 @@ use crate::{
 pub struct Not;
 
 pub struct NotInstance {
-    input: Arc<CircuitPin>,
-    output: Arc<CircuitPin>,
+    input: Arc<ComponentPin>,
+    output: Arc<ComponentPin>,
 }
 
-impl CircuitImpl for Not {
+impl ComponentImpl for Not {
     type State = ();
 
     type Instance = NotInstance;
@@ -37,15 +37,15 @@ impl CircuitImpl for Not {
         "NOT gate".into()
     }
 
-    fn size(&self, _transform: CircuitTransform) -> Vec2usize {
+    fn size(&self, _transform: ComponentTransform) -> Vec2usize {
         [2, 1].into()
     }
 
-    fn occupies_quarter(&self, _transform: CircuitTransform, qpos: Vec2usize) -> bool {
+    fn occupies_quarter(&self, _transform: ComponentTransform, qpos: Vec2usize) -> bool {
         qpos.x >= 1 && qpos.x <= 2
     }
 
-    fn describe_pins(&self, _transform: CircuitTransform) -> Box<[PinDescription]> {
+    fn describe_pins(&self, _transform: ComponentTransform) -> Box<[PinDescription]> {
         [
             PinDescription {
                 pos: [0, 0].into(),
@@ -65,7 +65,7 @@ impl CircuitImpl for Not {
         .into()
     }
 
-    fn draw(&self, _circuit: Option<CircuitCtx<Self>>, ctx: &CircuitRenderingContext) {
+    fn draw(&self, _component: Option<ComponentCtx<Self>>, ctx: &ComponentRenderingContext) {
         let border_color = Color32::BLACK;
         let fill_color = Color32::from_gray(200);
 
@@ -91,23 +91,23 @@ impl CircuitImpl for Not {
         );
     }
 
-    fn create_instance(&self, circuit: &Arc<Circuit>) -> Self::Instance {
-        let pins = circuit.pins.read();
+    fn create_instance(&self, component: &Arc<Component>) -> Self::Instance {
+        let pins = component.pins.read();
         NotInstance {
             input: pins[0].pin.clone(),
             output: pins[1].pin.clone(),
         }
     }
 
-    fn pins_changed(&self, circuit: &Circuit, instance: &mut Self::Instance) {
-        let pins = circuit.pins.read();
+    fn pins_changed(&self, component: &Component, instance: &mut Self::Instance) {
+        let pins = component.pins.read();
 
         instance.input = pins[0].pin.clone();
         instance.output = pins[1].pin.clone();
     }
 
-    fn update(&self, ctx: CircuitCtx<Self>, _reason: CircuitUpdateReason) {
-        let val = ctx.instance.input.get_state(&ctx.state.circuits);
+    fn update(&self, ctx: ComponentCtx<Self>, _reason: ComponentUpdateReason) {
+        let val = ctx.instance.input.get_state(&ctx.state.components);
         let out = match val {
             WireState::None => WireState::None,
             WireState::Bool(b) => WireState::Bool(!b),
@@ -115,6 +115,6 @@ impl CircuitImpl for Not {
         };
         ctx.instance
             .output
-            .set_output(&mut ctx.state.circuits, ctx.tasks, out);
+            .set_output(&mut ctx.state.components, ctx.tasks, out);
     }
 }

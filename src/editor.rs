@@ -14,10 +14,10 @@ use eframe::egui::{Rect, remap_clamp, vec2};
 use crate::{
     BIG_WIRE_POINT_WIDTH, CHUNK_SIZE, Direction4Half, Direction4HalfArray, Direction8,
     Direction8Array, WIRE_POINT_WIDTH, WIRE_WIDTH,
-    board::{Board, CircuitCreationOverrides, Wire, WirePoint},
-    circuits::{
-        Circuit, CircuitBlueprint, CircuitImplBox, CircuitPin, CircuitTransform,
-        CircuitUpdateReason, PinType, RealizedPin, TransformSupport,
+    board::{Board, ComponentCreationOverrides, Wire, WirePoint},
+    components::{
+        Component, ComponentBlueprint, ComponentImplBox, ComponentPin, ComponentTransform,
+        ComponentUpdateReason, PinType, RealizedPin, TransformSupport,
     },
     containers::Chunks2D,
     pool::get_pooled,
@@ -30,7 +30,7 @@ use crate::{
 #[derive(Default)]
 pub struct BoardEditorTiles {
     wires: Chunks2D<CHUNK_SIZE, WireNode>,
-    circuits: Chunks2D<CHUNK_SIZE, CircuitNode>,
+    components: Chunks2D<CHUNK_SIZE, ComponentNode>,
 }
 
 pub struct BoardEditor {
@@ -38,26 +38,26 @@ pub struct BoardEditor {
     board: Arc<Board>,
 }
 
-pub struct PlaceCircuitResult {
-    /// Whether the placed circuit has overlapping quarters with any other circuit
+pub struct PlaceComponentResult {
+    /// Whether the placed component has overlapping quarters with any other component
     any_overlapping_quarters: bool,
 
     placed_any_quarters: bool,
 
-    /// Whether there were any pins that weren't attached to any quarters of this circuit
+    /// Whether there were any pins that weren't attached to any quarters of this component
     any_disconnected_pins: bool,
 }
 
-impl PlaceCircuitResult {
-    pub fn placement_error(&self) -> Result<(), CircuitPlaceError> {
+impl PlaceComponentResult {
+    pub fn placement_error(&self) -> Result<(), ComponentPlaceError> {
         if self.any_overlapping_quarters || !self.placed_any_quarters || self.any_disconnected_pins
         {
             let err = if self.any_disconnected_pins && self.placed_any_quarters {
-                CircuitPlaceError::DisconnectedPins
+                ComponentPlaceError::DisconnectedPins
             } else if self.any_overlapping_quarters {
-                CircuitPlaceError::PlaceOccupied
+                ComponentPlaceError::PlaceOccupied
             } else {
-                CircuitPlaceError::OccupiesNoTiles
+                ComponentPlaceError::OccupiesNoTiles
             };
             Err(err)
         } else {
@@ -71,8 +71,8 @@ impl BoardEditorTiles {
         &self.wires
     }
 
-    pub fn circuits(&self) -> &Chunks2D<CHUNK_SIZE, CircuitNode> {
-        &self.circuits
+    pub fn components(&self) -> &Chunks2D<CHUNK_SIZE, ComponentNode> {
+        &self.components
     }
 }
 
@@ -81,7 +81,7 @@ impl BoardEditor {
         let mut tiles = BoardEditorTiles::default();
 
         let board_wires = board.wires().read();
-        let board_circuits = board.circuits().read();
+        let board_components = board.components().read();
 
         for wire in board_wires.iter() {
             let points = wire.points.read();
@@ -177,13 +177,13 @@ impl BoardEditor {
             }
         }
 
-        for circuit in board_circuits.iter() {
-            let imp = circuit.imp.read();
-            let info = circuit.info.read();
-            let pins = circuit.pins.read();
+        for component in board_components.iter() {
+            let imp = component.imp.read();
+            let info = component.info.read();
+            let pins = component.pins.read();
 
-            tiles.place_circuit(
-                circuit,
+            tiles.place_component(
+                component,
                 info.pos,
                 info.size,
                 info.transform,
@@ -193,7 +193,7 @@ impl BoardEditor {
             );
         }
 
-        drop((board_wires, board_circuits));
+        drop((board_wires, board_components));
 
         Self { tiles, board }
     }
@@ -292,12 +292,12 @@ impl BoardEditorTiles {
     }
 
     pub fn should_pin_wire_point_exist(&self, pos: Vec2isize) -> bool {
-        let circuit_node = self.circuits.get(pos);
+        let component_node = self.components.get(pos);
 
-        if let Some(circuit_node) = circuit_node {
-            let mut one_circuit = None;
+        if let Some(component_node) = component_node {
+            let mut one_component = None;
             for quarter in QuarterPos::ALL {
-                let Some(quarter) = circuit_node.quarters.get(quarter) else {
+                let Some(quarter) = component_node.quarters.get(quarter) else {
                     continue;
                 };
 
@@ -305,18 +305,18 @@ impl BoardEditorTiles {
                     continue;
                 }
 
-                match one_circuit {
+                match one_component {
                     Some(id) => {
-                        // There are more than 1 qnique circuit quarters with pins
-                        if id != quarter.circuit.id {
+                        // There are more than 1 qnique component quarters with pins
+                        if id != quarter.component.id {
                             return true;
                         }
                     }
-                    None => one_circuit = Some(quarter.circuit.id),
+                    None => one_component = Some(quarter.component.id),
                 }
             }
 
-            if one_circuit.is_none() {
+            if one_component.is_none() {
                 return false;
             }
         } else {
@@ -334,16 +334,16 @@ impl BoardEditorTiles {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn place_circuit(
+    pub fn place_component(
         &mut self,
-        circuit: &Arc<Circuit>,
+        component: &Arc<Component>,
         pos: Vec2isize,
         size: Vec2usize,
-        transform: CircuitTransform,
-        imp: &CircuitImplBox,
+        transform: ComponentTransform,
+        imp: &ComponentImplBox,
         pins: &[RealizedPin],
         overwrite: bool,
-    ) -> PlaceCircuitResult {
+    ) -> PlaceComponentResult {
         let mut overlap = false;
         let mut any_quarters = false;
         let mut disconnected_pins = false;
@@ -354,7 +354,7 @@ impl BoardEditorTiles {
             for x in 0..size.x {
                 let offset = Vec2usize::new(x, y);
                 let cell = self
-                    .circuits
+                    .components
                     .get_or_create_mut(pos + offset.convert(|v| v as isize));
 
                 let pin = pins
@@ -383,8 +383,8 @@ impl BoardEditorTiles {
                     }
 
                     if quarter.is_none() || overwrite {
-                        *quarter = Some(CircuitNodeQuarter {
-                            circuit: circuit.clone(),
+                        *quarter = Some(ComponentNodeQuarter {
+                            component: component.clone(),
                             offset,
                             pin: pin.cloned(),
                         });
@@ -397,19 +397,19 @@ impl BoardEditorTiles {
             }
         }
 
-        PlaceCircuitResult {
+        PlaceComponentResult {
             any_overlapping_quarters: overlap,
             placed_any_quarters: any_quarters,
             any_disconnected_pins: disconnected_pins,
         }
     }
 
-    pub fn remove_circuit(&mut self, id: usize, pos: Vec2isize, size: Vec2usize) {
+    pub fn remove_component(&mut self, id: usize, pos: Vec2isize, size: Vec2usize) {
         for y in 0..size.y {
             for x in 0..size.x {
                 let world_pos = pos + [x as isize, y as isize];
 
-                let node = self.circuits.get_mut(world_pos);
+                let node = self.components.get_mut(world_pos);
                 let Some(node) = node else {
                     continue;
                 };
@@ -417,7 +417,7 @@ impl BoardEditorTiles {
                 for quarter in QuarterPos::ALL {
                     let quarter = node.quarters.get_mut(quarter);
 
-                    quarter.take_if(|q| q.circuit.id == id);
+                    quarter.take_if(|q| q.component.id == id);
                 }
             }
         }
@@ -453,20 +453,20 @@ impl BoardEditorTiles {
         }
     }
 
-    pub fn validate_circuit_geometry(
+    pub fn validate_component_geometry(
         &self,
         id: usize,
         pos: Vec2isize,
         size: Vec2usize,
-        transform: CircuitTransform,
-        imp: &CircuitImplBox,
+        transform: ComponentTransform,
+        imp: &ComponentImplBox,
     ) -> bool {
         let orig_size = transform.transform_size(size, Some(TransformSupport::Automatic));
 
         for y in 0..size.y {
             for x in 0..size.x {
                 let offset = Vec2usize::new(x, y);
-                let cell = self.circuits.get(pos + offset.convert(|v| v as isize));
+                let cell = self.components.get(pos + offset.convert(|v| v as isize));
 
                 for q in QuarterPos::ALL {
                     let qpos = transform.backtransform_pos(
@@ -478,7 +478,7 @@ impl BoardEditorTiles {
                     let should_occupy = !imp.occupies_quarter(transform, qpos);
                     let actually_occupies = cell
                         .and_then(|c| c.quarters.get(q).as_ref())
-                        .is_some_and(|q| q.circuit.id == id);
+                        .is_some_and(|q| q.component.id == id);
 
                     if should_occupy != actually_occupies {
                         return false;
@@ -501,7 +501,7 @@ impl BoardEditorTiles {
             for x in 0..size.x {
                 let world_pos = pos + [x as isize, y as isize];
 
-                let node = self.circuits.get_mut(world_pos);
+                let node = self.components.get_mut(world_pos);
                 let Some(node) = node else {
                     continue;
                 };
@@ -513,7 +513,7 @@ impl BoardEditorTiles {
                         continue;
                     };
 
-                    if quarter.circuit.id != id {
+                    if quarter.component.id != id {
                         continue;
                     }
 
@@ -530,7 +530,7 @@ impl BoardEditorTiles {
             }
 
             let world_pos = pos + pin.desc.pos.convert(|v| v as isize);
-            let Some(node) = self.circuits.get_mut(world_pos) else {
+            let Some(node) = self.components.get_mut(world_pos) else {
                 disconnected_pins = true;
                 continue;
             };
@@ -542,7 +542,7 @@ impl BoardEditorTiles {
                     continue;
                 };
 
-                if quarter.circuit.id != id {
+                if quarter.component.id != id {
                     continue;
                 }
 
@@ -582,7 +582,7 @@ impl BoardEditor {
         for pos in dir.iter_along(pos, length.get() as usize + 1) {
             if let Some(wire) = self.tiles.wires().get(pos).and_then(|n| n.wire.clone()) {
                 wire_map.insert(wire.id, wire);
-            } else if self.tiles.circuits().get(pos).is_some_and(|n| {
+            } else if self.tiles.components().get(pos).is_some_and(|n| {
                 n.quarters
                     .values()
                     .any(|q| q.as_ref().is_some_and(|q| q.pin.is_some()))
@@ -742,17 +742,17 @@ impl BoardEditor {
         self.board.add_tasks(&tasks);
     }
 
-    pub fn place_circuit(
+    pub fn place_component(
         &mut self,
         pos: Vec2isize,
-        blueprint: &CircuitBlueprint,
-    ) -> Result<Arc<Circuit>, CircuitPlaceError> {
+        blueprint: &ComponentBlueprint,
+    ) -> Result<Arc<Component>, ComponentPlaceError> {
         let mut tasks = get_pooled::<UpdateTaskPool>();
 
-        let res = self.place_circuit_manual(
+        let res = self.place_component_manual(
             pos,
             blueprint,
-            CircuitCreationOverrides::NONE,
+            ComponentCreationOverrides::NONE,
             tasks.deref_mut(),
         )?;
 
@@ -761,26 +761,26 @@ impl BoardEditor {
         Ok(res)
     }
 
-    pub fn place_circuit_manual(
+    pub fn place_component_manual(
         &mut self,
         pos: Vec2isize,
-        blueprint: &CircuitBlueprint,
-        overrides: CircuitCreationOverrides,
+        blueprint: &ComponentBlueprint,
+        overrides: ComponentCreationOverrides,
         tasks: &mut UpdateTaskPool,
-    ) -> Result<Arc<Circuit>, CircuitPlaceError> {
+    ) -> Result<Arc<Component>, ComponentPlaceError> {
         let transformed_size = blueprint.transformed_size;
         if transformed_size.x == 0 || transformed_size.y == 0 {
-            return Err(CircuitPlaceError::ZeroSizeCircuit);
+            return Err(ComponentPlaceError::ZeroSizeComponent);
         }
 
         let transform = blueprint.transform;
-        let circuit = self.board.create_circuit(pos, blueprint, overrides);
+        let component = self.board.create_component(pos, blueprint, overrides);
 
-        let imp = circuit.imp.read();
-        let pins = circuit.pins.read();
+        let imp = component.imp.read();
+        let pins = component.pins.read();
 
-        let res = self.tiles.place_circuit(
-            &circuit,
+        let res = self.tiles.place_component(
+            &component,
             pos,
             transformed_size,
             transform,
@@ -795,7 +795,7 @@ impl BoardEditor {
 
         if let Err(err) = err {
             drop(pins);
-            self.remove_circuit_internal(&circuit, tasks);
+            self.remove_component_internal(&component, tasks);
             return Err(err);
         }
 
@@ -809,7 +809,7 @@ impl BoardEditor {
             if pin.pin.wire.read().is_some() {
                 match pin.pin.ty {
                     PinType::Inside => {
-                        tasks.add_update_input_task(circuit.id, pin.pin.id, false);
+                        tasks.add_update_input_task(component.id, pin.pin.id, false);
                     }
                     PinType::Outside => {}
                 }
@@ -818,27 +818,27 @@ impl BoardEditor {
 
         drop(pins);
 
-        tasks.add_circuit_task(circuit.id, CircuitUpdateReason::CircuitPlaced);
+        tasks.add_component_task(component.id, ComponentUpdateReason::ComponentPlaced);
 
-        Ok(circuit)
+        Ok(component)
     }
 
-    pub fn remove_circuit(&mut self, circuit: &Arc<Circuit>) {
+    pub fn remove_component(&mut self, component: &Arc<Component>) {
         let mut tasks = get_pooled::<UpdateTaskPool>();
-        self.remove_circuit_internal(circuit, tasks.deref_mut());
+        self.remove_component_internal(component, tasks.deref_mut());
 
         self.board.add_tasks(&tasks);
     }
 
-    fn remove_circuit_internal(&mut self, circuit: &Arc<Circuit>, tasks: &mut UpdateTaskPool) {
-        let info = circuit.info.read();
+    fn remove_component_internal(&mut self, component: &Arc<Component>, tasks: &mut UpdateTaskPool) {
+        let info = component.info.read();
         let transformed_size = info.size;
         let pos = info.pos;
         drop(info);
 
-        self.tiles.remove_circuit(circuit.id, pos, transformed_size);
+        self.tiles.remove_component(component.id, pos, transformed_size);
 
-        for pin in circuit.pins.read().iter() {
+        for pin in component.pins.read().iter() {
             let mut wire = pin.pin.wire.write();
             if let Some(wire) = wire.deref() {
                 match pin.pin.ty {
@@ -848,7 +848,7 @@ impl BoardEditor {
                     }
                 }
 
-                wire.remove_pin(circuit.id, pin.pin.id);
+                wire.remove_pin(component.id, pin.pin.id);
             }
             *wire = None;
             drop(wire);
@@ -857,9 +857,9 @@ impl BoardEditor {
             self.remove_needless_wire_point(world_pos, tasks);
         }
 
-        tasks.add_drop_circuit_task(circuit.id, None);
+        tasks.add_drop_component_task(component.id, None);
 
-        self.board.free_circuit(circuit);
+        self.board.free_component(component);
     }
 
     pub fn set_wire_point(
@@ -911,9 +911,9 @@ impl BoardEditor {
             (wire, true)
         };
 
-        if let Some(circuit_node) = self.tiles.circuits().get(pos) {
+        if let Some(component_node) = self.tiles.components().get(pos) {
             for quarter in QuarterPos::ALL {
-                let Some(quarter) = circuit_node.quarters.get(quarter) else {
+                let Some(quarter) = component_node.quarters.get(quarter) else {
                     continue;
                 };
 
@@ -960,9 +960,9 @@ impl BoardEditor {
             let mut points = wire.points.write();
             points.remove(&pos);
 
-            if let Some(circuit_node) = self.tiles.circuits().get(pos) {
+            if let Some(component_node) = self.tiles.components().get(pos) {
                 for quarter in QuarterPos::ALL {
-                    let Some(quarter) = circuit_node.quarters.get(quarter) else {
+                    let Some(quarter) = component_node.quarters.get(quarter) else {
                         continue;
                     };
 
@@ -1108,8 +1108,8 @@ impl BoardEditor {
                 let directions = node.directions;
                 self.tiles.set_wire(pos, Some(wire.clone()));
 
-                if let Some(circuit) = self.tiles.circuits().get(pos) {
-                    for quarter in circuit.quarters.values() {
+                if let Some(component) = self.tiles.components().get(pos) {
+                    for quarter in component.quarters.values() {
                         let Some(quarter) = quarter else {
                             continue;
                         };
@@ -1302,11 +1302,11 @@ impl<T> QuarterArray<T> {
 }
 
 #[derive(Default, Clone)]
-pub struct CircuitNode {
-    pub quarters: QuarterArray<Option<CircuitNodeQuarter>>,
+pub struct ComponentNode {
+    pub quarters: QuarterArray<Option<ComponentNodeQuarter>>,
 }
 
-impl CircuitNode {
+impl ComponentNode {
     pub fn is_empty(&self) -> bool {
         for quarter in self.quarters.values() {
             if quarter.is_some() {
@@ -1319,30 +1319,30 @@ impl CircuitNode {
 }
 
 #[derive(Clone)]
-pub struct CircuitNodeQuarter {
-    pub circuit: Arc<Circuit>,
+pub struct ComponentNodeQuarter {
+    pub component: Arc<Component>,
     pub offset: Vec2usize,
-    pub pin: Option<Arc<CircuitPin>>,
+    pub pin: Option<Arc<ComponentPin>>,
 }
 
 pub struct DisconnectedPinsError;
 
 #[derive(Debug, thiserror::Error)]
-pub enum CircuitPlaceError {
-    #[error("Circuit size is 0")]
-    ZeroSizeCircuit,
+pub enum ComponentPlaceError {
+    #[error("Component size is 0")]
+    ZeroSizeComponent,
 
-    #[error("Circuit occupies no space")]
+    #[error("Component occupies no space")]
     OccupiesNoTiles,
 
-    #[error("Circuit overlaps with existing circuits")]
+    #[error("Component overlaps with existing components")]
     PlaceOccupied,
 
-    #[error("Some circuit pins are disconnected from the circuit")]
+    #[error("Some component pins are disconnected from the component")]
     DisconnectedPins,
 }
 
-impl From<DisconnectedPinsError> for CircuitPlaceError {
+impl From<DisconnectedPinsError> for ComponentPlaceError {
     fn from(value: DisconnectedPinsError) -> Self {
         let DisconnectedPinsError = value;
 
@@ -1407,7 +1407,7 @@ impl BoardEditorSharedState {
 pub enum SelectedBoardItem {
     WirePart { pos: Vec2isize, dir: Direction4Half },
     WirePoint { pos: Vec2isize },
-    Circuit { id: usize, pos: Vec2isize },
+    Component { id: usize, pos: Vec2isize },
 }
 
 pub type BoardSelection = Selection<BoardSelectionImpl>;
@@ -1486,7 +1486,7 @@ impl SelectionImpl for BoardSelectionImpl {
             }
         }
 
-        for (pos, node) in pass.tiles.circuits().iter_area(tl, size) {
+        for (pos, node) in pass.tiles.components().iter_area(tl, size) {
             for qpos in QuarterPos::ALL {
                 let Some(quarter) = node.quarters.get(qpos) else {
                     continue;
@@ -1495,9 +1495,9 @@ impl SelectionImpl for BoardSelectionImpl {
                 let world_pos = pos.convert(|v| v as f32) + qpos.into_quarter_position_f32();
                 let rect = Rect::from_min_size(world_pos.into(), vec2(0.5, 0.5));
                 if area.intersects(rect) {
-                    items.insert(SelectedBoardItem::Circuit {
-                        id: quarter.circuit.id,
-                        pos: quarter.circuit.info.read().pos,
+                    items.insert(SelectedBoardItem::Component {
+                        id: quarter.component.id,
+                        pos: quarter.component.info.read().pos,
                     });
                 }
             }

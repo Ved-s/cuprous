@@ -8,8 +8,8 @@ use smoldata::raw::RawValue;
 
 use crate::{
     Direction4, Direction4HalfArray,
-    circuits::{
-        Circuit, CircuitBlueprint, CircuitImplData, CircuitInfo, CircuitPin, CircuitTransform,
+    components::{
+        Component, ComponentBlueprint, ComponentImplData, ComponentInfo, ComponentPin, ComponentTransform,
         TransformSupport,
     },
     containers::FixedVec,
@@ -24,7 +24,7 @@ pub struct Board {
     uid: u128,
     name: RwLock<String>,
     wires: RwLock<FixedVec<Arc<Wire>>>,
-    circuits: RwLock<FixedVec<Arc<Circuit>>>,
+    components: RwLock<FixedVec<Arc<Component>>>,
 
     simulation: Weak<SimulationCtx>,
     states: RwLock<Vec<Weak<SimulationStateData>>>,
@@ -39,8 +39,8 @@ impl Board {
         &self.wires
     }
 
-    pub fn circuits(&self) -> &RwLock<FixedVec<Arc<Circuit>>> {
-        &self.circuits
+    pub fn components(&self) -> &RwLock<FixedVec<Arc<Component>>> {
+        &self.components
     }
 
     pub fn simulation(&self) -> Arc<SimulationCtx> {
@@ -77,8 +77,8 @@ impl Board {
                 .iter()
                 .map(|o| o.as_ref().map(|w| w.save()))
                 .collect(),
-            circuits: self
-                .circuits
+            components: self
+                .components
                 .read()
                 .inner
                 .iter()
@@ -99,7 +99,7 @@ impl Board {
             uid: data.uid,
             name: RwLock::new(std::mem::take(&mut data.name)),
             wires: RwLock::new(Vec::with_capacity(data.wires.len()).into()),
-            circuits: RwLock::new(Vec::with_capacity(data.circuits.len()).into()),
+            components: RwLock::new(Vec::with_capacity(data.components.len()).into()),
             simulation: Arc::downgrade(sim),
 
             states: RwLock::new(Vec::with_capacity(data.states.len())),
@@ -109,7 +109,7 @@ impl Board {
     pub fn load_stage1_shallow(
         self: &Arc<Self>,
         data: &savestate::Board,
-        blueprints: &HashMap<ArcStaticStr, Arc<RwLock<CircuitBlueprint>>>,
+        blueprints: &HashMap<ArcStaticStr, Arc<RwLock<ComponentBlueprint>>>,
     ) {
         let mut wires = self.wires.write();
 
@@ -142,29 +142,29 @@ impl Board {
 
         drop(wires);
 
-        let mut circuits = self.circuits.write();
+        let mut components = self.components.write();
 
-        for (i, circuit_data) in data.circuits.iter().enumerate() {
-            let Some(circuit_data) = circuit_data else {
+        for (i, component_data) in data.components.iter().enumerate() {
+            let Some(component_data) = component_data else {
                 continue;
             };
-            let circuit = Circuit::preload(i, self, circuit_data, blueprints);
-            circuits.set(i, Arc::new(circuit));
+            let component = Component::preload(i, self, component_data, blueprints);
+            components.set(i, Arc::new(component));
         }
 
-        drop(circuits);
+        drop(components);
     }
 
-    pub fn load_stage2_circuits(&self, data: &savestate::Board) {
-        let circuits = self.circuits.read();
+    pub fn load_stage2_components(&self, data: &savestate::Board) {
+        let components = self.components.read();
 
-        for (i, circuit_data) in data.circuits.iter().enumerate() {
-            let Some(circuit_data) = circuit_data else {
+        for (i, component_data) in data.components.iter().enumerate() {
+            let Some(component_data) = component_data else {
                 continue;
             };
 
-            let circuit = circuits.get(i).expect("shallow-loaded circuit");
-            circuit.load_finish(circuit_data);
+            let component = components.get(i).expect("shallow-loaded component");
+            component.load_finish(component_data);
         }
 
         let wires = self.wires.read();
@@ -176,7 +176,7 @@ impl Board {
             let mut connected_pins = wire.connected_pins.write();
 
             for pin_id in &wire_data.connected_pins {
-                let pin = circuits.get(pin_id.circuit).and_then(|c| {
+                let pin = components.get(pin_id.component).and_then(|c| {
                     c.pins
                         .read()
                         .iter()
@@ -192,7 +192,7 @@ impl Board {
             }
         }
 
-        drop(circuits);
+        drop(components);
     }
 }
 
@@ -210,7 +210,7 @@ impl Board {
             uid,
             name: RwLock::new(name),
             wires: RwLock::new(vec![].into()),
-            circuits: RwLock::new(vec![].into()),
+            components: RwLock::new(vec![].into()),
             simulation: Arc::downgrade(simulation),
             states: RwLock::new(vec![]),
         }
@@ -240,36 +240,36 @@ impl Board {
         }
     }
 
-    pub fn create_circuit(
+    pub fn create_component(
         self: &Arc<Self>,
         pos: Vec2isize,
-        blueprint: &CircuitBlueprint,
-        overrides: CircuitCreationOverrides,
-    ) -> Arc<Circuit> {
-        let mut circuits = self.circuits.write();
+        blueprint: &ComponentBlueprint,
+        overrides: ComponentCreationOverrides,
+    ) -> Arc<Component> {
+        let mut components = self.components.write();
 
-        let id = circuits.first_free_pos();
+        let id = components.first_free_pos();
 
-        let circuit = Circuit {
+        let component = Component {
             id,
             board: Arc::downgrade(self),
-            info: RwLock::new(CircuitInfo {
+            info: RwLock::new(ComponentInfo {
                 pos,
                 render_size: blueprint.inner_size,
                 size: blueprint.transformed_size,
                 transform: blueprint.transform,
             }),
-            imp: RwLock::new(CircuitImplData {
+            imp: RwLock::new(ComponentImplData {
                 imp: blueprint.imp.clone(),
                 instance: Box::new(()),
             }),
             pins: Default::default(),
         };
 
-        let circuit = Arc::new(circuit);
+        let component = Arc::new(component);
 
-        let mut imp = circuit.imp.write();
-        circuits.set(id, circuit.clone());
+        let mut imp = component.imp.write();
+        components.set(id, component.clone());
 
         let mut rebuild_info = false;
 
@@ -285,9 +285,9 @@ impl Board {
         }
 
         if rebuild_info {
-            let mut info = circuit.info.write();
+            let mut info = component.info.write();
 
-            info.transform = CircuitTransform {
+            info.transform = ComponentTransform {
                 support: imp.imp.transform_support(),
                 dir: overrides.dir.unwrap_or(info.transform.dir),
                 flip: overrides.flip.unwrap_or(info.transform.flip),
@@ -299,46 +299,46 @@ impl Board {
                 .transform_size(info.render_size, Some(TransformSupport::Automatic));
         }
 
-        *circuit.pins.write() = blueprint
+        *component.pins.write() = blueprint
             .pins
             .iter()
             .enumerate()
-            .map(|(id, pin)| pin.clone().into_realized(circuit.clone(), id))
+            .map(|(id, pin)| pin.clone().into_realized(component.clone(), id))
             .collect();
 
         let loaded_instance = overrides.instance.and_then(|i| {
             // todo: error handling
-            imp.imp.load_instance(&circuit, i).ok()
+            imp.imp.load_instance(&component, i).ok()
         });
 
-        imp.instance = loaded_instance.unwrap_or_else(|| imp.imp.create_instance(&circuit));
+        imp.instance = loaded_instance.unwrap_or_else(|| imp.imp.create_instance(&component));
 
         drop(imp);
 
-        circuit
+        component
     }
 
-    pub fn free_circuit(&self, circuit: &Arc<Circuit>) {
-        let mut circuits = self.circuits.write();
-        let Some(ecircuit) = circuits.inner.get(circuit.id) else {
+    pub fn free_component(&self, component: &Arc<Component>) {
+        let mut components = self.components.write();
+        let Some(ecomponent) = components.inner.get(component.id) else {
             return;
         };
 
-        if ecircuit.as_ref().is_some_and(|c| Arc::ptr_eq(c, circuit)) {
-            circuits.remove(circuit.id);
+        if ecomponent.as_ref().is_some_and(|c| Arc::ptr_eq(c, component)) {
+            components.remove(component.id);
         }
     }
 }
 
 #[derive(Default, Clone, Copy)]
-pub struct CircuitCreationOverrides<'a> {
+pub struct ComponentCreationOverrides<'a> {
     pub dir: Option<Direction4>,
     pub flip: Option<bool>,
     pub config: Option<&'a RawValue>,
     pub instance: Option<&'a RawValue>,
 }
 
-impl<'a> CircuitCreationOverrides<'a> {
+impl<'a> ComponentCreationOverrides<'a> {
     pub const NONE: Self = Self {
         dir: None,
         flip: None,
@@ -351,14 +351,14 @@ pub struct Wire {
     pub id: usize,
 
     pub points: Arc<RwLock<HashMap<Vec2isize, WirePoint>>>,
-    pub connected_pins: RwLock<Vec<Arc<CircuitPin>>>,
+    pub connected_pins: RwLock<Vec<Arc<ComponentPin>>>,
 }
 
 impl Wire {
-    pub fn add_pin(&self, circuit: Arc<Circuit>, pin: Arc<CircuitPin>) {
+    pub fn add_pin(&self, component: Arc<Component>, pin: Arc<ComponentPin>) {
         let mut pins = self.connected_pins.write();
         for p in pins.iter() {
-            if p.circuit.id == circuit.id && p.id == pin.id {
+            if p.component.id == component.id && p.id == pin.id {
                 return;
             }
         }
@@ -366,10 +366,10 @@ impl Wire {
         pins.push(pin);
     }
 
-    pub fn remove_pin(&self, circuit_id: usize, pin_id: usize) {
+    pub fn remove_pin(&self, component_id: usize, pin_id: usize) {
         self.connected_pins
             .write()
-            .retain(|p| !(p.circuit.id == circuit_id && p.id == pin_id));
+            .retain(|p| !(p.component.id == component_id && p.id == pin_id));
     }
 
     pub fn save(&self) -> savestate::Wire {
@@ -385,8 +385,8 @@ impl Wire {
                 .read()
                 .iter()
                 .map(|p| savestate::PinId {
-                    circuit: p.circuit.id,
-                    name: p.circuit.pins.read()[p.id].desc.id.clone(),
+                    component: p.component.id,
+                    name: p.component.pins.read()[p.id].desc.id.clone(),
                 })
                 .collect(),
         }

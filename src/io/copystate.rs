@@ -6,7 +6,7 @@ use crate::{Direction4, Direction4Half, str::ArcStaticStr, vector::Vec2usize};
 pub struct CopyState {
     pub wire_parts: Vec<WirePart>,
     pub wire_points: Vec<Vec2usize>,
-    pub circuits: Vec<Circuit>,
+    pub components: Vec<Component>,
 }
 
 #[derive(SmolReadWrite)]
@@ -17,7 +17,7 @@ pub struct WirePart {
 }
 
 #[derive(SmolReadWrite)]
-pub struct Circuit {
+pub struct Component {
     pub id: ArcStaticStr,
     pub pos: Vec2usize,
     pub dir: Direction4,

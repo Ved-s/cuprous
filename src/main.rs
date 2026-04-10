@@ -14,7 +14,7 @@ use crate::state::wires::WireState;
 
 pub mod app;
 pub mod board;
-pub mod circuits;
+pub mod components;
 pub mod containers;
 pub mod drawing;
 pub mod editor;

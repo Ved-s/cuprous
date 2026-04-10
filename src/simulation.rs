@@ -15,7 +15,7 @@ use parking_lot::{Mutex, RwLock};
 use crate::{
     app::ErrorStrings,
     board::Board,
-    circuits::CircuitBlueprint,
+    components::ComponentBlueprint,
     io::savestate,
     state::{
         BoardState,
@@ -111,16 +111,29 @@ impl SimulationCtx {
             paused: AtomicBool::new(false),
         });
 
-        let main = Arc::new(Board::new(&this, None, "main".into()));
-        let main_state = Arc::new(RwLock::new(BoardState::new(&main, None)));
-        let main_state_data = Arc::new(SimulationStateData::new(main_state));
-
-        main.states().write().push(Arc::downgrade(&main_state_data));
-        this.boards.write().insert(main.uid(), main);
-        this.states()
-            .write()
-            .insert(main_state_data.uid(), main_state_data);
+        this.ensure_one_board_and_state();
         this
+    }
+
+    fn ensure_one_board_and_state(self: &Arc<Self>) {
+        let mut boards = self.boards.write();
+
+        if boards.is_empty() {
+            let main = Arc::new(Board::new(self, None, "main".into()));
+            boards.insert(main.uid(), main);
+        }
+
+        for board in boards.values() {
+            let mut states = board.states().write();
+
+            if states.is_empty() {
+                let state = Arc::new(RwLock::new(BoardState::new(board, None)));
+                let state_data = Arc::new(SimulationStateData::new(state));
+                states.push(Arc::downgrade(&state_data));
+
+                self.states.write().insert(state_data.uid, state_data);
+            }
+        }
     }
 
     pub fn boards(&self) -> &RwLock<HashMap<u128, Arc<Board>>> {
@@ -253,7 +266,7 @@ impl SimulationCtx {
 
     pub fn load(
         fs: &mut dyn Filesystem,
-        blueprints: &HashMap<ArcStaticStr, Arc<RwLock<CircuitBlueprint>>>,
+        blueprints: &HashMap<ArcStaticStr, Arc<RwLock<ComponentBlueprint>>>,
         errors: &mut Vec<ErrorStrings>,
     ) -> Arc<Self> {
         let this = Arc::new(Self {
@@ -458,23 +471,23 @@ impl SimulationCtx {
                 .load_stage1_shallow(state_data);
         }
 
-        // calculate circuit size and pins, connect pins to wires, load pin states, load circuit instances
+        // calculate component size and pins, connect pins to wires, load pin states, load component instances
         for board_data in &mut board_data {
-            boards[&board_data.uid].load_stage2_circuits(board_data);
+            boards[&board_data.uid].load_stage2_components(board_data);
         }
         for state_data in &mut state_data {
             states[&state_data.uid]
                 .state()
                 .write()
-                .load_stage2_circuits(state_data);
+                .load_stage2_components(state_data);
         }
 
-        // load circuit states
+        // load component states
         for state_data in &mut state_data {
             states[&state_data.uid]
                 .state()
                 .write()
-                .load_stage3_circuit_states(state_data);
+                .load_stage3_component_states(state_data);
         }
 
         // todo: correct time provider
@@ -490,6 +503,8 @@ impl SimulationCtx {
 
         drop(states);
         drop(boards);
+
+        this.ensure_one_board_and_state();
 
         this
     }
