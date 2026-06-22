@@ -29,6 +29,8 @@ pub mod clock;
 pub mod constant;
 pub mod error_filter;
 pub mod gates;
+pub mod transistor;
+
 pub mod test;
 pub mod unloaded;
 

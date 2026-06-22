@@ -376,10 +376,55 @@ impl<V: Vertex> TriangleBuffer<V> {
 
         let extra = extra.into();
         let center = center.into();
-        self.add_filled_path(points.iter().map(|p| V::new(center + *p * radius, extra)))
+        self.add_filled_polygon(points.iter().map(|p| V::new(center + *p * radius, extra)))
     }
 
-    pub fn add_filled_path(&mut self, mut verts: impl Iterator<Item = V>) {
+    pub fn add_donut(
+        &mut self,
+        center: impl Into<Vec2f>,
+        radius1: f32,
+        radius2: f32,
+        extra_picker: impl Fn(Vec2f) -> V::ExtraData,
+    ) where
+        V: PositionedVertex,
+    {
+        // Mostly copied from epaint tesselator
+        use crate::precomputed::circles::*;
+
+        let max_rad = radius1.max(radius2);
+
+        let points = if max_rad <= 2.0 {
+            &CIRCLE_8[..]
+        } else if max_rad <= 5.0 {
+            &CIRCLE_16[..]
+        } else if max_rad < 18.0 {
+            &CIRCLE_32[..]
+        } else if max_rad < 50.0 {
+            &CIRCLE_64[..]
+        } else {
+            &CIRCLE_128[..]
+        };
+
+        let center = center.into();
+
+        self.add_triangle_strip((0 .. points.len() * 2 + 2).map(|i| {
+            let point = i / 2;
+            let radius = if i % 2 == 0 {
+                radius1
+            } else {
+                radius2
+            };
+            let point = if point >= points.len() {
+                0
+            } else {
+                point
+            };
+            let pos = center + points[point] * radius;
+            V::new(pos, extra_picker(pos))
+        }))
+    }
+
+    pub fn add_filled_polygon(&mut self, mut verts: impl Iterator<Item = V>) {
         let Some(first) = verts.next() else {
             return;
         };
@@ -391,6 +436,26 @@ impl<V: Vertex> TriangleBuffer<V> {
         for vertex in verts {
             let tri = Triangle([first, prev, vertex]);
             prev = vertex;
+
+            self.push_triangle(tri);
+        }
+    }
+
+    pub fn add_triangle_strip(&mut self, mut verts: impl Iterator<Item = V>) {
+        let Some(v1) = verts.next() else {
+            return;
+        };
+
+        let Some(v2) = verts.next() else {
+            return;
+        };
+
+        let mut prev = [v1, v2];
+
+        for vertex in verts {
+            let tri = Triangle([prev[0], prev[1], vertex]);
+            prev[0] = prev[1];
+            prev[1] = vertex;
 
             self.push_triangle(tri);
         }

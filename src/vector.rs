@@ -183,6 +183,10 @@ impl<T> Vector2<T> {
             y1 * ti + y2 * t
         )
     }
+
+    pub fn dot(self, other: Self) -> T where T: Mul<Output = T> + Add<Output = T> {
+        self.x * other.x + self.y * other.y
+    }
 }
 
 impl<T: std::fmt::Display> std::fmt::Display for Vector2<T>

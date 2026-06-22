@@ -70,6 +70,8 @@ impl UnloadedComponent {
     pub fn has_pin(&self, id: &str) -> bool {
         self.discovered_pins.iter().any(|p| p.id == id)
     }
+
+    // todo: after loading all referenced pins, set their `dir`, requires info overlay when hovering components to be useful
 }
 
 impl ComponentImpl for UnloadedComponent {
