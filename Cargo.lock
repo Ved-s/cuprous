@@ -3079,7 +3079,7 @@ dependencies = [
 [[package]]
 name = "smoldata"
 version = "0.1.0"
-source = "git+https://github.com/Ved-s/smoldata.git?rev=ca6f4039462c5a21aeb49364f21dc89ec05dd104#ca6f4039462c5a21aeb49364f21dc89ec05dd104"
+source = "git+https://github.com/Ved-s/smoldata.git?rev=53e54b5533b4a9745fb64c7ce6ea762b291d8e46#53e54b5533b4a9745fb64c7ce6ea762b291d8e46"
 dependencies = [
  "smoldata_derive",
  "thiserror 1.0.69",
@@ -3088,7 +3088,7 @@ dependencies = [
 [[package]]
 name = "smoldata_derive"
 version = "0.1.0"
-source = "git+https://github.com/Ved-s/smoldata.git?rev=ca6f4039462c5a21aeb49364f21dc89ec05dd104#ca6f4039462c5a21aeb49364f21dc89ec05dd104"
+source = "git+https://github.com/Ved-s/smoldata.git?rev=53e54b5533b4a9745fb64c7ce6ea762b291d8e46#53e54b5533b4a9745fb64c7ce6ea762b291d8e46"
 dependencies = [
  "proc-macro2",
  "quote",

@@ -101,6 +101,9 @@ impl App {
             crate::components::buffer::Buffer.into(),
             crate::components::error_filter::ErrorFilter.into(),
             crate::components::clock::Clock::default().into(),
+
+            #[cfg(feature = "wip_circuits")]
+            crate::components::world_io::WorldIO::default().into(),
         ];
 
         let mut loaded_blueprints = HashMap::new();

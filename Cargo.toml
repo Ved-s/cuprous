@@ -21,6 +21,9 @@ directories-next = "2.0.0"
 egui_extras = "0.33.0"
 
 traitbox = { path = "crates/traitbox" }
-smoldata = { git = "https://github.com/Ved-s/smoldata.git", rev = "ca6f4039462c5a21aeb49364f21dc89ec05dd104" }
+smoldata = { git = "https://github.com/Ved-s/smoldata.git", rev = "53e54b5533b4a9745fb64c7ce6ea762b291d8e46", features = [] }
 base64 = "0.22.1"
 flate2 = "1.1.2"
+
+[features]
+wip_circuits = []

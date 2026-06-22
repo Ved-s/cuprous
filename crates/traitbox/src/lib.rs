@@ -1502,14 +1502,20 @@ fn generate_impl(c: &ParsedContainer, parsed: &ParsedMacroInput) -> TokenStream 
     let downcast_fns = c.downcast.then(|| {
         let all_value_bounds = &parsed.all_value_bounds;
         quote! {
-            pub fn type_id(&self) -> std::any::TypeId {
+            #[inline]
+            pub fn inner_type_id(&self) -> std::any::TypeId {
                 (self.vtable.type_id)()
+            }
+
+            #[inline]
+            pub fn inner_type_is<T: #all_value_bounds>(&self) -> bool {
+                self.inner_type_id() == std::any::TypeId::of::<T>()
             }
 
             pub fn downcast<T: #all_value_bounds>(
                 mut self,
             ) -> Result<Box<T>, Self> {
-                if self.type_id() != std::any::TypeId::of::<T>() {
+                if !self.inner_type_is::<T>() {
                     return Err(self);
                 }
                 let b = unsafe { Box::from_raw(self.data.cast().as_ptr()) };
@@ -1518,7 +1524,7 @@ fn generate_impl(c: &ParsedContainer, parsed: &ParsedMacroInput) -> TokenStream 
             }
 
             pub fn downcast_ref<T: #all_value_bounds>(&self) -> Option<&T> {
-                if self.type_id() != std::any::TypeId::of::<T>() {
+                if !self.inner_type_is::<T>() {
                     return None;
                 }
                 Some(unsafe { self.data.cast().as_ref() })
@@ -1527,7 +1533,7 @@ fn generate_impl(c: &ParsedContainer, parsed: &ParsedMacroInput) -> TokenStream 
             pub fn downcast_mut<T: #all_value_bounds>(
                 &mut self,
             ) -> Option<&mut T> {
-                if self.type_id() != std::any::TypeId::of::<T>() {
+                if !self.inner_type_is::<T>() {
                     return None;
                 }
                 Some(unsafe { self.data.cast().as_mut() })

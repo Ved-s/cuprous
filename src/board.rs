@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{BTreeSet, HashMap},
     sync::{Arc, Weak},
 };
 
@@ -9,15 +9,15 @@ use smoldata::raw::RawValue;
 use crate::{
     Direction4, Direction4HalfArray,
     components::{
-        Component, ComponentBlueprint, ComponentImplData, ComponentInfo, ComponentPin, ComponentTransform,
-        TransformSupport,
+        Component, ComponentBlueprint, ComponentImplData, ComponentInfo,
+        ComponentPin, ComponentTransform, TransformSupport, unloaded::UnloadedComponent,
     },
     containers::FixedVec,
     io::savestate,
     simulation::{SimulationCtx, SimulationStateData},
     state::sim::UpdateTaskPool,
     str::ArcStaticStr,
-    vector::Vec2isize,
+    vector::{Vec2isize, Vec2usize},
 };
 
 pub struct Board {
@@ -110,6 +110,7 @@ impl Board {
         self: &Arc<Self>,
         data: &savestate::Board,
         blueprints: &HashMap<ArcStaticStr, Arc<RwLock<ComponentBlueprint>>>,
+        any_unloaded_comp: &mut bool,
     ) {
         let mut wires = self.wires.write();
 
@@ -148,11 +149,95 @@ impl Board {
             let Some(component_data) = component_data else {
                 continue;
             };
-            let component = Component::preload(i, self, component_data, blueprints);
+            let component =
+                Component::preload(i, self, component_data, blueprints, any_unloaded_comp);
             components.set(i, Arc::new(component));
         }
 
         drop(components);
+    }
+
+    pub fn load_stage1p5_unloaded_component_pins(&self, data: &savestate::Board) {
+        let components = self.components.read();
+
+        let unloaded_component_ids = BTreeSet::from_iter(
+            components
+                .iter()
+                .filter(|c| c.imp.read().imp.inner_type_is::<UnloadedComponent>())
+                .map(|c| c.id),
+        );
+
+        for wire in &data.wires {
+            let Some(wire) = wire else {
+                continue;
+            };
+
+            'wire_pins: for pin in &wire.connected_pins {
+                if !unloaded_component_ids.contains(&pin.component) {
+                    continue;
+                }
+
+                let Some(comp) = components.get(pin.component) else {
+                    continue;
+                };
+
+                let mut imp = comp.imp.write();
+                let Some(unloaded) = imp.imp.downcast_mut::<UnloadedComponent>() else {
+                    continue;
+                };
+
+                if unloaded.has_pin(&pin.name) {
+                    continue;
+                }
+
+                // find a suitable position for the pin
+
+                let found_pos = 'pos_search: {
+                    let info = comp.info.read();
+
+                    let mut found_up = None::<usize>;
+                    let mut found_left = None::<usize>;
+                    let mut found_middle = None::<(Vec2usize, f32)>;
+
+                    for (pos, _) in &wire.points {
+                        if pos.x < info.pos.x || pos.y < info.pos.y {
+                            continue;
+                        }
+
+                        let rel_pos = (*pos - info.pos).convert(|v| v as usize);
+                        match (rel_pos.x == 0, rel_pos.y == 0) {
+                            (true, true) => break 'pos_search rel_pos,
+                            (true, false) => {
+                                found_left = Some(found_left.unwrap_or(usize::MAX).min(rel_pos.y));
+                            }
+                            (false, true) => {
+                                found_up = Some(found_up.unwrap_or(usize::MAX).min(rel_pos.x));
+                            }
+                            (false, false) => {
+                                let new_dist = rel_pos.convert(|v| v as f32).length_squared();
+                                found_middle = Some(match found_middle {
+                                    Some((pos, dist)) if dist < new_dist => (pos, dist),
+                                    _ => (rel_pos, new_dist),
+                                })
+                            }
+                        }
+                    }
+
+                    if let Some(y) = found_left {
+                        Vec2usize::new(0, y)
+                    } else if let Some(x) = found_up {
+                        Vec2usize::new(x, 0)
+                    } else if let Some((pos, _)) = found_middle {
+                        pos
+                    } else {
+                        // oh well, there's something wrong with the data, give up
+                        continue 'wire_pins;
+                    }
+                };
+
+                unloaded.add_pin(pin.name.clone(), found_pos);
+            }
+        }
     }
 
     pub fn load_stage2_components(&self, data: &savestate::Board) {
@@ -324,7 +409,10 @@ impl Board {
             return;
         };
 
-        if ecomponent.as_ref().is_some_and(|c| Arc::ptr_eq(c, component)) {
+        if ecomponent
+            .as_ref()
+            .is_some_and(|c| Arc::ptr_eq(c, component))
+        {
             components.remove(component.id);
         }
     }

@@ -460,15 +460,24 @@ impl SimulationCtx {
         let boards = this.boards.read();
         let states = this.states.read();
 
+        let mut any_unloaded_comp = false;
+
         // load everything that doesn't reference other loaded stuff
         for board_data in &mut board_data {
-            boards[&board_data.uid].load_stage1_shallow(board_data, blueprints);
+            boards[&board_data.uid].load_stage1_shallow(board_data, blueprints, &mut any_unloaded_comp);
         }
         for state_data in &mut state_data {
             states[&state_data.uid]
                 .state()
                 .write()
                 .load_stage1_shallow(state_data);
+        }
+
+        if any_unloaded_comp {
+            // scan for connected wires to unloaded components
+            for board_data in &mut board_data {
+                boards[&board_data.uid].load_stage1p5_unloaded_component_pins(board_data);
+            }
         }
 
         // calculate component size and pins, connect pins to wires, load pin states, load component instances

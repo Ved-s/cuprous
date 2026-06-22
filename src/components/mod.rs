@@ -14,7 +14,7 @@ use smoldata::{SmolReadWrite, raw::RawValue};
 use crate::{
     Direction4, Direction8, PaintContext,
     board::{Board, Wire},
-    components::props::{PropertyInfo, PropertyValue},
+    components::{props::{PropertyInfo, PropertyValue}, unloaded::UnloadedComponent},
     io::savestate,
     selection::SelectionRenderer,
     state::{BoardState, components::BoardComponentsState, sim::UpdateTaskPool, wires::WireState},
@@ -25,11 +25,15 @@ use crate::{
 
 pub mod buffer;
 pub mod button;
+pub mod clock;
 pub mod constant;
 pub mod error_filter;
 pub mod gates;
-pub mod clock;
 pub mod test;
+pub mod unloaded;
+
+#[cfg(feature = "wip_circuits")]
+pub mod world_io;
 
 pub mod props;
 
@@ -61,27 +65,49 @@ impl Component {
         board: &Arc<Board>,
         component_data: &savestate::Component,
         blueprints: &HashMap<ArcStaticStr, Arc<RwLock<ComponentBlueprint>>>,
+        is_unloaded: &mut bool,
     ) -> Component {
-        let Some(blueprint) = blueprints.get(&component_data.id) else {
-            todo!("unloaded component");
-        };
+        let (info, imp) = match blueprints.get(&component_data.id) {
+            Some(blueprint) => {
+                let blueprint = blueprint.read();
 
-        let blueprint = blueprint.read();
+                let info = ComponentInfo {
+                    pos: component_data.pos,
+                    render_size: 0.into(), // calculated later
+                    size: 0.into(),        // calculated later
+                    transform: ComponentTransform {
+                        support: blueprint.transform.support,
+                        dir: component_data.dir,
+                        flip: component_data.flip,
+                    },
+                };
 
-        let info = ComponentInfo {
-            pos: component_data.pos,
-            render_size: 0.into(), // calculated later
-            size: 0.into(),        // calculated later
-            transform: ComponentTransform {
-                support: blueprint.transform.support,
-                dir: component_data.dir,
-                flip: component_data.flip,
-            },
-        };
+                let imp = ComponentImplData {
+                    imp: blueprint.imp.clone(),
+                    instance: Box::new(()), // loaded later
+                };
+                (info, imp)
+            }
+            None => {
+                *is_unloaded = true;
+                let imp = UnloadedComponent::new(component_data.id.clone());
+                let info = ComponentInfo {
+                    pos: component_data.pos,
+                    render_size: 0.into(),
+                    size: 0.into(),
+                    transform: ComponentTransform {
+                        support: imp.transform_support(),
+                        dir: component_data.dir,
+                        flip: component_data.flip,
+                    },
+                };
 
-        let imp = ComponentImplData {
-            imp: blueprint.imp.clone(),
-            instance: Box::new(()), // loaded later
+                let imp = ComponentImplData {
+                    imp: ComponentImplBox::new(imp),
+                    instance: Box::new(()),
+                };
+                (info, imp)
+            }
         };
 
         Self {
@@ -785,6 +811,8 @@ pub trait ComponentImpl: Clone + Send + Sync {
 }
 
 traitbox::traitbox! {
+
+    #[downcast]
     pub box ComponentImplBox;
 
     #[as_impl]
