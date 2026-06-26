@@ -146,7 +146,7 @@ pub struct InputUpdateTask {
     pub update_component: bool,
 }
 
-#[derive(Clone, Hash, PartialEq, Eq, SmolReadWrite)]
+#[derive(Copy, Clone, Hash, PartialEq, Eq, SmolReadWrite)]
 pub struct WireUpdateTask {
     pub id: usize,
     pub force_pin_updates: bool,

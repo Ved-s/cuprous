@@ -310,6 +310,7 @@ impl ComponentProps {
                         // Component will be updated later, for now just drop it
                         tasks.add_drop_component_task(id, Some(p.pin.id));
                     }
+                    PinType::Multiwire => {}
                 }
             }
         }
@@ -594,6 +595,14 @@ impl ComponentProps {
                                     );
 
                                     editor.board().add_tasks(&tasks);
+                                }
+
+                                if params.invalidate_multiwire_router {
+                                    for state in editor.board().states().read().iter() {
+                                        if let Some(state) = state.upgrade() {
+                                            state.remove_multiwire_router(component_id);
+                                        }
+                                    }
                                 }
                             }
                         }

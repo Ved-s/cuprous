@@ -14,6 +14,7 @@ use crate::{app::App, define_tab_type, str::ArcStaticStr};
 mod board_view;
 mod component_props;
 mod component_list;
+mod debug_info;
 
 define_tab_type! {
     #[derive(Clone, Copy)]
@@ -35,6 +36,12 @@ define_tab_type! {
         #[title = "Component properties"]
         #[closeable = false]
         ComponentProps,
+
+        #[id = "debug_info"]
+        #[impl = debug_info::DebugInfo, loadable = false]
+        #[title = "Debug info"]
+        #[closeable = true]
+        DebugInfo,
     }
 }
 

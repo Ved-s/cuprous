@@ -66,6 +66,18 @@ impl ComponentImpl for Transistor {
         Vec2usize::new(2, 3)
     }
 
+    fn occupies_quarter(&self, _transform: ComponentTransform, qpos: Vec2usize) -> bool {
+        if qpos.x == 0 || qpos.x == 3 || qpos.y == 0 || qpos.y == 5 {
+            return false;
+        }
+
+        if qpos.x == 1 && (qpos.y == 1 || qpos.y == 4) {
+            return false;
+        }
+
+        true
+    }
+
     fn describe_pins(&self, _transform: ComponentTransform) -> Box<[PinDescription]> {
         [
             PinDescription {

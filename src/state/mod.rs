@@ -1,31 +1,36 @@
 use std::{
     ops::Deref,
-    sync::{Arc, Weak},
+    sync::{Arc, Weak, atomic::Ordering},
     time::Duration,
 };
 
 use parking_lot::Mutex;
 
 use crate::{
-    Style,
-    board::{Board, Wire},
-    components::{ComponentPin, ComponentUpdateReason, PinType, UntypedComponentCtx},
-    io::savestate,
-    pool::get_pooled,
-    state::{
+    Style, board::Board, components::{ComponentPin, ComponentUpdateReason, PinType, UntypedComponentCtx}, io::savestate, multiwire::MultiwireTargetState, pool::get_pooled, state::{
         components::{BoardComponentsState, ComponentState},
         sim::{
-            BoardSimulationState, ComponentUpdateTask, ExternalTaskPool, InputUpdateTask, UpdateTask,
-            UpdateTaskPool, WireUpdateTask,
+            BoardSimulationState, ComponentUpdateTask, ExternalTaskPool, InputUpdateTask,
+            UpdateTask, UpdateTaskPool, WireUpdateTask,
         },
-        wires::{BoardWiresState, WireState},
-    },
-    time::{self, Instant, TimeProvider},
+        wires::{BoardWiresState, WireState, WireStateHandler},
+    }, time::{self, Instant, TimeProvider}
 };
 
 pub mod components;
 pub mod sim;
 pub mod wires;
+
+pub enum StateRunResult {
+    Done,
+    DoneUntil(Instant),
+    RunMultiwireUpdate {
+        wire: usize,
+        force_pin_updates: bool,
+    },
+}
+
+struct WireRequiresMultiwireUpdate;
 
 pub struct BoardState {
     id: u128,
@@ -222,11 +227,15 @@ impl BoardState {
         self.sim.add_tasks(tasks, false, None);
     }
 
+    pub fn flush_external_tasks(&mut self) {
+        self.sim.flush_tasks();
+    }
+
     pub fn set_external_tasks(&mut self, external_tasks: Arc<Mutex<ExternalTaskPool>>) {
         self.sim.set_external_tasks(external_tasks);
     }
 
-    pub fn run(&mut self, task_limit: &mut usize) -> Option<Instant> {
+    pub fn run(&mut self, task_limit: &mut usize) -> StateRunResult {
         let mut tasks = get_pooled::<UpdateTaskPool>();
 
         self.sim.flush_tasks();
@@ -251,9 +260,15 @@ impl BoardState {
                 meta = Some(m);
 
                 match task {
-                    UpdateTask::Wire(w) => {
-                        self.update_wire(w, &mut tasks);
-                    }
+                    UpdateTask::Wire(w) => match self.update_wire(w, &mut tasks) {
+                        Ok(()) => (),
+                        Err(WireRequiresMultiwireUpdate) => {
+                            return StateRunResult::RunMultiwireUpdate {
+                                wire: w.id,
+                                force_pin_updates: w.force_pin_updates,
+                            };
+                        }
+                    },
                     UpdateTask::Component(c) => {
                         self.update_component(c, &mut tasks);
                     }
@@ -271,70 +286,44 @@ impl BoardState {
                 .add_tasks(&mut tasks.drain(), queue_immediately, meta.as_ref());
         }
 
-        self.sim.next_update_time()
+        match self.sim.next_update_time() {
+            Some(time) => StateRunResult::DoneUntil(time),
+            None => StateRunResult::Done,
+        }
     }
 
-    fn update_wire(&mut self, task: WireUpdateTask, tasks: &mut UpdateTaskPool) {
-        fn update_wire_pins(
-            this: &mut BoardState,
-            wire: Arc<Wire>,
-            force_pin_updates: bool,
-            pins: &[Arc<ComponentPin>],
-            tasks: &mut UpdateTaskPool,
-        ) {
-            let mut state = WireState::default();
-
-            // Read
-            for pin in pins {
-                match pin.ty {
-                    PinType::Inside => {}
-                    PinType::Outside => {
-                        state.combine(&this.components.get_pin(pin.component.id, pin.id));
-                    }
-                }
-            }
-
-            // Modify
-
-            // TODO
-
-            // Write
-            let changed = this.wires.set_wire(wire.id, state.clone());
-            if !changed && !force_pin_updates {
-                return;
-            }
-
-            for pin in pins {
-                match pin.ty {
-                    PinType::Inside => {
-                        let changed = this.components.set_pin(pin.component.id, pin.id, state.clone());
-                        if changed {
-                            tasks.add_component_task(
-                                pin.component.id,
-                                ComponentUpdateReason::ChangedPin(pin.id),
-                            );
-                        }
-                    }
-                    PinType::Outside => {}
-                }
-            }
-        }
-
+    fn update_wire(
+        &mut self,
+        task: WireUpdateTask,
+        tasks: &mut UpdateTaskPool,
+    ) -> Result<(), WireRequiresMultiwireUpdate> {
         let Some(wire) = self.board().wires().read().get(task.id).cloned() else {
-            return;
+            return Ok(());
         };
+
+        if wire.is_multiwire.load(Ordering::Relaxed) {
+            return Err(WireRequiresMultiwireUpdate);
+        }
 
         let pins = wire.connected_pins.read();
 
-        update_wire_pins(
-            self,
-            wire.clone(),
-            task.force_pin_updates,
-            pins.as_slice(),
-            tasks,
-        );
+        let mut state = WireStateHandler::default();
 
+        state.read_pins(self, pins.as_slice());
+
+        // TODO: Modify?
+
+        let changed = self.wires.set_wire(wire.id, state.state.clone());
+        if !changed && !task.force_pin_updates {
+            return Ok(());
+        }
+
+        state.write_pins(self, pins.as_slice(), tasks);
+
+        // todo: figure out if this is still needed
         tasks.shuffle();
+
+        Ok(())
     }
 
     fn update_component(&mut self, task: ComponentUpdateTask, tasks: &mut UpdateTaskPool) {
@@ -360,32 +349,74 @@ impl BoardState {
         tasks: &mut UpdateTaskPool,
         queue_immediately: &mut bool,
     ) {
-        let pin_input_wire = self
+        let Some(pin) = self
             .board()
             .components()
             .read()
             .get(task.component)
-            .and_then(|c| {
-                c.pins.read().get(task.pin).map(|p| match p.desc.ty {
-                    PinType::Inside => Ok(p.pin.wire.read().clone()),
-                    _ => Err(()),
-                })
-            })
-            .ok_or(())
-            .flatten();
-
-        let state = match pin_input_wire {
-            Err(()) => return,
-            Ok(None) => WireState::None,
-            Ok(Some(wire)) => self.wires.get_wire(wire.id),
+            .and_then(|c| c.pins.read().get(task.pin).map(|p| p.pin.clone()))
+        else {
+            return;
         };
 
-        let changed = self.components.set_pin(task.component, task.pin, state);
+        match pin.ty {
+            PinType::Inside => {
+                let state = match pin.wire.read().deref() {
+                    None => WireState::None,
+                    Some(wire) => self.wires.get_wire(wire.id),
+                };
 
-        if changed && task.update_component {
-            tasks.add_component_task(task.component, ComponentUpdateReason::ChangedPin(task.pin));
-            *queue_immediately = true;
-        }
+                let changed = self.components.set_pin(task.component, task.pin, state);
+
+                if changed && task.update_component {
+                    tasks.add_component_task(
+                        task.component,
+                        ComponentUpdateReason::ChangedPin(task.pin),
+                    );
+                    *queue_immediately = true;
+                }
+            }
+            PinType::Outside => {},
+            PinType::Multiwire => {
+                match pin.wire.read().deref() {
+                    None => {
+                        let simulation = self.board().simulation();
+                        let Some(state_data) = simulation.states().read().get(&self.uid()).cloned() else {
+                            return;
+                        };
+
+                        let router = state_data.get_multiwire_router(task.component, Some(self));
+
+                        let mut routes = vec![];
+                        router.route(task.pin, &mut routes);
+
+                        for route in routes {
+                            match route.target_state {
+                                MultiwireTargetState::CurrentState => {
+                                    tasks.add_wire_task(route.wire_id, false);
+                                },
+                                MultiwireTargetState::Uid(uid) => {
+                                    let states = simulation.states().read();
+                                    let Some(state) = states.get(&uid) else {
+                                        continue;
+                                    };
+
+                                    state.add_tasks(&mut [WireUpdateTask {
+                                        id: route.wire_id,
+                                        force_pin_updates: false,
+                                    }.into()].into_iter());
+                                },
+                            }
+                        }
+                        *queue_immediately = true;
+                    },
+                    Some(wire) => {
+                        tasks.add_wire_task(wire.id, false);
+                        *queue_immediately = true;
+                    },
+                };
+            }
+        };
     }
 
     pub fn get_timer(&self, component_id: usize) -> Option<(Instant, Option<Duration>)> {

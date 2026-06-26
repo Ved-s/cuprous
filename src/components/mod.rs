@@ -14,8 +14,12 @@ use smoldata::{SmolReadWrite, raw::RawValue};
 use crate::{
     Direction4, Direction8, PaintContext,
     board::{Board, Wire},
-    components::{props::{PropertyInfo, PropertyValue}, unloaded::UnloadedComponent},
+    components::{
+        props::{PropertyInfo, PropertyValue},
+        unloaded::UnloadedComponent,
+    },
     io::savestate,
+    multiwire::{DummyRouter, MultiwireRouter},
     selection::SelectionRenderer,
     state::{BoardState, components::BoardComponentsState, sim::UpdateTaskPool, wires::WireState},
     str::ArcStaticStr,
@@ -29,6 +33,7 @@ pub mod clock;
 pub mod constant;
 pub mod error_filter;
 pub mod gates;
+pub mod relay;
 pub mod transistor;
 
 pub mod test;
@@ -187,6 +192,7 @@ pub struct ComponentImplData {
 pub enum PinType {
     Inside,
     Outside,
+    Multiwire,
 }
 
 #[derive(Clone)]
@@ -281,6 +287,9 @@ impl ComponentPin {
             PinType::Outside => {
                 tasks.add_wire_task(old_wire, true);
             }
+            PinType::Multiwire => {
+                tasks.add_update_input_task(self.component.id, self.id, false);
+            }
         }
     }
 
@@ -291,6 +300,9 @@ impl ComponentPin {
             }
             PinType::Inside => {
                 tasks.add_update_input_task(self.component.id, self.id, true);
+            }
+            PinType::Multiwire => {
+                tasks.add_wire_task(wire, true);
             }
         }
     }
@@ -376,6 +388,7 @@ impl<'a> ComponentRenderingContext<'a> {
             Some(FlipType::Both) => [1.0 - norm.x, 1.0 - norm.y].into(),
         };
 
+        // todo: this can be done faster without an angle
         let norm = match self.angle {
             None => norm,
             Some(a) => norm.rotated(a, 0.5),
@@ -617,12 +630,14 @@ impl ComponentTransform {
 
 pub struct PropertyChangedParams {
     pub trigger_update: bool,
+    pub invalidate_multiwire_router: bool,
 }
 
 impl Default for PropertyChangedParams {
     fn default() -> Self {
         Self {
             trigger_update: true,
+            invalidate_multiwire_router: true,
         }
     }
 }
@@ -810,6 +825,16 @@ pub trait ComponentImpl: Clone + Send + Sync {
     ) {
         let _ = (component_instance, prop, params);
     }
+
+    fn create_multiwire_router(
+        &self,
+        component: &Arc<Component>,
+        instance: &Self::Instance,
+        state: &Self::State,
+    ) -> Box<dyn MultiwireRouter> {
+        let _ = (component, instance, state);
+        Box::new(DummyRouter)
+    }
 }
 
 traitbox::traitbox! {
@@ -873,6 +898,14 @@ traitbox::traitbox! {
 
         fn property_changed<C: ComponentImpl>(this: &C, component_instance: Option<(&Component, &mut Box<dyn Any + Send + Sync>)>, prop: &str, params: &mut PropertyChangedParams) {
             this.property_changed(component_instance.map(|(c, i)| (c, i.downcast_mut().expect("incorrect component instance"))), prop, params)
+        }
+
+        fn create_multiwire_router<C: ComponentImpl>(this: &C, component: &Arc<Component>, instance: &Box<dyn Any + Send + Sync>, state: &Box<dyn Any + Send + Sync>) -> Box<dyn MultiwireRouter> {
+            this.create_multiwire_router(component, instance.downcast_ref().expect("incorrect component instance"), state.downcast_ref().expect("incorrect component instance"))
+        }
+
+        fn create_default_state<C: ComponentImpl>() -> Box<dyn Any + Send + Sync> {
+            Box::new(C::State::default())
         }
     }
 

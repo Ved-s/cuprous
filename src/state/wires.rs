@@ -1,8 +1,13 @@
-use std::{any::type_name, ops::Deref};
+use std::{any::type_name, ops::Deref, sync::Arc};
 
 use smoldata::{SmolRead, SmolWrite, reader::ReadError};
 
-use crate::{Style, board::Wire};
+use crate::{
+    Style,
+    board::Wire,
+    components::{ComponentPin, ComponentUpdateReason, PinType},
+    state::{BoardState, sim::UpdateTaskPool},
+};
 
 #[derive(Clone, Default, PartialEq, Eq)]
 pub enum WireState {
@@ -133,5 +138,52 @@ impl BoardWiresState {
 
     pub fn reset(&mut self) {
         self.wires.clear();
+    }
+}
+
+#[derive(Default)]
+pub struct WireStateHandler {
+    pub state: WireState,
+}
+
+impl WireStateHandler {
+    pub fn read_pins(&mut self, board_state: &BoardState, pins: &[Arc<ComponentPin>]) {
+        for pin in pins {
+            match pin.ty {
+                PinType::Inside => {}
+                PinType::Outside => {
+                    self.state
+                        .combine(&board_state.components.get_pin(pin.component.id, pin.id));
+                }
+                PinType::Multiwire => {}
+            }
+        }
+    }
+
+    pub fn write_pins(
+        &mut self,
+        board_state: &mut BoardState,
+        pins: &[Arc<ComponentPin>],
+        tasks: &mut UpdateTaskPool,
+    ) {
+        for pin in pins {
+            match pin.ty {
+                PinType::Inside => {
+                    let changed = board_state.components.set_pin(
+                        pin.component.id,
+                        pin.id,
+                        self.state.clone(),
+                    );
+                    if changed {
+                        tasks.add_component_task(
+                            pin.component.id,
+                            ComponentUpdateReason::ChangedPin(pin.id),
+                        );
+                    }
+                }
+                PinType::Outside => {}
+                PinType::Multiwire => {}
+            }
+        }
     }
 }

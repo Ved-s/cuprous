@@ -812,6 +812,7 @@ impl BoardEditor {
                         tasks.add_update_input_task(component.id, pin.pin.id, false);
                     }
                     PinType::Outside => {}
+                    PinType::Multiwire => {}
                 }
             }
         }
@@ -830,25 +831,47 @@ impl BoardEditor {
         self.board.add_tasks(&tasks);
     }
 
-    fn remove_component_internal(&mut self, component: &Arc<Component>, tasks: &mut UpdateTaskPool) {
+    fn remove_component_internal(
+        &mut self,
+        component: &Arc<Component>,
+        tasks: &mut UpdateTaskPool,
+    ) {
         let info = component.info.read();
         let transformed_size = info.size;
         let pos = info.pos;
         drop(info);
 
-        self.tiles.remove_component(component.id, pos, transformed_size);
+        self.tiles
+            .remove_component(component.id, pos, transformed_size);
 
         for pin in component.pins.read().iter() {
             let mut wire = pin.pin.wire.write();
             if let Some(wire) = wire.deref() {
+                wire.remove_pin(component.id, pin.pin.id);
+
                 match pin.pin.ty {
                     PinType::Inside => {}
                     PinType::Outside => {
                         tasks.add_wire_task(wire.id, true);
                     }
+                    PinType::Multiwire => {
+                        tasks.add_wire_task(wire.id, true);
+                        if !wire
+                            .connected_pins
+                            .read()
+                            .iter()
+                            .any(|p| matches!(p.ty, PinType::Multiwire))
+                        {
+                            wire.is_multiwire.store(false, Ordering::Relaxed);
+                            self.board.multiwire_connections().write().remove(&wire.id);
+                        } else {
+                            let mut connections = self.board.multiwire_connections().write();
+                            if let Some(connections) = connections.get_mut(&wire.id) {
+                                connections.remove(&(component.id, pin.pin.id));
+                            }
+                        }
+                    }
                 }
-
-                wire.remove_pin(component.id, pin.pin.id);
             }
             *wire = None;
             drop(wire);
@@ -922,6 +945,16 @@ impl BoardEditor {
                 };
 
                 pin.connect(wire.clone(), tasks);
+
+                if matches!(pin.ty, PinType::Multiwire) {
+                    wire.is_multiwire.store(true, Ordering::Relaxed);
+                    self.board
+                        .multiwire_connections()
+                        .write()
+                        .entry(wire.id)
+                        .or_default()
+                        .insert((quarter.component.id, pin.id));
+                }
             }
         }
 
@@ -969,6 +1002,24 @@ impl BoardEditor {
                     let Some(pin) = &quarter.pin else { continue };
 
                     pin.disconnect(tasks);
+
+                    if matches!(pin.ty, PinType::Multiwire) {
+                        if wire.is_multiwire.load(Ordering::Relaxed)
+                            && !wire
+                                .connected_pins
+                                .read()
+                                .iter()
+                                .any(|p| matches!(p.ty, PinType::Multiwire))
+                        {
+                            wire.is_multiwire.store(false, Ordering::Relaxed);
+                            self.board.multiwire_connections().write().remove(&wire.id);
+                        } else {
+                            let mut connections = self.board.multiwire_connections().write();
+                            if let Some(connections) = connections.get_mut(&wire.id) {
+                                connections.remove(&(quarter.component.id, pin.id));
+                            }
+                        }
+                    }
                 }
             }
 
@@ -1061,6 +1112,21 @@ impl BoardEditor {
             pins_into.push(pin);
         }
 
+        if from.is_multiwire.load(Ordering::Relaxed) {
+            into.is_multiwire.store(true, Ordering::Relaxed);
+        }
+
+        let mut multiwire_connections = self.board.multiwire_connections().write();
+
+        if let Some(connections) = multiwire_connections.remove(&from.id) {
+            multiwire_connections
+                .entry(into.id)
+                .or_default()
+                .extend(connections);
+        }
+
+        drop(multiwire_connections);
+
         self.board.free_wire(&from);
     }
 
@@ -1072,6 +1138,8 @@ impl BoardEditor {
 
         let mut old_pins = std::mem::take(wire.connected_pins.write().deref_mut());
         points.clear();
+
+        self.board.multiwire_connections().write().remove(&wire.id);
 
         let mut first_wire = Some((wire, points));
 
@@ -1086,6 +1154,8 @@ impl BoardEditor {
                 let wire = self.board.create_wire();
                 (wire.clone(), wire.points.write_arc())
             });
+
+            wire.is_multiwire.store(false, Ordering::Relaxed);
 
             trav_positions.clear();
             trav_positions.insert(pos);
@@ -1119,6 +1189,17 @@ impl BoardEditor {
                         };
 
                         pin.connect(wire.clone(), tasks);
+
+                        if matches!(pin.ty, PinType::Multiwire) {
+                            wire.is_multiwire.store(true, Ordering::Relaxed);
+
+                            self.board
+                                .multiwire_connections()
+                                .write()
+                                .entry(wire.id)
+                                .or_default()
+                                .insert((quarter.component.id, pin.id));
+                        }
 
                         old_pins.retain(|p| !Arc::ptr_eq(p, pin));
                     }

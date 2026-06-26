@@ -1,4 +1,7 @@
-use std::f32::consts::{FRAC_PI_2, TAU};
+use std::{
+    f32::consts::{FRAC_PI_2, TAU},
+    ops::RangeInclusive,
+};
 
 use eframe::{
     egui::{Color32, Rect},
@@ -8,7 +11,9 @@ use eframe::{
 use crate::{
     Direction8, PinStyle,
     vector::Vec2f,
-    vertex_renderer::{ColoredTriangleBuffer, ColoredVertex, PositionedVertex, Triangle, TriangleBuffer},
+    vertex_renderer::{
+        ColoredTriangleBuffer, ColoredVertex, PositionedVertex, Triangle, TriangleBuffer,
+    },
 };
 
 #[derive(Clone, Copy)]
@@ -24,13 +29,13 @@ impl Line {
         Self {
             a: a.y - b.y,
             b: b.x - a.x,
-            c: a.x * b.y - a.y * b.x
+            c: a.x * b.y - a.y * b.x,
         }
     }
 
     pub fn intersect(self, other: Self) -> Vec2f {
         fn det(a: f32, b: f32, c: f32, d: f32) -> f32 {
-            a*d - b*c
+            a * d - b * c
         }
 
         let zn = det(self.a, self.b, other.a, other.b);
@@ -98,7 +103,8 @@ impl<I: Iterator<Item = Vec2f>> Iterator for ThickOutlinePointsIterator<I> {
                 let next_angle = (next - self.cur).angle_to_xp();
 
                 let prev_offset = Vec2f::from_angle_length(prev_angle + pnfrac, self.halfwidth);
-                let prev_line = Line::from_two_points(self.cur + prev_offset, self.prev + prev_offset);
+                let prev_line =
+                    Line::from_two_points(self.cur + prev_offset, self.prev + prev_offset);
 
                 let next_offset = Vec2f::from_angle_length(next_angle + pnfrac, self.halfwidth);
                 let next_line = Line::from_two_points(self.cur + next_offset, next + next_offset);
@@ -132,7 +138,6 @@ impl<I: Iterator<Item = Vec2f>> Iterator for ThickOutlinePointsIterator<I> {
         }
     }
 }
-
 
 pub fn rotated_rect(
     rect: Rect,
@@ -196,18 +201,23 @@ pub fn pin(
     }
 }
 
-pub fn path<V: PositionedVertex>(buf: &mut TriangleBuffer<V>, points: impl Iterator<Item = V> + Clone, width: f32) {
-    let piter = ThickOutlinePointsIterator::new(points.clone().map(|v| v.into_parts().0), width, true)
-        .unwrap()
-        .peekable();
-    let niter = ThickOutlinePointsIterator::new(points.clone().map(|v| v.into_parts().0), width, false)
-        .unwrap()
-        .peekable();
+pub fn path<V: PositionedVertex>(
+    buf: &mut TriangleBuffer<V>,
+    points: impl Iterator<Item = V> + Clone,
+    width: f32,
+) {
+    let piter =
+        ThickOutlinePointsIterator::new(points.clone().map(|v| v.into_parts().0), width, true)
+            .unwrap()
+            .peekable();
+    let niter =
+        ThickOutlinePointsIterator::new(points.clone().map(|v| v.into_parts().0), width, false)
+            .unwrap()
+            .peekable();
 
     let mut prev_verts = None::<(V, V)>;
 
     for ((p, n), v) in piter.zip(niter).zip(points) {
-
         let v = v.into_parts().1;
         let p = V::new(p, v);
         let n = V::new(n, v);
@@ -219,4 +229,63 @@ pub fn path<V: PositionedVertex>(buf: &mut TriangleBuffer<V>, points: impl Itera
 
         prev_verts = Some((p, n));
     }
+}
+
+pub fn generate_circle_points(
+    count: usize,
+    angle_range: Option<RangeInclusive<f32>>,
+) -> impl Iterator<Item = Vec2f> {
+    let (start, end, include_end) = match angle_range {
+        Some(range) => (*range.start(), *range.end(), true),
+        None => (0.0, TAU, false),
+    };
+
+    let points_excluding_end = if include_end {
+        count.saturating_sub(1)
+    } else {
+        count
+    };
+
+    let step_size = (end - start) / points_excluding_end as f32;
+
+    (0..count).map(move |i| {
+        let angle = if i > 0 {
+            if i == points_excluding_end {
+                end
+            } else {
+                step_size * i as f32 + start
+            }
+        } else {
+            start
+        };
+
+        Vec2f::new(angle.cos(), angle.sin())
+    })
+}
+
+pub fn donut_segment<V: PositionedVertex>(
+    buf: &mut TriangleBuffer<V>,
+    center: Vec2f,
+    radius1: f32,
+    radius2: f32,
+    angle_range: RangeInclusive<f32>,
+    extra_data: V::ExtraData,
+) {
+    let max_rad = radius1.max(radius2);
+    let count = if max_rad <= 2.0 {
+        8
+    } else if max_rad <= 5.0 {
+        16
+    } else if max_rad < 18.0 {
+        32
+    } else if max_rad < 50.0 {
+        64
+    } else {
+        128
+    };
+
+    let circle = generate_circle_points(count, Some(angle_range));
+    let donut_points = circle.flat_map(|c| [c * radius1 + center, c * radius2 + center]);
+    let verts = donut_points.map(|p| V::new(p, extra_data));
+    buf.add_triangle_strip(verts);
 }

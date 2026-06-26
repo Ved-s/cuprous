@@ -1,24 +1,23 @@
 use std::{
-    collections::{BTreeSet, HashMap},
-    sync::{Arc, Weak},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    sync::{
+        Arc, Weak,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
+use eframe::egui::Color32;
 use parking_lot::RwLock;
 use smoldata::raw::RawValue;
 
 use crate::{
-    Direction4, Direction4HalfArray,
-    components::{
-        Component, ComponentBlueprint, ComponentImplData, ComponentInfo,
-        ComponentPin, ComponentTransform, TransformSupport, unloaded::UnloadedComponent,
-    },
-    containers::FixedVec,
-    io::savestate,
-    simulation::{SimulationCtx, SimulationStateData},
-    state::sim::UpdateTaskPool,
-    str::ArcStaticStr,
-    vector::{Vec2isize, Vec2usize},
+    Direction4, Direction4HalfArray, Style, components::{
+        Component, ComponentBlueprint, ComponentImplData, ComponentInfo, ComponentPin,
+        ComponentTransform, PinType, TransformSupport, unloaded::UnloadedComponent,
+    }, containers::FixedVec, io::savestate, simulation::{SimulationCtx, SimulationStateData}, state::{sim::UpdateTaskPool, wires::BoardWiresState}, str::ArcStaticStr, vector::{Vec2isize, Vec2usize}
 };
+
+pub type MultiwireConnectionsMap = BTreeMap<usize, HashSet<(usize, usize)>>;
 
 pub struct Board {
     uid: u128,
@@ -28,6 +27,9 @@ pub struct Board {
 
     simulation: Weak<SimulationCtx>,
     states: RwLock<Vec<Weak<SimulationStateData>>>,
+
+    // map(wire_id -> set<(component_id, component_pin_id)>)
+    multiwire_connections: Arc<RwLock<MultiwireConnectionsMap>>,
 }
 
 impl Board {
@@ -60,6 +62,10 @@ impl Board {
 
     pub fn states(&self) -> &RwLock<Vec<Weak<SimulationStateData>>> {
         &self.states
+    }
+
+    pub fn multiwire_connections(&self) -> &Arc<RwLock<MultiwireConnectionsMap>> {
+        &self.multiwire_connections
     }
 
     pub fn name(&self) -> &RwLock<String> {
@@ -103,6 +109,7 @@ impl Board {
             simulation: Arc::downgrade(sim),
 
             states: RwLock::new(Vec::with_capacity(data.states.len())),
+            multiwire_connections: Default::default(),
         })
     }
 
@@ -121,6 +128,7 @@ impl Board {
 
             let wire = Wire {
                 id: i,
+                is_multiwire: AtomicBool::new(false),
                 points: Arc::new(RwLock::new(
                     wire_data
                         .points
@@ -273,6 +281,16 @@ impl Board {
                     continue;
                 };
                 *pin.wire.write() = Some(wire.clone());
+
+                if matches!(pin.ty, PinType::Multiwire) {
+                    wire.is_multiwire.store(true, Ordering::Relaxed);
+                    self.multiwire_connections
+                        .write()
+                        .entry(wire.id)
+                        .or_default()
+                        .insert((pin_id.component, pin.id));
+                }
+
                 connected_pins.push(pin);
             }
         }
@@ -298,6 +316,7 @@ impl Board {
             components: RwLock::new(vec![].into()),
             simulation: Arc::downgrade(simulation),
             states: RwLock::new(vec![]),
+            multiwire_connections: Default::default(),
         }
     }
 
@@ -306,6 +325,7 @@ impl Board {
         let id = wires.first_free_pos();
         let wire = Wire {
             id,
+            is_multiwire: AtomicBool::new(false),
             points: Default::default(),
             connected_pins: Default::default(),
         };
@@ -323,6 +343,8 @@ impl Board {
         if ewire.as_ref().is_some_and(|w| Arc::ptr_eq(w, wire)) {
             wires.remove(wire.id);
         }
+
+        self.multiwire_connections.write().remove(&wire.id);
     }
 
     pub fn create_component(
@@ -415,6 +437,12 @@ impl Board {
         {
             components.remove(component.id);
         }
+
+        for state in self.states.read().iter() {
+            if let Some(state) = state.upgrade() {
+                state.remove_multiwire_router(component.id);
+            }
+        }
     }
 }
 
@@ -437,6 +465,8 @@ impl<'a> ComponentCreationOverrides<'a> {
 
 pub struct Wire {
     pub id: usize,
+
+    pub is_multiwire: AtomicBool,
 
     pub points: Arc<RwLock<HashMap<Vec2isize, WirePoint>>>,
     pub connected_pins: RwLock<Vec<Arc<ComponentPin>>>,
@@ -478,6 +508,10 @@ impl Wire {
                 })
                 .collect(),
         }
+    }
+
+    pub fn color(&self, state: &BoardWiresState, style: &Style) -> Color32 {
+        style.wire_colors.get(&state.get_wire(self.id))
     }
 }
 

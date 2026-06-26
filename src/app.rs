@@ -6,7 +6,7 @@ use std::{
     sync::{Arc, Weak},
 };
 
-use eframe::{CreationContext, Storage, egui};
+use eframe::{CreationContext, Storage, egui::{self, Key}};
 use egui_dock::{DockArea, DockState, NodeIndex};
 use eyre::eyre;
 use parking_lot::RwLock;
@@ -102,6 +102,7 @@ impl App {
             crate::components::error_filter::ErrorFilter.into(),
             crate::components::clock::Clock::default().into(),
             crate::components::transistor::Transistor::default().into(),
+            crate::components::relay::Relay::default().into(),
 
             #[cfg(feature = "wip_circuits")]
             crate::components::world_io::WorldIO::default().into(),
@@ -476,6 +477,24 @@ impl eframe::App for DockedApp {
             }
 
             let tab = Tab::new(TabType::ComponentList, &mut self.app);
+
+            let surface = self.dock.main_surface_mut();
+
+            surface.split_left(NodeIndex::root(), 0.2, vec![tab]);
+        }
+
+        'b: {
+            if !ctx.input(|input| input.key_pressed(Key::F12) && input.modifiers.shift) {
+                break 'b;
+            }
+
+            for tab in self.dock.iter_all_tabs() {
+                if matches!(tab.1.ty(), SafeTabType::Loaded(TabType::DebugInfo)) {
+                    break 'b;
+                }
+            }
+
+            let tab = Tab::new(TabType::DebugInfo, &mut self.app);
 
             let surface = self.dock.main_surface_mut();
 

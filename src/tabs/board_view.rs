@@ -10,8 +10,8 @@ use std::{
 use eframe::{
     egui::{
         Align, Color32, FontId, FontSelection, Key, PointerButton, Rect, Response, RichText, Sense,
-        Stroke, StrokeKind, TextStyle, TextWrapMode, Ui, UiBuilder, WidgetText, pos2, remap_clamp,
-        vec2,
+        Stroke, StrokeKind, TextFormat, TextStyle, TextWrapMode, Ui, UiBuilder, WidgetText, pos2,
+        remap_clamp, text::LayoutJob, vec2,
     },
     epaint::{CornerRadiusF32, PathStroke, TextShape},
 };
@@ -25,7 +25,8 @@ use crate::{
     board::{Board, ComponentCreationOverrides},
     components::{
         ComponentBlueprint, ComponentRenderPurpose, ComponentRenderingContext,
-        ComponentSelectionRenderingContext, ComponentUpdateReason, TransformSupport, UntypedComponentCtx,
+        ComponentSelectionRenderingContext, ComponentUpdateReason, PinType, TransformSupport,
+        UntypedComponentCtx,
     },
     drawing::{self, rotated_rect},
     editor::{BoardEditor, BoardSelection, InWorldError, QuarterPos, SelectedBoardItem},
@@ -787,20 +788,20 @@ impl BoardView {
 
                 let component = &quarter.component;
 
-                if let Some(pin) = quarter.pin.as_ref().filter(|_| draw_pins) {
-                    let center = pos.convert(|v| v as f32 + 0.5);
+                if let Some(pin) = quarter.pin.as_ref().filter(|_| draw_pins)
+                    && pin.wire.read().is_none() {
+                        let center = pos.convert(|v| v as f32 + 0.5);
+                        let dir = component.pins.read().get(pin.id).and_then(|p| p.desc.dir);
 
-                    let dir = component.pins.read().get(pin.id).and_then(|p| p.desc.dir);
-
-                    drawing::pin(
-                        ctx.screen.world_to_screen(center),
-                        (WIRE_WIDTH / 2.0) * ctx.screen.scale,
-                        &ctx.style.pins,
-                        dir,
-                        state.pin_color(pin, &ctx.style),
-                        pin_buffer.deref_mut(),
-                    );
-                }
+                        drawing::pin(
+                            ctx.screen.world_to_screen(center),
+                            (WIRE_WIDTH / 2.0) * ctx.screen.scale,
+                            &ctx.style.pins,
+                            dir,
+                            state.pin_color(pin, &ctx.style),
+                            pin_buffer.deref_mut(),
+                        );
+                    }
 
                 if self.components_drawn.contains(&component.id) {
                     continue;
@@ -823,7 +824,9 @@ impl BoardView {
 
                 let imp = component.imp.read();
 
-                let rect = ctx.screen.world_to_screen_tile_rect(component_pos, info.size);
+                let rect = ctx
+                    .screen
+                    .world_to_screen_tile_rect(component_pos, info.size);
 
                 let render_ctx = ComponentRenderingContext::new(
                     ctx,
@@ -855,7 +858,11 @@ impl BoardView {
                 if selected && !custom_selection {
                     let mut renderer = self.selection_renderer.lock();
 
-                    for (pos, node) in editor.tiles.components().iter_area(component_pos, info.size) {
+                    for (pos, node) in editor
+                        .tiles
+                        .components()
+                        .iter_area(component_pos, info.size)
+                    {
                         for qpos in QuarterPos::ALL {
                             if node
                                 .quarters
@@ -901,6 +908,9 @@ impl BoardView {
     }
 
     fn draw_wire_debug(&self, ctx: &PaintContext) {
+        let mut all_multiwire_connections = HashSet::<(usize, usize)>::new();
+        let mut remaining_multiwire_connections = HashSet::<(usize, usize)>::new();
+
         let editor = self.editor.read();
         for (pos, lookaround, node) in editor
             .tiles
@@ -976,24 +986,17 @@ impl BoardView {
             }
 
             if node.wire.is_some() || backend_point.is_some() != node.wire.is_some() {
-                let text = match &node.wire {
-                    Some(w) => format!("{}", w.id),
+                let id = match &node.wire {
+                    Some(w) => {
+                        format!("{}", w.id)
+                    }
                     None => "?".into(),
                 };
-                let text = WidgetText::from(text);
-                let galley = text.into_galley(
-                    ctx.ui,
-                    Some(TextWrapMode::Truncate),
-                    f32::INFINITY,
-                    TextStyle::Monospace,
-                );
 
-                let pos = screen_pos + (ctx.screen.scale / 2.0) - (galley.size() / 2.0);
-
-                let mut rgb = [60u8; 3];
+                let mut id_rgb = [60u8; 3];
 
                 if let Some(wire) = &node.wire {
-                    rgb[0] = 255;
+                    id_rgb[0] = 255;
                     let correct_wire = editor
                         .board()
                         .wires()
@@ -1001,14 +1004,76 @@ impl BoardView {
                         .get(wire.id)
                         .is_some_and(|board_wire| Arc::ptr_eq(wire, board_wire));
                     if correct_wire {
-                        rgb[1] = 255;
+                        id_rgb[1] = 255;
                     }
                 }
                 if backend_point.is_some() {
-                    rgb[2] = 255;
+                    id_rgb[2] = 255;
                 }
 
-                let color = Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
+                let id_color = Color32::from_rgb(id_rgb[0], id_rgb[1], id_rgb[2]);
+                let font = TextStyle::Monospace.resolve(ctx.ui.style());
+
+                let mut text = LayoutJob::simple(id, font.clone(), id_color, f32::INFINITY);
+
+                if let Some(wire) = &node.wire {
+                    let wire_multiwire = wire.is_multiwire.load(Ordering::Relaxed);
+                    let board_has_multiwire = self
+                        .board
+                        .multiwire_connections()
+                        .read()
+                        .contains_key(&wire.id);
+                    if wire_multiwire || board_has_multiwire {
+                        let color = if wire_multiwire && !board_has_multiwire {
+                            Color32::RED
+                        } else if !wire_multiwire && board_has_multiwire {
+                            Color32::ORANGE
+                        } else {
+                            'verify: {
+                                let board_multiwire = self.board.multiwire_connections().read();
+                                let Some(board_connections) = board_multiwire.get(&wire.id) else {
+                                    break 'verify Color32::BLACK;
+                                };
+
+                                all_multiwire_connections.clear();
+                                all_multiwire_connections.extend(board_connections);
+                                remaining_multiwire_connections.clear();
+                                remaining_multiwire_connections.extend(board_connections);
+                                drop(board_multiwire);
+
+                                let wire_pins = wire.connected_pins.read();
+                                for pin in wire_pins.iter() {
+                                    if !matches!(pin.ty, PinType::Multiwire) {
+                                        continue;
+                                    }
+
+                                    if !all_multiwire_connections
+                                        .contains(&(pin.component.id, pin.id))
+                                    {
+                                        // magenta = global set missing connected pins
+                                        break 'verify Color32::MAGENTA;
+                                    }
+
+                                    remaining_multiwire_connections
+                                        .remove(&(pin.component.id, pin.id));
+                                }
+
+                                if !remaining_multiwire_connections.is_empty() {
+                                    // cyan = global set has invalid connections
+                                    break 'verify Color32::CYAN;
+                                }
+
+                                Color32::WHITE
+                            }
+                        };
+
+                        text.append("!", 0.0, TextFormat::simple(font, color));
+                    }
+                }
+
+                let galley = ctx.fonts_mut(|f| f.layout_job(text));
+
+                let pos = screen_pos + (ctx.screen.scale / 2.0) - (galley.size() / 2.0);
 
                 ctx.painter.rect_filled(
                     Rect::from_min_size(pos.into(), galley.size()).expand(1.0),
@@ -1020,7 +1085,7 @@ impl BoardView {
                     pos: pos.into(),
                     galley,
                     underline: Stroke::NONE,
-                    fallback_color: color,
+                    fallback_color: id_color,
                     override_text_color: None,
                     opacity_factor: 0.9,
                     angle: 0.0,
@@ -1109,16 +1174,10 @@ impl BoardView {
                 if let Some(pin) = &quarter.pin {
                     let wire = pin.wire.read().clone();
 
-                    let text = match &wire {
-                        Some(w) => WidgetText::from(format!("{}", w.id)),
-                        None => WidgetText::from("X"),
+                    let wire_id_text = match &wire {
+                        Some(w) => format!("{}", w.id),
+                        None => "X".into(),
                     };
-                    let galley = text.into_galley(
-                        ctx.ui,
-                        Some(TextWrapMode::Truncate),
-                        f32::INFINITY,
-                        TextStyle::Monospace,
-                    );
 
                     let wire_point = editor.tiles.wires().get(pos).and_then(|n| n.wire.clone());
 
@@ -1140,21 +1199,54 @@ impl BoardView {
                         .get(pin.id)
                         .is_some_and(|bp| Arc::ptr_eq(&bp.pin, pin));
 
-                    let mut rgb = [60u8; 3];
+                    let mut wire_id_rgb = [60u8; 3];
 
                     if properly_connected_wire_point {
-                        rgb[0] = 255;
+                        wire_id_rgb[0] = 255;
                     }
 
                     if properly_connected_backend {
-                        rgb[1] = 255;
+                        wire_id_rgb[1] = 255;
                     }
 
                     if correct_quarter_pin {
-                        rgb[2] = 255;
+                        wire_id_rgb[2] = 255;
                     }
 
-                    let color = Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
+                    let wire_id_color =
+                        Color32::from_rgb(wire_id_rgb[0], wire_id_rgb[1], wire_id_rgb[2]);
+
+                    let font = TextStyle::Monospace.resolve(ctx.ui.style());
+
+                    let mut text =
+                        LayoutJob::simple(wire_id_text, font.clone(), wire_id_color, f32::INFINITY);
+
+                    if matches!(pin.ty, PinType::Multiwire) {
+                        let color = if let Some(wire) = pin.wire.read().clone() {
+                            if !wire.is_multiwire.load(Ordering::Relaxed) {
+                                // red = connected wire is not multiwire
+                                Color32::RED
+                            } else if !self
+                                .board
+                                .multiwire_connections()
+                                .read()
+                                .get(&wire.id)
+                                .is_some_and(|cs| cs.contains(&(component.id, pin.id)))
+                            {
+                                // yellow = multiwire connection entry missing for this component
+                                Color32::YELLOW
+                            } else {
+                                Color32::WHITE
+                            }
+                        } else {
+                            // gray = not connected
+                            Color32::GRAY
+                        };
+
+                        text.append("!", 0.0, TextFormat::simple(font, color));
+                    }
+
+                    let galley = ctx.ui.fonts_mut(|f| f.layout_job(text));
 
                     let off = (qpos.into_quarter_position_f32() - 0.5) * 2.0 * galley.size();
 
@@ -1170,7 +1262,7 @@ impl BoardView {
                         pos: pos.into(),
                         galley,
                         underline: Stroke::NONE,
-                        fallback_color: color,
+                        fallback_color: wire_id_color,
                         override_text_color: None,
                         opacity_factor: 0.9,
                         angle: 0.0,
@@ -1959,7 +2051,8 @@ impl BoardView {
                                 };
                                 let mut state = state.state().write();
                                 if let Some(state_data) = &c.state {
-                                    match imp.imp.load_state(&component, &imp.instance, state_data) {
+                                    match imp.imp.load_state(&component, &imp.instance, state_data)
+                                    {
                                         Err(e) => {
                                             let rect = Rect::from_min_size(
                                                 world_place_tile.convert(|v| v as f32).into(),
@@ -1975,7 +2068,8 @@ impl BoardView {
                                                 .push(InWorldError::new(
                                                     rect,
                                                     PLACEMENT_ERROR_DURATION,
-                                                    e.wrap_err("loading component state").to_string(),
+                                                    e.wrap_err("loading component state")
+                                                        .to_string(),
                                                 ));
                                         }
                                         Ok(s) => {

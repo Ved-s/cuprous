@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet, hash_map::Entry},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, hash_map::Entry},
     fmt::Write as _,
     io::ErrorKind,
     path::PathBuf,
@@ -10,16 +10,19 @@ use std::{
     time::Duration,
 };
 
-use parking_lot::{Mutex, RwLock};
+use parking_lot::{ArcRwLockReadGuard, Mutex, RawRwLock, RwLock, RwLockWriteGuard};
 
 use crate::{
     app::ErrorStrings,
-    board::Board,
-    components::ComponentBlueprint,
+    board::{Board, MultiwireConnectionsMap},
+    components::{Component, ComponentBlueprint},
     io::savestate,
+    multiwire::{MultiwireRouter, MultiwireTargetState},
+    pool::get_pooled,
     state::{
-        BoardState,
-        sim::{ExternalTaskPool, UpdateTask},
+        BoardState, StateRunResult,
+        sim::{ExternalTaskPool, UpdateTask, UpdateTaskPool},
+        wires::WireStateHandler,
     },
     storage::{Filesystem, ItemType},
     str::ArcStaticStr,
@@ -34,6 +37,8 @@ pub struct SimulationStateData {
     board: Weak<Board>,
     state: Arc<RwLock<BoardState>>,
     update_pool_queue: Arc<Mutex<ExternalTaskPool>>,
+
+    cached_multiwire_routers: RwLock<BTreeMap<usize, Arc<dyn MultiwireRouter>>>,
 }
 
 impl SimulationStateData {
@@ -49,6 +54,7 @@ impl SimulationStateData {
             board,
             state,
             update_pool_queue: tasks,
+            cached_multiwire_routers: Default::default(),
         }
     }
 
@@ -64,6 +70,96 @@ impl SimulationStateData {
         self.board
             .upgrade()
             .expect("state exists but its board is dropped!")
+    }
+
+    pub fn get_multiwire_router(
+        &self,
+        component: usize,
+        locked_state: Option<&mut BoardState>,
+    ) -> Arc<dyn MultiwireRouter> {
+        if let Some(cached) = self
+            .cached_multiwire_routers
+            .read()
+            .get(&component)
+            .cloned()
+        {
+            return cached;
+        }
+
+        let component = self
+            .board()
+            .components()
+            .read()
+            .get(component)
+            .expect("requested a router from a nonexistent component")
+            .clone();
+
+        fn try_read_router(
+            state: &BoardState,
+            component: &Arc<Component>,
+        ) -> Option<Box<dyn MultiwireRouter>> {
+            match state.components.inner.get(component.id) {
+                Some(state) => match &state.internal {
+                    Some(int) => {
+                        let imp = component.imp.read();
+                        Some(
+                            imp.imp
+                                .create_multiwire_router(component, &imp.instance, int),
+                        )
+                    }
+                    None => None,
+                },
+                None => None,
+            }
+        }
+
+        fn create_router(
+            state: &mut BoardState,
+            component: &Arc<Component>,
+        ) -> Box<dyn MultiwireRouter> {
+            let state = state
+                .components
+                .inner
+                .get_or_create_mut(component.id, Default::default);
+
+            let imp = component.imp.read();
+
+            let internal = state
+                .internal
+                .get_or_insert_with(|| imp.imp.create_default_state());
+
+            imp.imp
+                .create_multiwire_router(component, &imp.instance, internal)
+        }
+
+        let router = match locked_state {
+            Some(s) => create_router(s, &component),
+            None => {
+                let state = self.state.read();
+                let router = try_read_router(&state, &component);
+                drop(state);
+                match router {
+                    Some(r) => r,
+                    None => {
+                        let mut state = self.state.write();
+                        create_router(&mut state, &component)
+                    }
+                }
+            }
+        };
+
+        let router: Arc<dyn MultiwireRouter> = router.into();
+
+        self.cached_multiwire_routers
+            .write()
+            .insert(component.id, router.clone());
+
+        router
+    }
+
+    /// Must be called when component is removed or router invalidation requested after property change
+    pub fn remove_multiwire_router(&self, component: usize) {
+        self.cached_multiwire_routers.write().remove(&component);
     }
 
     pub fn add_tasks(&self, tasks: &mut dyn Iterator<Item = UpdateTask>) {
@@ -157,11 +253,21 @@ impl SimulationCtx {
         loop {
             let mut all_states_done = true;
             for state in self.states().read().values() {
-                let mut state_sim = state.state.write();
-
                 let mut task_limit = 100;
 
-                state_sim.run(&mut task_limit);
+                while task_limit > 0 {
+                    let mut state_sim = state.state.write();
+                    match state_sim.run(&mut task_limit) {
+                        StateRunResult::Done | StateRunResult::DoneUntil(_) => break,
+                        StateRunResult::RunMultiwireUpdate {
+                            wire,
+                            force_pin_updates,
+                        } => {
+                            drop(state_sim);
+                            self.run_multiwire_update(state.uid, wire, force_pin_updates);
+                        }
+                    }
+                }
 
                 if task_limit == 0 {
                     all_states_done = false;
@@ -464,7 +570,11 @@ impl SimulationCtx {
 
         // load everything that doesn't reference other loaded stuff
         for board_data in &mut board_data {
-            boards[&board_data.uid].load_stage1_shallow(board_data, blueprints, &mut any_unloaded_comp);
+            boards[&board_data.uid].load_stage1_shallow(
+                board_data,
+                blueprints,
+                &mut any_unloaded_comp,
+            );
         }
         for state_data in &mut state_data {
             states[&state_data.uid]
@@ -516,6 +626,118 @@ impl SimulationCtx {
         this.ensure_one_board_and_state();
 
         this
+    }
+
+    pub fn run_multiwire_update(
+        &self,
+        start_state: u128,
+        start_wire: usize,
+        force_pin_updates: bool,
+    ) {
+        struct StateData<'a> {
+            data: &'a SimulationStateData,
+            state_lock: RwLockWriteGuard<'a, BoardState>,
+            connections_lock: ArcRwLockReadGuard<RawRwLock, MultiwireConnectionsMap>,
+            wires: BTreeSet<usize>,
+        }
+
+        let mut routes = vec![];
+
+        let states = self.states.read();
+        let mut all_states = HashMap::<u128, StateData>::new();
+
+        let mut explorer_stack = vec![];
+        explorer_stack.push((start_state, start_wire));
+
+        while let Some((state, wire)) = explorer_stack.pop() {
+            let data = match all_states.entry(state) {
+                Entry::Occupied(e) => e.into_mut(),
+                Entry::Vacant(e) => {
+                    let Some(state) = states.get(&state) else {
+                        continue;
+                    };
+                    e.insert(StateData {
+                        data: state,
+                        state_lock: state.state.write(),
+                        connections_lock: state.board().multiwire_connections().read_arc(),
+                        wires: Default::default(),
+                    })
+                }
+            };
+
+            let Some(wire_connections) = data.connections_lock.get(&wire) else {
+                continue;
+            };
+
+            if !data.wires.insert(wire) {
+                continue;
+            }
+
+            for (component, pin) in wire_connections {
+                let router = data
+                    .data
+                    .get_multiwire_router(*component, Some(&mut data.state_lock));
+
+                routes.clear();
+                router.route(*pin, &mut routes);
+
+                for route in routes.drain(..) {
+                    let target_state = match route.target_state {
+                        MultiwireTargetState::CurrentState => state,
+                        MultiwireTargetState::Uid(s) => s,
+                    };
+
+                    explorer_stack.push((target_state, route.wire_id));
+                }
+            }
+        }
+
+        let mut wire_state = WireStateHandler::default();
+
+        for state in all_states.values() {
+            let board = state.data.board();
+            let wires = board.wires().read();
+
+            for wire in &state.wires {
+                let Some(wire) = wires.get(*wire) else {
+                    continue;
+                };
+
+                wire_state.read_pins(&state.state_lock, wire.connected_pins.read().as_slice())
+            }
+        }
+
+        // todo: is it a good idea to drop locks as writes finish? or to drop them all at once
+
+        for state in all_states.values_mut() {
+            let board = state.data.board();
+            let wires = board.wires().read();
+
+            let mut tasks = get_pooled::<UpdateTaskPool>();
+
+            for wire in &state.wires {
+                let Some(wire) = wires.get(*wire) else {
+                    continue;
+                };
+
+                let changed = state
+                    .state_lock
+                    .wires
+                    .set_wire(wire.id, wire_state.state.clone());
+                if !changed && !force_pin_updates {
+                    continue;
+                }
+
+                wire_state.write_pins(
+                    &mut state.state_lock,
+                    wire.connected_pins.read().as_slice(),
+                    &mut tasks,
+                );
+            }
+
+            state.state_lock.flush_external_tasks();
+            state.state_lock.add_tasks(&mut tasks.drain());
+        }
     }
 }
 
