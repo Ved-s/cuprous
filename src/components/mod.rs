@@ -500,12 +500,12 @@ impl ComponentTransform {
             None => pos,
             Some(ft) => {
                 let x = if ft.has_horizontal() && size.x > 1 {
-                    (size.x - 1) - pos.x
+                    size.x.saturating_sub(1).saturating_sub(pos.x)
                 } else {
                     pos.x
                 };
                 let y = if ft.has_vertical() && size.y > 1 {
-                    (size.y - 1) - pos.y
+                    size.y.saturating_sub(1).saturating_sub(pos.y)
                 } else {
                     pos.y
                 };
@@ -552,12 +552,12 @@ impl ComponentTransform {
             None => rotated_pos,
             Some(ft) => {
                 let x = if ft.has_horizontal() && size.x > 1 {
-                    (size.x - 1) - rotated_pos.x
+                    size.x.saturating_sub(1).saturating_sub(rotated_pos.x)
                 } else {
                     rotated_pos.x
                 };
                 let y = if ft.has_vertical() && size.y > 1 {
-                    (size.y - 1) - rotated_pos.y
+                    size.y.saturating_sub(1).saturating_sub(rotated_pos.y)
                 } else {
                     rotated_pos.y
                 };
