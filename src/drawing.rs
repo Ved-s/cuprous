@@ -111,12 +111,6 @@ impl<I: Iterator<Item = Vec2f>> Iterator for ThickOutlinePointsIterator<I> {
 
                 let intersect = prev_line.intersect(next_line);
 
-                // let intersect = if intersect.x.is_nan() || intersect.y.is_nan() {
-                //     prev_line_pos
-                // } else {
-                //     intersect
-                // };
-
                 self.last_outline_point = intersect;
 
                 self.prev = self.cur;
@@ -206,14 +200,25 @@ pub fn path<V: PositionedVertex>(
     points: impl Iterator<Item = V> + Clone,
     width: f32,
 ) {
-    let piter =
-        ThickOutlinePointsIterator::new(points.clone().map(|v| v.into_parts().0), width, true)
-            .unwrap()
-            .peekable();
-    let niter =
-        ThickOutlinePointsIterator::new(points.clone().map(|v| v.into_parts().0), width, false)
-            .unwrap()
-            .peekable();
+    #[rustfmt::skip]
+    let piter = ThickOutlinePointsIterator::new(
+        points.clone().map(|v| v.into_parts().0), width, true
+    );
+
+    let Some(piter) = piter else {
+        return;
+    };
+
+    #[rustfmt::skip]
+    let niter = ThickOutlinePointsIterator::new(
+        points.clone().map(|v| v.into_parts().0), width, false
+    );
+    let Some(niter) = niter else {
+        return;
+    };
+
+    let piter = piter.peekable();
+    let niter = niter.peekable();
 
     let mut prev_verts = None::<(V, V)>;
 

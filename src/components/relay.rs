@@ -1,5 +1,6 @@
 use std::{
     any::{Any, TypeId},
+    f32::consts::FRAC_PI_2,
     io,
     num::NonZeroUsize,
     ops::Deref,
@@ -9,22 +10,23 @@ use std::{
     },
 };
 
-use eframe::egui::{Color32, ComboBox, DragValue, Stroke, StrokeKind, Ui, Widget};
+use eframe::egui::{Color32, ComboBox, DragValue, Ui, Widget};
 use parking_lot::Mutex;
 use smoldata::{SmolRead, SmolReadWrite, SmolWrite, raw::RawValue};
 
 use crate::{
-    Direction4, Direction8,
+    Direction4, Direction8, WIRE_WIDTH,
     components::{
         ComponentImpl, ComponentPin, FlipType, PinType, PropertyChangedParams, RealizedPin,
         props::{PropertyInfo, PropertyValue},
     },
+    drawing,
     multiwire::{MultiwireRoute, MultiwireRouter, MultiwireTargetState},
     pool::get_pooled,
     state::wires::WireState,
     str::ArcStaticStr,
-    vector::Vec2usize,
-    vertex_renderer::ColoredTriangleBuffer,
+    vector::{Vec2f, Vec2usize},
+    vertex_renderer::{ColoredTriangleBuffer, ColoredVertex, ColoredVertexRenderer},
 };
 
 use super::{
@@ -54,21 +56,18 @@ struct RelayTogglePins {
     pin_nc: Arc<ComponentPin>,
 }
 
-struct RelaySwitchOnPins {
+struct RelaySwitchPins {
     pin_com: Arc<ComponentPin>,
-    pin_no: Arc<ComponentPin>,
-}
-
-struct RelaySwitchOffPins {
-    pin_com: Arc<ComponentPin>,
-    pin_nc: Arc<ComponentPin>,
+    pin_contact: Arc<ComponentPin>,
 }
 
 #[derive(Clone)]
 enum RelayPins {
     Toggle(Arc<[RelayTogglePins]>),
-    SwitchOn(Arc<[RelaySwitchOnPins]>),
-    SwitchOff(Arc<[RelaySwitchOffPins]>),
+    Switch {
+        switches: Arc<[RelaySwitchPins]>,
+        normally_closed: bool,
+    },
 }
 
 pub struct RelayMultiwireRouter {
@@ -146,6 +145,178 @@ impl RelayState {
     fn from_serialized(ser: RelayStateSerialized) -> Self {
         Self {
             active: Arc::new(AtomicBool::new(ser.active)),
+        }
+    }
+}
+
+impl Relay {
+    fn create_pins(&self, pins: &[RealizedPin]) -> RelayPins {
+        let switches = self.config.switch_count.0.get();
+        match self.config.ty {
+            RelayType::Toggle | RelayType::ToggleThin => RelayPins::Toggle(
+                (0..switches)
+                    .map(|i| RelayTogglePins {
+                        pin_com: pins[1 + i * 3].pin.clone(),
+                        pin_no: pins[1 + i * 3 + 1].pin.clone(),
+                        pin_nc: pins[1 + i * 3 + 2].pin.clone(),
+                    })
+                    .collect(),
+            ),
+            RelayType::SwitchOn => RelayPins::Switch {
+                switches: (0..switches)
+                    .map(|i| RelaySwitchPins {
+                        pin_com: pins[1 + i * 2].pin.clone(),
+                        pin_contact: pins[1 + i * 2 + 1].pin.clone(),
+                    })
+                    .collect(),
+                normally_closed: false,
+            },
+            RelayType::SwitchOff => RelayPins::Switch {
+                switches: (0..switches)
+                    .map(|i| RelaySwitchPins {
+                        pin_com: pins[1 + i * 2].pin.clone(),
+                        pin_contact: pins[1 + i * 2 + 1].pin.clone(),
+                    })
+                    .collect(),
+                normally_closed: true,
+            },
+        }
+    }
+
+    fn render_toggle_switch(
+        buffer: &mut ColoredTriangleBuffer,
+        index: usize,
+        active: bool,
+        connected_color: Color32,
+        disconnected_color: Color32,
+        render: &ComponentRenderingContext,
+    ) {
+        let base_y = (1 + index * 3) as f32;
+
+        let contact_colors = [connected_color, disconnected_color];
+
+        let contact_lines: [&[(f32, f32)]; 2] = [
+            &[
+                (0.50, 1.50),
+                (0.80, 1.50),
+                (2.20, 1.90),
+                (2.40, 1.90),
+                (2.40, 2.50),
+                (2.50, 2.50),
+            ],
+            &[(2.20, 1.10), (2.40, 1.10), (2.40, 0.50), (2.50, 0.50)],
+        ];
+
+        for i in 0..2 {
+            let line = contact_lines[i];
+            let color = contact_colors[i];
+
+            drawing::path(
+                buffer,
+                line.iter().map(|&(x, y)| {
+                    let y = base_y + if active { 3.0 - y } else { y };
+                    ColoredVertex::new(
+                        render.transform_pos((x, y).into()),
+                        color.to_normalized_gamma_f32(),
+                    )
+                }),
+                WIRE_WIDTH * render.paint.screen.scale,
+            );
+        }
+    }
+
+    fn render_thin_toggle_switch(
+        buffer: &mut ColoredTriangleBuffer,
+        index: usize,
+        active: bool,
+        connected_color: Color32,
+        disconnected_color: Color32,
+        render: &ComponentRenderingContext,
+    ) {
+        let base_y = (1 + index * 2) as f32;
+
+        let contact_colors = [connected_color, disconnected_color];
+
+        let contact_lines: [&[(f32, f32)]; 2] = if active {
+            [
+                &[
+                    (0.50, 1.50),
+                    (0.80, 1.50),
+                    (2.20, 0.90),
+                    (2.40, 0.90),
+                    (2.40, 0.50),
+                    (2.50, 0.50),
+                ],
+                &[(2.20, 1.50), (2.50, 1.50)],
+            ]
+        } else {
+            [
+                &[(0.50, 1.50), (2.50, 1.50)],
+                &[(2.20, 0.90), (2.40, 0.90), (2.40, 0.50), (2.50, 0.50)],
+            ]
+        };
+
+        for i in 0..2 {
+            let line = contact_lines[i];
+            let color = contact_colors[i];
+
+            drawing::path(
+                buffer,
+                line.iter().map(|&(x, y)| {
+                    let y = base_y + y;
+                    ColoredVertex::new(
+                        render.transform_pos((x, y).into()),
+                        color.to_normalized_gamma_f32(),
+                    )
+                }),
+                WIRE_WIDTH * render.paint.screen.scale,
+            );
+        }
+    }
+
+    fn render_switchonoff_switch(
+        buffer: &mut ColoredTriangleBuffer,
+        normally_closed: bool,
+        index: usize,
+        active: bool,
+        common_color: Color32,
+        disconnected_color: Color32,
+        render: &ComponentRenderingContext,
+    ) {
+        let base_y = (2 + index) as f32;
+
+        let contact_colors = [common_color, disconnected_color];
+
+        let contact_lines: [&[(f32, f32)]; 2] = match (normally_closed, active) {
+            (true, true) => [
+                &[(0.5, 0.5), (0.8, 0.5), (2.2, 0.1)],
+                &[(2.2, 0.5), (2.5, 0.5)]
+            ],
+            (true, false) | (false, true) => [
+                &[(0.5, 0.5), (2.5, 0.5)],
+                &[]
+            ],
+            (false, false) => [
+                &[(0.5, 0.5), (0.8, 0.5), (2.2, 0.9)],
+                &[(2.2, 0.5), (2.5, 0.5)]
+            ],
+        };
+
+         for i in 0..2 {
+            let line = contact_lines[i];
+            let color = contact_colors[i];
+
+            drawing::path(
+                buffer,
+                line.iter().map(|&(x, y)| {
+                    let y = base_y + y;
+                    ColoredVertex::new(
+                        render.transform_pos((x, y).into()),
+                        color.to_normalized_gamma_f32(),
+                    )
+                }),
+                WIRE_WIDTH * render.paint.screen.scale,
+            );
         }
     }
 }
@@ -323,93 +494,27 @@ impl ComponentImpl for Relay {
     }
 
     fn draw(&self, component: Option<ComponentCtx<Self>>, render: &ComponentRenderingContext) {
-        render.paint.rect(
-            render.screen_rect.expand(render.paint.screen.scale * -0.5),
-            render.paint.screen.scale * 0.25,
-            Color32::from_gray(64),
-            Stroke::new(0.05 * render.paint.screen.scale, Color32::from_gray(92)),
-            StrokeKind::Middle,
-        );
-
-        return;
-
         let mut buffer = get_pooled::<ColoredTriangleBuffer>();
 
-        /*
-        let active = component
-            .as_ref()
-            .and_then(|c| c.read_internal_state())
-            .map(|s| s.active.load(Ordering::Relaxed))
-            .unwrap_or(false);
-
-        let (contact_colors, coil_color) = match component {
-            None => {
-                let color = render.paint.style.wire_colors.r#false;
-                ([color, color], color)
-            }
-            Some(component) => {
-                let inst = component.instance;
-                let (open_pin, closed_pin) = if active {
-                    (&inst.pin_nc, &inst.pin_no)
-                } else {
-                    (&inst.pin_no, &inst.pin_nc)
-                };
-
-                let coil_color = inst
-                    .pin_coil
-                    .wire
-                    .read()
-                    .as_ref()
-                    .map(|w| w.color(&component.state.wires, &render.paint.style))
-                    .unwrap_or_else(|| render.paint.style.wire_colors.none);
-
-                let com_wire = match inst.pin_com.wire.read().clone() {
-                    Some(wire) => Some(wire),
-                    None => closed_pin.wire.read().clone(),
-                };
-
-                let com_color = com_wire
-                    .map(|w| w.color(&component.state.wires, &render.paint.style))
-                    .unwrap_or_else(|| render.paint.style.wire_colors.none);
-
-                let open_color = open_pin
-                    .wire
-                    .read()
-                    .as_ref()
-                    .map(|w| w.color(&component.state.wires, &render.paint.style))
-                    .unwrap_or_else(|| render.paint.style.wire_colors.none);
-
-                ([com_color, open_color], coil_color)
-            }
+        let coil_color = match &component {
+            None => render.paint.style.wire_colors.r#false,
+            Some(component) => component
+                .instance
+                .pin_coil
+                .wire
+                .read()
+                .as_ref()
+                .map(|w| w.color(&component.state.wires, &render.paint.style))
+                .unwrap_or_else(|| render.paint.style.wire_colors.none),
         };
 
-        let contact_lines: [&[(f32, f32)]; 2] = [
-            &[(0.50, 1.50), (1.10, 1.50), (2.50, 2.07), (2.50, 2.50)],
-            &[(2.50, 0.50), (2.50, 1.00)],
-        ];
+        let coil_direction_angle = render.transform.transform_dir(Direction8::Down, Some(TransformSupport::Automatic)).into_angle_xp_cw();
 
-        for i in 0..2 {
-            let line = contact_lines[i];
-            let color = contact_colors[i];
-
-            drawing::path(
-                &mut buffer,
-                line.iter().map(|&(x, y)| {
-                    let y = if active { 3.0 - y } else { y };
-                    ColoredVertex::new(
-                        render.transform_pos((x, y).into()),
-                        color.to_normalized_gamma_f32(),
-                    )
-                }),
-                WIRE_WIDTH * render.paint.screen.scale,
-            );
-        }
-
-        let coil_direction_angle = render.transform.dir.inverted().into_angle_xp_cw();
+        //let coil_direction_angle = render.transform.dir.rotated_clockwise().into_angle_xp_cw();
         let donut_angle_start = coil_direction_angle + FRAC_PI_2;
         let donut_angle_end = coil_direction_angle - FRAC_PI_2;
 
-        let donut_centers = [(3.10, 0.90), (3.10, 1.30), (3.10, 1.70), (3.10, 2.10)];
+        let donut_centers = [(0.90, 0.70), (1.30, 0.70), (1.70, 0.70), (2.10, 0.70)];
 
         // todo: this only points in 4 direction, use sliced pregenerated circle data instead
         for center in donut_centers {
@@ -424,11 +529,11 @@ impl ComponentImpl for Relay {
         }
 
         let coil_lines = [
-            ((3.10, 0.70), (3.20, 0.70)),
-            ((3.10, 1.10), (3.20, 1.10)),
-            ((3.10, 1.50), (3.50, 1.50)),
-            ((3.10, 1.90), (3.20, 1.90)),
-            ((3.10, 2.30), (3.20, 2.30)),
+            ((0.70, 0.60), (0.70, 0.70)),
+            ((1.10, 0.60), (1.10, 0.70)),
+            ((1.50, 0.50), (1.50, 0.70)),
+            ((1.90, 0.60), (1.90, 0.70)),
+            ((2.30, 0.60), (2.30, 0.70)),
         ];
 
         for (start, end) in coil_lines {
@@ -440,6 +545,135 @@ impl ComponentImpl for Relay {
             );
         }
 
+        let (travel_distance, rod_offset, switch_spacing) = match self.config.ty {
+            RelayType::Toggle => (0.4, 1.0, 3),
+            RelayType::SwitchOn => (0.2, 1.2, 1),
+            RelayType::SwitchOff => (0.2, 1.0, 1),
+            RelayType::ToggleThin => (0.3, 0.9, 2),
+        };
+
+        let active = match &component {
+            Some(component) => component
+                .read_internal_state()
+                .map(|s| s.active.load(Ordering::Relaxed))
+                .unwrap_or(false),
+            None => false,
+        };
+
+        let mechanism_offset = if active { 0.0 } else { travel_distance };
+
+        let puller_y = 1.1 + mechanism_offset + 0.1;
+
+        let rod_top_y = puller_y + 0.1;
+        let rod_bottom_y = rod_top_y
+            + rod_offset
+            + ((self.config.switch_count.0.get() - 1) * switch_spacing) as f32
+            + 0.3;
+
+        buffer.add_quad_line(
+            render.transform_pos((1.50, rod_top_y).into()),
+            render.transform_pos((1.50, rod_bottom_y).into()),
+            0.2 * render.paint.screen.scale,
+            Color32::from_gray(90).to_normalized_gamma_f32(),
+        );
+
+        buffer.add_quad_line(
+            render.transform_pos((0.80, puller_y).into()),
+            render.transform_pos((2.20, puller_y).into()),
+            0.2 * render.paint.screen.scale,
+            Color32::from_gray(53).to_normalized_gamma_f32(),
+        );
+
+        for i in 0..self.config.switch_count.0.get() {
+            let center_y = rod_top_y + rod_offset + (i * switch_spacing) as f32;
+            let center = Vec2f::new(1.5, center_y);
+
+            buffer.add_centered_rect(
+                render.transform_pos(center),
+                0.4 * render.paint.screen.scale,
+                Color32::from_gray(118).to_normalized_gamma_f32(),
+            );
+        }
+
+        match &component {
+            None => {
+                let switches = self.config.switch_count.0.get();
+                let color = render.paint.style.wire_colors.r#false;
+                for i in 0..switches {
+                    #[rustfmt::skip]
+                    match self.config.ty {
+                        RelayType::Toggle => Self::render_toggle_switch(
+                            &mut buffer, i, false, color, color, render,
+                        ),
+                        RelayType::SwitchOn => Self::render_switchonoff_switch(
+                            &mut buffer, false, i, false, color, color, render,
+                        ),
+                        RelayType::SwitchOff => Self::render_switchonoff_switch(
+                            &mut buffer, true, i, false, color, color, render,
+                        ),
+                        RelayType::ToggleThin => Self::render_thin_toggle_switch(
+                            &mut buffer, i, false, color, color, render,
+                        ),
+                    };
+                }
+            }
+            Some(component) => {
+                #[rustfmt::skip]
+                match &component.instance.pins {
+                    RelayPins::Toggle(switches) => {
+                        for (i,switch) in switches.iter().enumerate() {
+                            let common_color = switch
+                                .pin_com.wire.read().as_ref()
+                                .map(|w| w.color(&component.state.wires, &render.paint.style))
+                                .unwrap_or_else(|| render.paint.style.wire_colors.none);
+
+                            let disconnected_pin = match active {
+                                true => &switch.pin_nc,
+                                false => &switch.pin_no,
+                            };
+
+                            let disconnected_color = disconnected_pin
+                                .wire.read().as_ref()
+                                .map(|w| w.color(&component.state.wires, &render.paint.style))
+                                .unwrap_or_else(|| render.paint.style.wire_colors.none);
+
+                            if matches!(self.config.ty, RelayType::ToggleThin) {
+                                Self::render_thin_toggle_switch(
+                                    &mut buffer, i, active, common_color, disconnected_color, render,
+                                )
+                            }
+                            else {
+                                Self::render_toggle_switch(
+                                    &mut buffer, i, active, common_color, disconnected_color, render,
+                                )
+                            }
+                        }
+                    }
+                    RelayPins::Switch { switches, normally_closed } => {
+                        for (i,switch) in switches.iter().enumerate() {
+                            let common_color = switch
+                                .pin_com.wire.read().as_ref()
+                                .map(|w| w.color(&component.state.wires, &render.paint.style))
+                                .unwrap_or_else(|| render.paint.style.wire_colors.none);
+
+                            let disconnected_color = if (!active) ^ normally_closed {
+                                switch.pin_contact.wire.read().as_ref()
+                                    .map(|w| w.color(&component.state.wires, &render.paint.style))
+                                    .unwrap_or_else(|| render.paint.style.wire_colors.none)
+                            }
+                            else {
+                                Color32::BLACK
+                            };
+
+                            Self::render_switchonoff_switch(
+                                &mut buffer, *normally_closed, i, active, common_color, disconnected_color, render,
+                            )
+                        }
+                    }
+                };
+            }
+        }
+
         render.paint.custom_draw(move |ctx| {
             let mut vertexes = ColoredVertexRenderer::global(ctx.painter.gl());
             vertexes.draw(
@@ -448,8 +682,6 @@ impl ComponentImpl for Relay {
                 buffer.deref(),
             );
         });
-
-        */
     }
 
     fn create_instance(&self, component: &Arc<Component>) -> Self::Instance {
@@ -512,7 +744,10 @@ impl ComponentImpl for Relay {
                     }
                 }
             }
-            RelayPins::SwitchOn(switches) => {
+            RelayPins::Switch {
+                switches,
+                normally_closed,
+            } => {
                 for switch in switches.iter() {
                     let common_wire = switch.pin_com.wire.read().as_ref().map(|w| w.id);
                     let Some(common_wire) = common_wire else {
@@ -521,30 +756,12 @@ impl ComponentImpl for Relay {
 
                     ctx.tasks.add_wire_task(common_wire, false);
 
-                    if active {
+                    if active ^ normally_closed {
                         continue;
                     }
 
-                    let disconnected_pin_wire = switch.pin_no.wire.read().as_ref().map(|w| w.id);
-                    if let Some(disconnected_pin_wire) = disconnected_pin_wire {
-                        ctx.tasks.add_wire_task(disconnected_pin_wire, false);
-                    }
-                }
-            }
-            RelayPins::SwitchOff(switches) => {
-                for switch in switches.iter() {
-                    let common_wire = switch.pin_com.wire.read().as_ref().map(|w| w.id);
-                    let Some(common_wire) = common_wire else {
-                        return;
-                    };
-
-                    ctx.tasks.add_wire_task(common_wire, false);
-
-                    if !active {
-                        continue;
-                    }
-
-                    let disconnected_pin_wire = switch.pin_nc.wire.read().as_ref().map(|w| w.id);
+                    let disconnected_pin_wire =
+                        switch.pin_contact.wire.read().as_ref().map(|w| w.id);
                     if let Some(disconnected_pin_wire) = disconnected_pin_wire {
                         ctx.tasks.add_wire_task(disconnected_pin_wire, false);
                     }
@@ -628,39 +845,6 @@ impl ComponentImpl for Relay {
     }
 }
 
-impl Relay {
-    fn create_pins(&self, pins: &[RealizedPin]) -> RelayPins {
-        let switches = self.config.switch_count.0.get();
-        match self.config.ty {
-            RelayType::Toggle | RelayType::ToggleThin => RelayPins::Toggle(
-                (0..switches)
-                    .map(|i| RelayTogglePins {
-                        pin_com: pins[1 + i * 3].pin.clone(),
-                        pin_no: pins[1 + i * 3 + 1].pin.clone(),
-                        pin_nc: pins[1 + i * 3 + 2].pin.clone(),
-                    })
-                    .collect(),
-            ),
-            RelayType::SwitchOn => RelayPins::SwitchOn(
-                (0..switches)
-                    .map(|i| RelaySwitchOnPins {
-                        pin_com: pins[1 + i * 2].pin.clone(),
-                        pin_no: pins[1 + i * 2 + 1].pin.clone(),
-                    })
-                    .collect(),
-            ),
-            RelayType::SwitchOff => RelayPins::SwitchOff(
-                (0..switches)
-                    .map(|i| RelaySwitchOffPins {
-                        pin_com: pins[1 + i * 2].pin.clone(),
-                        pin_nc: pins[1 + i * 2 + 1].pin.clone(),
-                    })
-                    .collect(),
-            ),
-        }
-    }
-}
-
 impl MultiwireRouter for RelayMultiwireRouter {
     fn route(&self, pin: usize, routes: &mut Vec<MultiwireRoute>) {
         let Some(pin) = pin.checked_sub(1) else {
@@ -686,7 +870,10 @@ impl MultiwireRouter for RelayMultiwireRouter {
                     _ => return,
                 }
             }
-            RelayPins::SwitchOn(switches) => {
+            RelayPins::Switch {
+                switches,
+                normally_closed,
+            } => {
                 let switch_index = pin / 2;
                 let Some(switch) = switches.get(switch_index) else {
                     return;
@@ -694,23 +881,13 @@ impl MultiwireRouter for RelayMultiwireRouter {
 
                 let switch_pin = pin % 2;
 
-                match (switch_pin, active) {
-                    (0, true) => &switch.pin_no,
-                    (1, true) => &switch.pin_com,
-                    _ => return,
+                if !(active ^ normally_closed) {
+                    return;
                 }
-            }
-            RelayPins::SwitchOff(switches) => {
-                let switch_index = pin / 2;
-                let Some(switch) = switches.get(switch_index) else {
-                    return;
-                };
 
-                let switch_pin = pin % 2;
-
-                match (switch_pin, active) {
-                    (0, false) => &switch.pin_nc,
-                    (1, false) => &switch.pin_com,
+                match switch_pin {
+                    0 => &switch.pin_contact,
+                    1 => &switch.pin_com,
                     _ => return,
                 }
             }
