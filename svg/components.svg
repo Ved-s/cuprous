@@ -24,16 +24,16 @@
      inkscape:pagecheckerboard="0"
      inkscape:deskcolor="#505050"
      inkscape:document-units="mm"
-     showgrid="false"
-     inkscape:zoom="1"
-     inkscape:cx="393.5"
-     inkscape:cy="367.5"
+     showgrid="true"
+     inkscape:zoom="2.8284271"
+     inkscape:cx="100.58594"
+     inkscape:cy="91.039998"
      inkscape:window-width="1920"
      inkscape:window-height="1052"
      inkscape:window-x="0"
      inkscape:window-y="0"
      inkscape:window-maximized="1"
-     inkscape:current-layer="g183">
+     inkscape:current-layer="g85">
     <inkscape:grid
        id="grid1"
        units="mm"
@@ -47,7 +47,7 @@
        opacity="0.14901961"
        empspacing="10"
        enabled="true"
-       visible="false" />
+       visible="true" />
   </sodipodi:namedview>
   <defs
      id="defs1">
@@ -2586,5 +2586,19 @@
        x="39.999928"
        y="9.9999266"
        inkscape:label="bounds" />
+  </g>
+  <g
+     inkscape:groupmode="layer"
+     id="g85"
+     inkscape:label="relay-switch-between-thin"
+     transform="translate(-39.999928,-29.999926)">
+    <g
+       inkscape:groupmode="layer"
+       id="g58"
+       inkscape:label="switch-between-thin" />
+    <g
+       inkscape:groupmode="layer"
+       id="g74"
+       inkscape:label="relay-coil" />
   </g>
 </svg>

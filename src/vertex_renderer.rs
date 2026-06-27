@@ -676,7 +676,8 @@ impl PositionedVertex for ColoredVertex {
 pub struct ColoredVertexDefaultShader;
 
 impl Shaders<ColoredVertex> for ColoredVertexDefaultShader {
-    const VERT_SHADER: &'static str = r#"#version 330 core
+    const VERT_SHADER: &'static str = r#"#version 300 es
+        precision highp float;
         layout (location = 0) in vec2 pos;
         layout (location = 1) in vec4 color_in;
 
@@ -686,18 +687,20 @@ impl Shaders<ColoredVertex> for ColoredVertexDefaultShader {
         void main() {
 
             vec2 norm = pos / screenSize;
-            vec2 clip = norm * 2 - 1;
+            vec2 clip = norm * 2.0 - 1.0;
 
             gl_Position = vec4(clip.x, -clip.y, 0.0, 1.0);
             color = color_in;
         }
     "#;
 
-    const FRAG_SHADER: &'static str = r#"#version 330 core
+    const FRAG_SHADER: &'static str = r#"#version 300 es
+        precision highp float;
         in vec4 color;
 
+        out vec4 color_out;
         void main() {
-            gl_FragColor = color;
+            color_out = color;
         }
     "#;
 }

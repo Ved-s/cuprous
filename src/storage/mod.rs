@@ -229,3 +229,48 @@ pub fn verify_contained_path(path: &Path) -> io::Result<()> {
 
     Ok(())
 }
+
+#[derive(Clone)]
+pub struct DummyFilesystem;
+
+impl Filesystem for DummyFilesystem {
+    fn writefile(
+        &mut self,
+        _path: &Path,
+        _writer: &mut dyn FnMut(&mut dyn io::Write) -> io::Result<()>,
+    ) -> io::Result<()> {
+        Err(io::Error::new(io::ErrorKind::Unsupported, "Dummy filesystem: Operation not implemented"))
+    }
+
+    fn readfile(
+        &mut self,
+        _path: &Path,
+        _reader: &mut dyn FnMut(&mut dyn io::Read) -> io::Result<()>,
+    ) -> io::Result<()> {
+        Err(io::Error::new(io::ErrorKind::Unsupported, "Dummy filesystem: Operation not implemented"))
+    }
+
+    fn readdir(
+        &mut self,
+        _path: &Path,
+        _reader: &mut dyn FnMut(&str, ItemType) -> io::Result<()>,
+    ) -> io::Result<()> {
+        Err(io::Error::new(io::ErrorKind::Unsupported, "Dummy filesystem: Operation not implemented"))
+    }
+
+    fn stat(&mut self, _path: &Path) -> io::Result<ItemType> {
+        Err(io::Error::new(io::ErrorKind::Unsupported, "Dummy filesystem: Operation not implemented"))
+    }
+
+    fn rmdir(&mut self, _path: &Path) -> io::Result<()> {
+        Err(io::Error::new(io::ErrorKind::Unsupported, "Dummy filesystem: Operation not implemented"))
+    }
+
+    fn rmfile(&mut self, _path: &Path) -> io::Result<()> {
+        Err(io::Error::new(io::ErrorKind::Unsupported, "Dummy filesystem: Operation not implemented"))
+    }
+
+    fn mkdir(&mut self, _path: &Path) -> io::Result<()> {
+        Err(io::Error::new(io::ErrorKind::Unsupported, "Dummy filesystem: Operation not implemented"))
+    }
+}

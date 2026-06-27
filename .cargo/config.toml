@@ -1,0 +1,2 @@
+[alias]
+build-wasm = "build --target=wasm32-unknown-unknown -F wasm"

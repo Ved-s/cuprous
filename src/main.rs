@@ -1,7 +1,7 @@
 use std::{ops::Deref, sync::Arc};
 
 use app::DockedApp;
-use directories_next::ProjectDirs;
+
 use eframe::{
     egui::{Align2, Color32, PaintCallback, PaintCallbackInfo, Painter, Rect, Ui},
     egui_glow,
@@ -9,6 +9,9 @@ use eframe::{
 use serde::{Deserialize, Serialize};
 use smoldata::SmolReadWrite;
 use vector::{Vec2f, Vec2isize, Vec2usize};
+
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::prelude::*;
 
 use crate::state::wires::WireState;
 
@@ -30,36 +33,43 @@ pub mod vertex_renderer;
 #[macro_use]
 pub mod pool;
 pub mod io;
+pub mod multiwire;
 pub mod path;
 pub mod simulation;
 pub mod state;
 pub mod storage;
 pub mod time;
-pub mod multiwire;
 
 pub const CHUNK_SIZE: usize = 16;
 pub const WIRE_WIDTH: f32 = 0.2;
 pub const WIRE_POINT_WIDTH: f32 = 0.35;
 pub const BIG_WIRE_POINT_WIDTH: f32 = 0.65;
 
+#[cfg(not(target_arch = "wasm32"))]
 fn main() -> Result<(), eframe::Error> {
-    let project_dirs =
-        Arc::new(ProjectDirs::from("", "", "cuprous").expect("Could not fetch ProjectDirs"));
+    use parking_lot::Mutex;
+
+    let project_dirs = Arc::new(
+        directories_next::ProjectDirs::from("", "", "cuprous")
+            .expect("Could not fetch ProjectDirs"),
+    );
 
     let fs = storage::native::NativeFilesystem::new(project_dirs.data_dir().into());
 
     let egui_dir_fs = storage::FilesystemDirectory::new(fs.clone(), "egui".into())
         .expect("invalid egui directory");
 
-    // TODO: patch egui to accept dyn Storage instead
-    let egui_app_path = project_dirs.data_dir().join("egui/app.ron");
-
-    let egui_storage = storage::EpiStorageAdapter::new(egui_dir_fs);
+    static EGUI_FILESYSTEM: Mutex<Option<storage::FilesystemDirectory<storage::native::NativeFilesystem>>> = Mutex::new(None);
+    *EGUI_FILESYSTEM.lock() = Some(egui_dir_fs);
 
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default().with_title("cuprous"),
-        persistence_path: Some(egui_app_path),
         persist_window: true,
+        storage_build: eframe::StorageProvider::Custom(|_| {
+            let fs = EGUI_FILESYSTEM.lock().as_ref().unwrap().clone();
+            let storage = storage::EpiStorageAdapter::new(fs);
+            Some(Box::new(storage) as Box<_>)
+        }),
         ..Default::default()
     };
 
@@ -70,10 +80,46 @@ fn main() -> Result<(), eframe::Error> {
             Ok(Box::new(DockedApp::create(
                 cc,
                 Box::new(fs),
-                Box::new(egui_storage),
             )))
         }),
     )
+}
+
+#[cfg(target_arch = "wasm32")]
+fn main() {}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn web_main(main_canvas: web_sys::HtmlCanvasElement) -> Result<(), JsValue> {
+    use crate::storage::DummyFilesystem;
+
+    static WEB_FILESYSTEM: &DummyFilesystem = &DummyFilesystem;
+
+    let options = eframe::WebOptions {
+        storage_build: eframe::StorageProvider::Custom(|_| {
+            Some(Box::new(storage::EpiStorageAdapter::new(
+                storage::FilesystemDirectory::new(WEB_FILESYSTEM.clone(), "egui".into())
+                    .expect("invalid egui directory"),
+            )) as Box<_>)
+        }),
+        webgl_context_option: eframe::WebGlContextOption::WebGl2,
+        ..Default::default()
+    };
+
+    let runner = eframe::WebRunner::new();
+
+    runner
+        .start(
+            main_canvas,
+            options,
+            Box::new(|cc| {
+                Ok(Box::new(DockedApp::create(
+                    cc,
+                    Box::new(WEB_FILESYSTEM.clone()),
+                )))
+            }),
+        )
+        .await
 }
 
 #[derive(Debug, Clone, Copy)]

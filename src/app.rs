@@ -6,7 +6,7 @@ use std::{
     sync::{Arc, Weak},
 };
 
-use eframe::{CreationContext, Storage, egui::{self, Key}};
+use eframe::{CreationContext, egui::{self, Key}};
 use egui_dock::{DockArea, DockState, NodeIndex};
 use eyre::eyre;
 use parking_lot::RwLock;
@@ -77,7 +77,6 @@ pub struct App {
     pub last_active_editor: Option<Weak<RwLock<BoardEditor>>>,
 
     pub fs: Box<dyn Filesystem>,
-    pub egui_storage: Box<dyn Storage>,
 }
 
 impl App {
@@ -85,7 +84,6 @@ impl App {
         cc: &CreationContext,
         mut errors: Vec<ErrorStrings>,
         mut fs: Box<dyn Filesystem>,
-        egui_storage: Box<dyn Storage>,
     ) -> Self {
         let mut blueprints: Vec<ComponentImplBox> = vec![
             crate::components::test::Test.into(),
@@ -209,13 +207,12 @@ impl App {
             errors,
 
             fs,
-            egui_storage,
         }
     }
 
     pub fn update(&mut self, ctx: &egui::Context) {
         let paste = ctx
-            .wants_keyboard_input()
+            .egui_wants_keyboard_input()
             .not()
             .then(|| {
                 ctx.input(|input| {
@@ -414,10 +411,8 @@ impl DockedApp {
     pub fn create(
         cc: &CreationContext,
         fs: Box<dyn Filesystem>,
-        egui_storage: Box<dyn Storage>,
     ) -> Self {
-        let dock = egui_storage
-            .get_string("dock")
+        let dock = cc.storage.and_then(|s| s.get_string("dock"))
             .map(|s| ron::from_str::<DockState<TabSerde>>(&s));
 
         let (dock, dock_error) = match dock {
@@ -431,7 +426,7 @@ impl DockedApp {
             .map(|e| eyre::Report::new(e).wrap_err("dock loading").into())
             .collect();
 
-        let mut app = App::create(cc, errors, fs, egui_storage);
+        let mut app = App::create(cc, errors, fs);
 
         Self {
             dock: dock.map_tabs(|s| Tab::load(s, &mut app)),
@@ -442,7 +437,7 @@ impl DockedApp {
 }
 
 impl eframe::App for DockedApp {
-    fn update(&mut self, ctx: &eframe::egui::Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         'b: {
             for tab in self.dock.iter_all_tabs() {
                 if matches!(tab.1.ty(), SafeTabType::Loaded(TabType::BoardView)) {
@@ -484,7 +479,7 @@ impl eframe::App for DockedApp {
         }
 
         'b: {
-            if !ctx.input(|input| input.key_pressed(Key::F12) && input.modifiers.shift) {
+            if !ui.input(|input| input.key_pressed(Key::F12) && input.modifiers.shift) {
                 break 'b;
             }
 
@@ -508,13 +503,13 @@ impl eframe::App for DockedApp {
             .find_active_focused()
             .and_then(|(_, tab)| tab.loaded_ty());
 
-        self.app.update(ctx);
+        self.app.update(ui.ctx());
 
-        DockArea::new(&mut self.dock).show(ctx, &mut TabViewer(&mut self.app));
+        DockArea::new(&mut self.dock).show_inside(ui, &mut TabViewer(&mut self.app));
 
         if !self.app.errors.is_empty() {
             let mut open = true;
-            egui::Window::new("Errors").open(&mut open).show(ctx, |ui| {
+            egui::Window::new("Errors").open(&mut open).show(ui.ctx(), |ui| {
                 let bottom_size_id = ui.id().with("bottomsize");
                 let bottom_size: egui::Vec2 = ui
                     .data(|data| data.get_temp(bottom_size_id))
@@ -551,7 +546,7 @@ impl eframe::App for DockedApp {
 
                             if child_ui.button("Exit without saving").clicked() {
                                 self.no_save = true;
-                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                ui.send_viewport_cmd(egui::ViewportCommand::Close);
                             }
                             if child_ui.button("Clear").clicked() {
                                 self.app.errors.clear();
@@ -571,7 +566,7 @@ impl eframe::App for DockedApp {
         }
     }
 
-    fn save(&mut self, _: &mut dyn eframe::Storage) {
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
         if self.no_save {
             return;
         }
@@ -579,7 +574,7 @@ impl eframe::App for DockedApp {
         let dock = self.dock.map_tabs(|tab| tab.save());
         let dock_str = ron::to_string(&dock);
         if let Ok(dock) = dock_str {
-            self.app.egui_storage.set_string("dock", dock);
+            storage.set_string("dock", dock);
         }
 
         self.app.save();

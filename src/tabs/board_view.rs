@@ -232,7 +232,7 @@ impl TabImpl for BoardView {
                 matches!(app.selected_item, Some(SelectedItem::Selection)),
             );
 
-        if !ui.ctx().wants_keyboard_input() {
+        if !ui.ctx().egui_wants_keyboard_input() {
             self.handle_keyboard(ui, app);
         }
 

@@ -311,119 +311,144 @@ impl SelectionRenderer {
         unsafe {
             let gl = ctx.painter.gl();
 
-            if self
-                .last_screen_size
-                .is_none_or(|s| s != ctx.paint_info.screen_size_px)
-            {
+            if cfg!(target_arch = "wasm32") {
+                let draw_color_location =
+                    gl.get_uniform_location(self.renderer_borderfill.gl_program(), "drawColor");
+
+                let fill = ctx.style.selection_fill.to_normalized_gamma_f32();
+                let border = ctx.style.selection_border.to_normalized_gamma_f32();
+
+                gl.use_program(Some(self.renderer_borderfill.gl_program()));
+                gl.uniform_4_f32(draw_color_location.as_ref(), border[0], border[1], border[2], 1.0);
+                self.renderer_borderfill.draw(
+                    gl,
+                    ctx.paint_info.screen_size_px,
+                    &self.border_buffer,
+                );
+
+                gl.use_program(Some(self.renderer_borderfill.gl_program()));
+                gl.uniform_4_f32(draw_color_location.as_ref(), fill[0], fill[1], fill[2], 1.0);
+                self.renderer_borderfill
+                    .draw(gl, ctx.paint_info.screen_size_px, &self.fill_buffer);
+
+            } else {
+                if self
+                    .last_screen_size
+                    .is_none_or(|s| s != ctx.paint_info.screen_size_px)
+                {
+                    gl.bind_texture(glow::TEXTURE_2D, Some(self.texture));
+                    gl.tex_image_2d(
+                        glow::TEXTURE_2D,
+                        0,
+                        glow::RG as i32,
+                        ctx.paint_info.screen_size_px[0] as i32,
+                        ctx.paint_info.screen_size_px[1] as i32,
+                        0,
+                        glow::RG,
+                        glow::UNSIGNED_BYTE,
+                        PixelUnpackData::Slice(None),
+                    );
+                    gl.tex_parameter_i32(
+                        glow::TEXTURE_2D,
+                        glow::TEXTURE_MAG_FILTER,
+                        glow::LINEAR as i32,
+                    );
+                    gl.tex_parameter_i32(
+                        glow::TEXTURE_2D,
+                        glow::TEXTURE_MIN_FILTER,
+                        glow::LINEAR as i32,
+                    );
+                    gl.tex_parameter_i32(
+                        glow::TEXTURE_2D,
+                        glow::TEXTURE_WRAP_R,
+                        glow::CLAMP_TO_BORDER as i32,
+                    );
+                    gl.tex_parameter_i32(
+                        glow::TEXTURE_2D,
+                        glow::TEXTURE_WRAP_S,
+                        glow::CLAMP_TO_BORDER as i32,
+                    );
+                    gl.tex_parameter_i32(
+                        glow::TEXTURE_2D,
+                        glow::TEXTURE_WRAP_T,
+                        glow::CLAMP_TO_BORDER as i32,
+                    );
+
+                    gl.bind_texture(glow::TEXTURE_2D, None);
+                }
+
+                gl.bind_framebuffer(glow::FRAMEBUFFER, Some(self.framebuffer));
+
+                gl.framebuffer_texture(
+                    glow::FRAMEBUFFER,
+                    glow::COLOR_ATTACHMENT0,
+                    Some(self.texture),
+                    0,
+                );
+
+                gl.clear_color(0.0, 0.0, 0.0, 1.0);
+                gl.clear(glow::COLOR_BUFFER_BIT);
+
+                let draw_color_location =
+                    gl.get_uniform_location(self.renderer_borderfill.gl_program(), "drawColor");
+
+                gl.use_program(Some(self.renderer_borderfill.gl_program()));
+                gl.uniform_4_f32(draw_color_location.as_ref(), 1.0, 0.0, 0.0, 1.0);
+                self.renderer_borderfill.draw(
+                    gl,
+                    ctx.paint_info.screen_size_px,
+                    &self.border_buffer,
+                );
+
+                gl.use_program(Some(self.renderer_borderfill.gl_program()));
+                gl.uniform_4_f32(draw_color_location.as_ref(), 0.0, 1.0, 0.0, 1.0);
+                self.renderer_borderfill
+                    .draw(gl, ctx.paint_info.screen_size_px, &self.fill_buffer);
+
+                gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+
                 gl.bind_texture(glow::TEXTURE_2D, Some(self.texture));
-                gl.tex_image_2d(
-                    glow::TEXTURE_2D,
-                    0,
-                    glow::RG as i32,
-                    ctx.paint_info.screen_size_px[0] as i32,
-                    ctx.paint_info.screen_size_px[1] as i32,
-                    0,
-                    glow::RG,
-                    glow::UNSIGNED_BYTE,
-                    PixelUnpackData::Slice(None),
+
+                gl.use_program(Some(self.renderer_fullscreen.gl_program()));
+
+                let fill_color_location =
+                    gl.get_uniform_location(self.renderer_fullscreen.gl_program(), "fillColor");
+                let border_color_location =
+                    gl.get_uniform_location(self.renderer_fullscreen.gl_program(), "borderColor");
+
+                let fill = ctx.style.selection_fill.to_normalized_gamma_f32();
+                let border = ctx.style.selection_border.to_normalized_gamma_f32();
+
+                gl.uniform_4_f32(
+                    fill_color_location.as_ref(),
+                    fill[0],
+                    fill[1],
+                    fill[2],
+                    fill[3],
                 );
-                gl.tex_parameter_i32(
-                    glow::TEXTURE_2D,
-                    glow::TEXTURE_MAG_FILTER,
-                    glow::LINEAR as i32,
+                gl.uniform_4_f32(
+                    border_color_location.as_ref(),
+                    border[0],
+                    border[1],
+                    border[2],
+                    border[3],
                 );
-                gl.tex_parameter_i32(
-                    glow::TEXTURE_2D,
-                    glow::TEXTURE_MIN_FILTER,
-                    glow::LINEAR as i32,
-                );
-                gl.tex_parameter_i32(
-                    glow::TEXTURE_2D,
-                    glow::TEXTURE_WRAP_R,
-                    glow::CLAMP_TO_BORDER as i32,
-                );
-                gl.tex_parameter_i32(
-                    glow::TEXTURE_2D,
-                    glow::TEXTURE_WRAP_S,
-                    glow::CLAMP_TO_BORDER as i32,
-                );
-                gl.tex_parameter_i32(
-                    glow::TEXTURE_2D,
-                    glow::TEXTURE_WRAP_T,
-                    glow::CLAMP_TO_BORDER as i32,
+
+                // gl.viewport(
+                //     0,
+                //     0,
+                //     ctx.paint_info.screen_size_px[0] as i32,
+                //     ctx.paint_info.screen_size_px[1] as i32,
+                // );
+
+                self.renderer_fullscreen.draw_no_copy(
+                    gl,
+                    ctx.paint_info.screen_size_px,
+                    &FullscreenQuadVertexBuffer,
                 );
 
                 gl.bind_texture(glow::TEXTURE_2D, None);
             }
-
-            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(self.framebuffer));
-
-            gl.framebuffer_texture(
-                glow::FRAMEBUFFER,
-                glow::COLOR_ATTACHMENT0,
-                Some(self.texture),
-                0,
-            );
-
-            gl.clear_color(0.0, 0.0, 0.0, 1.0);
-            gl.clear(glow::COLOR_BUFFER_BIT);
-
-            let draw_color_location =
-                gl.get_uniform_location(self.renderer_borderfill.gl_program(), "drawColor");
-
-            gl.use_program(Some(self.renderer_borderfill.gl_program()));
-            gl.uniform_4_f32(draw_color_location.as_ref(), 1.0, 0.0, 0.0, 1.0);
-            self.renderer_borderfill
-                .draw(gl, ctx.paint_info.screen_size_px, &self.border_buffer);
-
-            gl.use_program(Some(self.renderer_borderfill.gl_program()));
-            gl.uniform_4_f32(draw_color_location.as_ref(), 0.0, 1.0, 0.0, 1.0);
-            self.renderer_borderfill
-                .draw(gl, ctx.paint_info.screen_size_px, &self.fill_buffer);
-
-            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
-
-            gl.bind_texture(glow::TEXTURE_2D, Some(self.texture));
-
-            gl.use_program(Some(self.renderer_fullscreen.gl_program()));
-
-            let fill_color_location =
-                gl.get_uniform_location(self.renderer_fullscreen.gl_program(), "fillColor");
-            let border_color_location =
-                gl.get_uniform_location(self.renderer_fullscreen.gl_program(), "borderColor");
-
-            let fill = ctx.style.selection_fill.to_normalized_gamma_f32();
-            let border = ctx.style.selection_border.to_normalized_gamma_f32();
-
-            gl.uniform_4_f32(
-                fill_color_location.as_ref(),
-                fill[0],
-                fill[1],
-                fill[2],
-                fill[3],
-            );
-            gl.uniform_4_f32(
-                border_color_location.as_ref(),
-                border[0],
-                border[1],
-                border[2],
-                border[3],
-            );
-
-            // gl.viewport(
-            //     0,
-            //     0,
-            //     ctx.paint_info.screen_size_px[0] as i32,
-            //     ctx.paint_info.screen_size_px[1] as i32,
-            // );
-
-            self.renderer_fullscreen.draw_no_copy(
-                gl,
-                ctx.paint_info.screen_size_px,
-                &FullscreenQuadVertexBuffer,
-            );
-
-            gl.bind_texture(glow::TEXTURE_2D, None);
         }
     }
 }
@@ -431,7 +456,8 @@ impl SelectionRenderer {
 pub struct SelectionBorderFillShader;
 
 impl Shaders<SimpleVertex> for SelectionBorderFillShader {
-    const VERT_SHADER: &'static str = r#"#version 330 core
+    const VERT_SHADER: &'static str = r#"#version 300 es
+        precision highp float;
         layout (location = 0) in vec2 pos;
 
         uniform vec2 screenSize;
@@ -440,17 +466,19 @@ impl Shaders<SimpleVertex> for SelectionBorderFillShader {
         void main() {
 
             vec2 norm = pos / screenSize;
-            vec2 clip = norm * 2 - 1;
+            vec2 clip = norm * 2.0 - 1.0;
 
             gl_Position = vec4(clip.x, -clip.y, 0.0, 1.0);
         }
     "#;
 
-    const FRAG_SHADER: &'static str = r#"#version 330 core
+    const FRAG_SHADER: &'static str = r#"#version 300 es
+        precision highp float;
         uniform vec4 drawColor;
 
+        out vec4 color;
         void main() {
-            gl_FragColor = drawColor;
+            color = drawColor;
         }
     "#;
 }
@@ -458,7 +486,8 @@ impl Shaders<SimpleVertex> for SelectionBorderFillShader {
 pub struct SelectionFullscreenShader;
 
 impl Shaders<UvVertex> for SelectionFullscreenShader {
-    const VERT_SHADER: &'static str = r#"#version 330 core
+    const VERT_SHADER: &'static str = r#"#version 300 es
+        precision highp float;
         layout (location = 0) in vec2 pos;
         layout (location = 1) in vec2 uv_in;
 
@@ -469,48 +498,19 @@ impl Shaders<UvVertex> for SelectionFullscreenShader {
         }
     "#;
 
-    const FRAG_SHADER: &'static str = r#"#version 330 core
+    const FRAG_SHADER: &'static str = r#"#version 300 es
+        precision highp float;
         uniform sampler2D sampler;
         uniform vec4 fillColor;
         uniform vec4 borderColor;
 
         in vec2 uv;
 
+        out vec4 color;
         void main() {
-
             vec2 rg = texture(sampler, uv).rg;
             vec4 col = rg.r * borderColor + rg.g * fillColor;
-            gl_FragColor = col;
-
-            // vec2 fw = fwidth(uv);
-            // float mod = texture(sampler, uv).r;
-            // // float sum = 
-            // //     texture(sampler, uv + vec2(0, fw.y)).r +
-            // //     texture(sampler, uv + vec2(fw.x, fw.y)).r +
-            // //     texture(sampler, uv + vec2(fw.x, 0)).r +
-            // //     texture(sampler, uv + vec2(fw.x, -fw.y)).r +
-            // //     texture(sampler, uv + vec2(0, -fw.y)).r +
-            // //     texture(sampler, uv + vec2(-fw.x, -fw.y)).r +
-            // //     texture(sampler, uv + vec2(-fw.x, 0)).r +
-            // //     texture(sampler, uv + vec2(-fw.x, fw.y)).r +
-            // //     texture(sampler, uv + 2 * vec2(0, fw.y)).r +
-            // //     texture(sampler, uv + 2 * vec2(fw.x, fw.y)).r +
-            // //     texture(sampler, uv + 2 * vec2(fw.x, 0)).r +
-            // //     texture(sampler, uv + 2 * vec2(fw.x, -fw.y)).r +
-            // //     texture(sampler, uv + 2 * vec2(0, -fw.y)).r +
-            // //     texture(sampler, uv + 2 * vec2(-fw.x, -fw.y)).r +
-            // //     texture(sampler, uv + 2 * vec2(-fw.x, 0)).r +
-            // //     texture(sampler, uv + 2 * vec2(-fw.x, fw.y)).r;
-
-            // float val = 1;
-            // for (int x = -border; x <= border; x++) {
-            //     for (int y = -border; y <= border; y++) {
-            //         float r = texture(sampler, uv + vec2(fw.x * x, fw.y * y)).r;
-            //         val = min(val, r);
-            //     }
-            // }
-
-            // gl_FragColor = mix(borderColor, fillColor, val) * mod;
+            color = col;
         }
     "#;
 }
