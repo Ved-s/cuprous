@@ -6,6 +6,7 @@ use eframe::{
     egui::{Align2, Color32, PaintCallback, PaintCallbackInfo, Painter, Rect, Ui},
     egui_glow,
 };
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use smoldata::SmolReadWrite;
 use vector::{Vec2f, Vec2isize, Vec2usize};
@@ -91,14 +92,18 @@ fn main() {}
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub async fn web_main(main_canvas: web_sys::HtmlCanvasElement) -> Result<(), JsValue> {
-    use crate::storage::DummyFilesystem;
+    use crate::storage::web::LocalStorageFilesystem;
 
-    static WEB_FILESYSTEM: &DummyFilesystem = &DummyFilesystem;
+    let fs = LocalStorageFilesystem::new("cuprousfs:".into());
+
+    static WEB_FILESYSTEM: Mutex<Option<LocalStorageFilesystem>> = Mutex::new(None);
+
+    *WEB_FILESYSTEM.lock() = Some(fs.clone());
 
     let options = eframe::WebOptions {
         storage_build: eframe::StorageProvider::Custom(|_| {
             Some(Box::new(storage::EpiStorageAdapter::new(
-                storage::FilesystemDirectory::new(WEB_FILESYSTEM.clone(), "egui".into())
+                storage::FilesystemDirectory::new(WEB_FILESYSTEM.lock().clone().unwrap(), "egui".into())
                     .expect("invalid egui directory"),
             )) as Box<_>)
         }),
@@ -115,7 +120,7 @@ pub async fn web_main(main_canvas: web_sys::HtmlCanvasElement) -> Result<(), JsV
             Box::new(|cc| {
                 Ok(Box::new(DockedApp::create(
                     cc,
-                    Box::new(WEB_FILESYSTEM.clone()),
+                    Box::new(fs),
                 )))
             }),
         )

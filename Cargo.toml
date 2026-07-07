@@ -57,15 +57,16 @@ wasm = ["getrandom/js"]
 
 [patch.crates-io.eframe]
 git = "https://github.com/emilk/egui.git"
-# Fork: Leinnan/egui/tree/feature/customStorage
+# Fork: Ved-s/egui/tree/feature/customStorage
 # PR: https://github.com/emilk/egui/pull/7856
-rev = "34a88012f11a4b5b68793ac4a27c14e362eb329b"
+# PR PR: https://github.com/Leinnan/egui/pull/1
+rev = "2d5f2099bd6c088445b6625a9084c0aa18d37136"
 
 [patch.crates-io.egui]
 git = "https://github.com/emilk/egui.git"
-rev = "34a88012f11a4b5b68793ac4a27c14e362eb329b"
+rev = "2d5f2099bd6c088445b6625a9084c0aa18d37136"
 
 
 [patch.crates-io.egui_extras]
 git = "https://github.com/emilk/egui.git"
-rev = "34a88012f11a4b5b68793ac4a27c14e362eb329b"
+rev = "2d5f2099bd6c088445b6625a9084c0aa18d37136"

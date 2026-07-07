@@ -580,7 +580,6 @@ impl eframe::App for DockedApp {
         self.app.save();
     }
 }
-
 pub struct PasteComponent {
     pub pos: Vec2usize,
     pub blueprint: ComponentBlueprint,
