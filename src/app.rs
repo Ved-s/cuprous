@@ -13,17 +13,7 @@ use parking_lot::RwLock;
 use smoldata::{SmolRead, raw::RawValue};
 
 use crate::{
-    Style,
-    board::Board,
-    components::{ComponentBlueprint, ComponentImplBox},
-    editor::{BoardEditor, BoardEditorSharedState},
-    io::copystate,
-    simulation::SimulationCtx,
-    state::wires::WireState,
-    storage::{Filesystem, ItemType},
-    str::ArcStaticStr,
-    tabs::{SafeTabType, Tab, TabSerde, TabType, TabViewer},
-    vector::{Vec2isize, Vec2usize},
+    Style, board::Board, components::{ComponentBlueprint, ComponentImplBox}, editor::{BoardEditor, BoardEditorSharedState}, io::copystate, multicursor::Multicursor, simulation::SimulationCtx, state::wires::WireState, storage::{Filesystem, ItemType}, str::ArcStaticStr, tabs::{SafeTabType, Tab, TabSerde, TabType, TabViewer}, vector::{Vec2isize, Vec2usize},
 };
 
 pub const COPY_PASTE_BOARD_ITEMS_PREFIX: &str = "cuprousbrditms:";
@@ -72,9 +62,11 @@ pub struct App {
 
     pub editors: HashMap<u128, Weak<RwLock<BoardEditor>>>,
     pub editor_shared: HashMap<u128, BoardEditorSharedState>,
+    pub last_active_editor: Option<Weak<RwLock<BoardEditor>>>,
+
+    pub multicursor: Multicursor,
 
     pub errors: Vec<ErrorStrings>,
-    pub last_active_editor: Option<Weak<RwLock<BoardEditor>>>,
 
     pub fs: Box<dyn Filesystem>,
 }
@@ -200,9 +192,12 @@ impl App {
             blueprint_order,
             style: Arc::new(Style::default()),
             sim,
+
             editors: Default::default(),
             editor_shared: Default::default(),
             last_active_editor: None,
+
+            multicursor: Default::default(),
 
             errors,
 
@@ -333,6 +328,14 @@ impl App {
 
         for v in self.editor_shared.values_mut() {
             v.update();
+        }
+
+        self.multicursor.updated = false;
+    }
+
+    fn post_update(&mut self) {
+        if !self.multicursor.updated {
+            self.multicursor.update_inactive();
         }
     }
 
@@ -506,6 +509,8 @@ impl eframe::App for DockedApp {
         self.app.update(ui.ctx());
 
         DockArea::new(&mut self.dock).show_inside(ui, &mut TabViewer(&mut self.app));
+
+        self.app.post_update();
 
         if !self.app.errors.is_empty() {
             let mut open = true;

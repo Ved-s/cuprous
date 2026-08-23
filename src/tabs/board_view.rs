@@ -19,26 +19,11 @@ use num_traits::Zero;
 use parking_lot::{Mutex, RwLock};
 
 use crate::{
-    BIG_WIRE_POINT_WIDTH, CHUNK_SIZE, CustomPaintContext, Direction4Half, Direction8,
-    Direction8Array, PaintContext, Screen, WIRE_POINT_WIDTH, WIRE_WIDTH,
-    app::{App, COPY_PASTE_BOARD_ITEMS_PREFIX, SelectedItem},
-    board::{Board, ComponentCreationOverrides},
-    components::{
+    BIG_WIRE_POINT_WIDTH, CHUNK_SIZE, CustomPaintContext, Direction4Half, Direction8, Direction8Array, PaintContext, Screen, WIRE_POINT_WIDTH, WIRE_WIDTH, app::{App, COPY_PASTE_BOARD_ITEMS_PREFIX, SelectedItem}, board::{Board, ComponentCreationOverrides}, components::{
         ComponentBlueprint, ComponentRenderPurpose, ComponentRenderingContext,
         ComponentSelectionRenderingContext, ComponentUpdateReason, PinType, TransformSupport,
         UntypedComponentCtx,
-    },
-    drawing::{self, rotated_rect},
-    editor::{BoardEditor, BoardSelection, InWorldError, QuarterPos, SelectedBoardItem},
-    ext::IteratorProduct,
-    io::copystate,
-    pool::get_pooled,
-    selection::SelectionRenderer,
-    simulation::SimulationStateData,
-    state::{BoardState, sim::UpdateTaskPool},
-    time::{self, TimeProvider},
-    vector::{Vec2f, Vec2isize, Vec2usize, Vector2},
-    vertex_renderer::{ColoredLineBuffer, ColoredTriangleBuffer, ColoredVertexRenderer},
+    }, drawing::{self, rotated_rect}, editor::{BoardEditor, BoardSelection, InWorldError, QuarterPos, SelectedBoardItem}, ext::IteratorProduct, io::copystate, multicursor::Multicursor, pool::get_pooled, selection::SelectionRenderer, simulation::SimulationStateData, state::{BoardState, sim::UpdateTaskPool}, time::{self, TimeProvider}, vector::{Vec2f, Vec2isize, Vec2usize, Vector2}, vertex_renderer::{ColoredLineBuffer, ColoredTriangleBuffer, ColoredVertexRenderer},
 };
 
 use super::{TabCreation, TabImpl};
@@ -154,7 +139,7 @@ impl TabImpl for BoardView {
             || interaction.dragged_by(PointerButton::Secondary);
 
         if self.fixed_screen_pos.is_none() || ui.input(|input| input.modifiers.alt) {
-            self.pan_zoom.update(ui, screen_rect, dragged, &interaction);
+            self.pan_zoom.update(ui, screen_rect, dragged, &interaction, app.multicursor.editing());
         }
 
         let global_screen = self.pan_zoom.to_screen(screen_rect);
@@ -183,7 +168,7 @@ impl TabImpl for BoardView {
                 pan_zoom.scale *= self.pan_zoom.scale;
                 let screen_rect = global_screen.world_to_screen_rect(*rect);
                 if !ui.input(|input| input.modifiers.alt) {
-                    pan_zoom.update(ui, screen_rect, dragged, &interaction);
+                    pan_zoom.update(ui, screen_rect, dragged, &interaction, app.multicursor.editing());
                 }
                 let screen = pan_zoom.to_screen(screen_rect);
                 pan_zoom.scale /= self.pan_zoom.scale;
@@ -219,6 +204,8 @@ impl TabImpl for BoardView {
                 StrokeKind::Middle,
             );
         }
+
+        app.multicursor.update(ui.ctx(), ui.input(|input| input.key_down(Key::M)), screen);
 
         app.editor_shared
             .entry(self.board.uid())
@@ -287,6 +274,7 @@ impl TabImpl for BoardView {
         self.handle_wire_interactions(
             &ctx,
             &interaction,
+            &app.multicursor,
             matches!(app.selected_item, Some(SelectedItem::Wires)),
         );
 
@@ -314,6 +302,10 @@ impl TabImpl for BoardView {
         let mut overlay_ui = ui.new_child(UiBuilder::new().max_rect(screen_rect));
 
         self.draw_overlay(&mut overlay_ui, app);
+
+        if interaction.hovered() {
+            app.multicursor.ui(ui, screen);
+        }
     }
 
     fn tab_style_override(&self, global: &egui_dock::TabStyle) -> Option<egui_dock::TabStyle> {
@@ -1276,6 +1268,7 @@ impl BoardView {
         &mut self,
         ctx: &PaintContext,
         interaction: &Response,
+        multicursor: &Multicursor,
         active: bool,
     ) {
         let world_mouse = ctx
@@ -1321,11 +1314,6 @@ impl BoardView {
 
             if length > 0 {
                 let place = !ctx.ui.input(|input| input.modifiers.shift);
-                let end = start + direction.into_dir_isize() * length as isize;
-                let endf = end.convert(|v| v as f32 + 0.5);
-
-                let startf = ctx.screen.world_to_screen(startf);
-                let endf = ctx.screen.world_to_screen(endf);
 
                 let color = if place {
                     Color32::from_gray(100)
@@ -1334,20 +1322,21 @@ impl BoardView {
                 };
 
                 let add_len = if direction.is_diagonal() {
-                    WIRE_WIDTH / 2.0 * (22.5f32).to_radians().tan()
+                    WIRE_WIDTH * (22.5f32).to_radians().tan()
                 } else {
-                    WIRE_WIDTH / 2.0
+                    WIRE_WIDTH
                 };
 
                 let vec = direction.into_dir_f32() * add_len * ctx.screen.scale;
+                let wire_vector_screen = (direction.into_dir_f32() * (length as f32 + add_len)) * ctx.screen.scale;
 
-                let startf = startf - vec;
-                let endf = endf + vec;
-
-                ctx.painter.line_segment(
-                    [startf.into(), endf.into()],
-                    Stroke::new(WIRE_WIDTH * ctx.screen.scale, color),
-                );
+                let startf = ctx.screen.world_to_screen(startf);
+                for c in multicursor.cursors_screen(startf - vec, ctx.screen.scale) {
+                    ctx.painter.line_segment(
+                        [c.into(), (c + wire_vector_screen).into()],
+                        Stroke::new(WIRE_WIDTH * ctx.screen.scale, color),
+                    );
+                }
 
                 if !ctx
                     .ui
@@ -1355,9 +1344,11 @@ impl BoardView {
                 {
                     if let Some(nonzero_len) = NonZeroU32::new(length) {
                         let mut editor = self.editor.write();
-                        match place {
-                            true => editor.place_wire(start, direction, nonzero_len),
-                            false => editor.remove_wire(start, direction, nonzero_len),
+                        for c in multicursor.cursors_world(start) { 
+                            match place {
+                                true => editor.place_wire(c, direction, nonzero_len),
+                                false => editor.remove_wire(c, direction, nonzero_len),
+                            }
                         }
                     }
                     self.wire_draw_start = None;
@@ -2256,7 +2247,7 @@ pub struct PanAndZoom {
 }
 
 impl PanAndZoom {
-    fn update(&mut self, ui: &Ui, rect: Rect, drag: bool, interaction: &Response) {
+    fn update(&mut self, ui: &Ui, rect: Rect, drag: bool, interaction: &Response, block_zoom: bool) {
         let zoom = ui.input(|input| {
             input
                 .multi_touch()
@@ -2281,7 +2272,7 @@ impl PanAndZoom {
             self.center_pos -= interaction.drag_delta() / self.scale;
         }
 
-        if zoom != 1.0 {
+        if zoom != 1.0 && !block_zoom {
             let pointer_screen = Vec2f::from(
                 ui.input(|i| i.pointer.hover_pos())
                     .unwrap_or_else(|| rect.center())
