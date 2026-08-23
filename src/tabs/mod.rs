@@ -31,7 +31,7 @@ define_tab_type! {
         #[closeable = false]
         BoardView,
 
-        #[id = "component_props"]
+        #[id = "component_props", old = ["circuit_props"]]
         #[impl = component_props::ComponentProps, loadable = false]
         #[title = "Component properties"]
         #[closeable = false]

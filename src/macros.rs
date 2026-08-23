@@ -4,7 +4,7 @@ macro_rules! define_tab_type {
         $(#[$enummeta:meta])*
         $enumvis:vis enum $enumname:ident {
             $(
-                #[id = $id:literal]
+                #[id = $id:literal $(, old = [$($oldid:literal),* $(,)?])?]
                 #[impl = $impl:ty, loadable = $loadable:ident]
                 #[title = $title:literal]
                 #[closeable = $closeable:ident]
@@ -23,7 +23,10 @@ macro_rules! define_tab_type {
         impl $enumname {
             pub fn from_id(id: &str) -> Option<Self> {
                 match id {
-                    $($id => Some(Self::$membername),)*
+                    $(
+                        $id => Some(Self::$membername),
+                        $($($oldid => Some(Self::$membername),)*)?
+                    )*
                     _ => None,
                 }
             }
