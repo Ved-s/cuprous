@@ -48,7 +48,6 @@ pub const BIG_WIRE_POINT_WIDTH: f32 = 0.65;
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> Result<(), eframe::Error> {
-    use parking_lot::Mutex;
 
     let project_dirs = Arc::new(
         directories_next::ProjectDirs::from("", "", "cuprous")

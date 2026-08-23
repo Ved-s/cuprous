@@ -175,7 +175,7 @@ impl<I: SelectionImpl> Selection<I> {
             rect,
             CornerRadius::ZERO,
             ctx.style.selection_fill,
-            Stroke::new(2.0, ctx.style.selection_border),
+            Stroke::new(2.0_f32, ctx.style.selection_border),
             StrokeKind::Middle,
         );
     }

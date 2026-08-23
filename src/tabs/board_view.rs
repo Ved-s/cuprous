@@ -215,7 +215,7 @@ impl TabImpl for BoardView {
             ui.painter().rect_stroke(
                 screen.screen_rect,
                 0.0,
-                Stroke::new(1.0, Color32::RED),
+                Stroke::new(1.0_f32, Color32::RED),
                 StrokeKind::Middle,
             );
         }
@@ -1873,7 +1873,7 @@ impl BoardView {
         ctx.painter.rect_stroke(
             ctx.screen.world_to_screen_rect(world_place_rect),
             1.0,
-            Stroke::new(2.0, Color32::LIGHT_BLUE),
+            Stroke::new(2.0_f32, Color32::LIGHT_BLUE),
             StrokeKind::Outside,
         );
 
@@ -2130,7 +2130,7 @@ impl BoardView {
             }
 
             if ctx.screen.screen_rect.intersects(rect.expand(1.0)) {
-                ctx.rect_stroke(rect, 1.0, Stroke::new(2.0, color), StrokeKind::Middle);
+                ctx.rect_stroke(rect, 1.0, Stroke::new(2.0_f32, color), StrokeKind::Middle);
             }
         }
     }
@@ -2232,7 +2232,7 @@ fn draw_pin_labels(
 
         let rounding = CornerRadiusF32::same(3.0 * text_scale);
         let fill = Color32::from_gray(30);
-        let stroke = PathStroke::new(1.0, Color32::from_gray(100));
+        let stroke = PathStroke::new(1.0_f32, Color32::from_gray(100));
 
         let path = rotated_rect(rect, rect_pos, angle, rounding, fill, stroke);
         ctx.painter.add(path);

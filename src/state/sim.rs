@@ -314,6 +314,7 @@ impl BoardSimulationState {
         }
 
         let mut next_tasks_index = start_epoch.wrapping_sub(self.current_epoch).wrapping_sub(1);
+        #[allow(clippy::explicit_counter_loop)]
         for task in tasks {
             while self.next_tasks.len() <= next_tasks_index {
                 self.next_tasks.push_back(get_pooled());

@@ -86,7 +86,7 @@ impl BoardEditor {
         for wire in board_wires.iter() {
             let points = wire.points.read();
 
-            for (pos, _) in points.iter() {
+            for pos in points.keys() {
                 let pos = *pos;
 
                 tiles.set_wire(pos, Some(wire.clone()));
@@ -106,7 +106,7 @@ impl BoardEditor {
 
                     let mut closest_target_dist = None::<usize>;
 
-                    for (target_pos, _) in points.iter() {
+                    for target_pos in points.keys() {
                         let target_pos = *target_pos;
                         let dist = match dir {
                             Direction4Half::Left => {

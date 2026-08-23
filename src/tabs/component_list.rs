@@ -192,7 +192,7 @@ fn wire_icon(rect: Rect, ui: &mut Ui) {
 
     let painter = ui.painter();
 
-    painter.line_segment([rect1.center(), rect2.center()], Stroke::new(2.5, color));
+    painter.line_segment([rect1.center(), rect2.center()], Stroke::new(2.5_f32, color));
 
     painter.add(PathShape {
         points: rotated_rect_shape(rect1, PI * 0.25, rect1.center()),
@@ -229,7 +229,7 @@ fn selection_icon(rect: Rect, painter: &Painter, style: &Style) {
     let mut shapes = vec![];
     Shape::dashed_line_many(
         &rect_corners,
-        Stroke::new(1.0, style.selection_border),
+        Stroke::new(1.0_f32, style.selection_border),
         3.0,
         2.0,
         &mut shapes,
