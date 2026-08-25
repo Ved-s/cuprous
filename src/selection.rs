@@ -2,13 +2,16 @@ use std::{
     collections::{self, HashSet},
     hash::Hash,
     marker::PhantomData,
+    sync::Arc,
 };
 
-use eframe::egui::{CornerRadius, Id, Rect, Response, Stroke, StrokeKind, Ui};
+use eframe::egui::{Color32, CornerRadius, Id, Rect, Response, Stroke, StrokeKind, Ui};
 use glow::{Context, HasContext, PixelUnpackData};
+use parking_lot::Mutex;
 
 use crate::{
     CustomPaintContext, PaintContext, Screen,
+    multicursor::Multicursor,
     vector::Vec2f,
     vertex_renderer::{
         FullscreenQuadVertexBuffer, Shaders, SimpleVertex, TriangleBuffer, UvVertex, VertexRenderer,
@@ -51,6 +54,7 @@ impl<I: SelectionImpl> Selection<I> {
         ui: &Ui,
         screen: Screen,
         active: bool,
+        multicursor: &Multicursor,
     ) {
         if let Some(drag) = &self.drag_state
             && interaction.id != drag.interaction_id
@@ -111,10 +115,14 @@ impl<I: SelectionImpl> Selection<I> {
         }
 
         let b = screen.screen_to_world(interaction);
-        let rect = Rect::from_two_pos(drag.start.into(), b.into());
+
+        let selection_direction = b - drag.start;
 
         self.change.clear();
-        I::include_area(pass, &mut self.change, rect);
+        for c in multicursor.cursors_scaled(drag.start, 1.0) {
+            let rect = Rect::from_two_pos(c.into(), (c + selection_direction).into());
+            I::include_area(pass, &mut self.change, rect);
+        }
 
         self.update_counter = self.update_counter.wrapping_add(1);
     }
@@ -154,7 +162,13 @@ impl<I: SelectionImpl> Selection<I> {
         SelectionIterator::new(&self.selection, &self.change, self.exclude)
     }
 
-    pub fn draw_overlay(&self, interaction: &Response, ctx: &PaintContext) {
+    pub fn draw_overlay(
+        &self,
+        interaction: &Response,
+        ctx: &PaintContext,
+        selection_renderer: Arc<Mutex<SelectionRenderer>>,
+        multicursor: &Multicursor,
+    ) {
         let Some(drag) = &self.drag_state else {
             return;
         };
@@ -168,16 +182,30 @@ impl<I: SelectionImpl> Selection<I> {
         };
 
         let a = ctx.screen.world_to_screen(drag.start).round();
-        let b = b.round();
-        let rect = Rect::from_two_pos(a.into(), b);
+        let b = Vec2f::from(b).round();
+        let selecttion_size = (b - a).round();
 
-        ctx.painter.rect(
-            rect,
-            CornerRadius::ZERO,
-            ctx.style.selection_fill,
-            Stroke::new(2.0_f32, ctx.style.selection_border),
-            StrokeKind::Middle,
-        );
+        let renderer = selection_renderer.clone();
+
+        ctx.custom_draw(move |ctx| {
+            renderer.lock().draw(&ctx);
+        });
+
+        let mut renderer = selection_renderer.lock();
+
+        renderer.clear_draw();
+
+        for c in multicursor.cursors_scaled(a, ctx.screen.scale) {
+            let c = c.round();
+            renderer.fill_buffer.add_new_rect(c, selecttion_size, ());
+            ctx.painter.rect(
+                Rect::from_two_pos(c.into(), (c + selecttion_size).into()),
+                CornerRadius::ZERO,
+                Color32::TRANSPARENT,
+                Stroke::new(2.0_f32, ctx.style.selection_border),
+                StrokeKind::Middle,
+            );
+        }
     }
 
     pub fn clear(&mut self) {

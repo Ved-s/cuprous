@@ -49,7 +49,7 @@ impl Multicursor {
         self.editing_cursor_pos.is_some()
     }
 
-    pub fn cursors_screen(&self, main_pos: Vec2f, scale: f32) -> impl Iterator<Item = Vec2f> {
+    pub fn cursors_scaled(&self, main_pos: Vec2f, scale: f32) -> impl Iterator<Item = Vec2f> {
         let cursors = if self.has_extra_cursors() {
             self.extra_cursors
         } else {
@@ -59,7 +59,7 @@ impl Multicursor {
         std::iter::successors(Some(main_pos), move |&p| Some(p + scaled_offset)).take(cursors)
     }
 
-    pub fn cursors_world(&self, main_pos: Vec2isize) -> impl Iterator<Item = Vec2isize> {
+    pub fn cursors_discrete(&self, main_pos: Vec2isize) -> impl Iterator<Item = Vec2isize> {
         let cursors = if self.has_extra_cursors() {
             self.extra_cursors
         } else {
@@ -124,7 +124,7 @@ impl Multicursor {
         let pointer_chain_start = self.editing_cursor_pos.unwrap_or_else(|| pointer.into());
 
         for (i, c) in self
-            .cursors_screen(pointer_chain_start, screen.scale)
+            .cursors_scaled(pointer_chain_start, screen.scale)
             .enumerate()
         {
             let color = match (i, self.editing_cursor_pos.is_some()) {

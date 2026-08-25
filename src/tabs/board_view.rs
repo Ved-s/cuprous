@@ -19,11 +19,27 @@ use num_traits::Zero;
 use parking_lot::{Mutex, RwLock};
 
 use crate::{
-    BIG_WIRE_POINT_WIDTH, CHUNK_SIZE, CustomPaintContext, Direction4Half, Direction8, Direction8Array, PaintContext, Screen, WIRE_POINT_WIDTH, WIRE_WIDTH, app::{App, COPY_PASTE_BOARD_ITEMS_PREFIX, SelectedItem}, board::{Board, ComponentCreationOverrides}, components::{
+    BIG_WIRE_POINT_WIDTH, CHUNK_SIZE, CustomPaintContext, Direction4Half, Direction8,
+    Direction8Array, PaintContext, Screen, WIRE_POINT_WIDTH, WIRE_WIDTH,
+    app::{App, COPY_PASTE_BOARD_ITEMS_PREFIX, SelectedItem},
+    board::{Board, ComponentCreationOverrides},
+    components::{
         ComponentBlueprint, ComponentRenderPurpose, ComponentRenderingContext,
         ComponentSelectionRenderingContext, ComponentUpdateReason, PinType, TransformSupport,
         UntypedComponentCtx,
-    }, drawing::{self, rotated_rect}, editor::{BoardEditor, BoardSelection, InWorldError, QuarterPos, SelectedBoardItem}, ext::IteratorProduct, io::copystate, multicursor::Multicursor, pool::get_pooled, selection::SelectionRenderer, simulation::SimulationStateData, state::{BoardState, sim::UpdateTaskPool}, time::{self, TimeProvider}, vector::{Vec2f, Vec2isize, Vec2usize, Vector2}, vertex_renderer::{ColoredLineBuffer, ColoredTriangleBuffer, ColoredVertexRenderer},
+    },
+    drawing::{self, rotated_rect},
+    editor::{BoardEditor, BoardSelection, InWorldError, QuarterPos, SelectedBoardItem},
+    ext::IteratorProduct,
+    io::copystate,
+    multicursor::Multicursor,
+    pool::get_pooled,
+    selection::SelectionRenderer,
+    simulation::SimulationStateData,
+    state::{BoardState, sim::UpdateTaskPool},
+    time::{self, TimeProvider},
+    vector::{Vec2f, Vec2isize, Vec2usize, Vector2},
+    vertex_renderer::{ColoredLineBuffer, ColoredTriangleBuffer, ColoredVertexRenderer},
 };
 
 use super::{TabCreation, TabImpl};
@@ -49,6 +65,7 @@ pub struct BoardView {
     pin_buffer: Arc<Mutex<ColoredTriangleBuffer>>,
 
     selection_renderer: Arc<Mutex<SelectionRenderer>>,
+    active_selection_renderer: Arc<Mutex<SelectionRenderer>>,
 
     components_drawn: HashSet<usize>,
     wire_colors: BTreeMap<usize, Color32>,
@@ -94,6 +111,7 @@ impl TabCreation for BoardView {
             pin_buffer: Default::default(),
 
             selection_renderer: Arc::new(Mutex::new(SelectionRenderer::new(&app.gl))),
+            active_selection_renderer: Arc::new(Mutex::new(SelectionRenderer::new(&app.gl))),
 
             components_drawn: HashSet::new(),
             wire_colors: BTreeMap::new(),
@@ -139,7 +157,13 @@ impl TabImpl for BoardView {
             || interaction.dragged_by(PointerButton::Secondary);
 
         if self.fixed_screen_pos.is_none() || ui.input(|input| input.modifiers.alt) {
-            self.pan_zoom.update(ui, screen_rect, dragged, &interaction, app.multicursor.editing());
+            self.pan_zoom.update(
+                ui,
+                screen_rect,
+                dragged,
+                &interaction,
+                app.multicursor.editing(),
+            );
         }
 
         let global_screen = self.pan_zoom.to_screen(screen_rect);
@@ -168,7 +192,13 @@ impl TabImpl for BoardView {
                 pan_zoom.scale *= self.pan_zoom.scale;
                 let screen_rect = global_screen.world_to_screen_rect(*rect);
                 if !ui.input(|input| input.modifiers.alt) {
-                    pan_zoom.update(ui, screen_rect, dragged, &interaction, app.multicursor.editing());
+                    pan_zoom.update(
+                        ui,
+                        screen_rect,
+                        dragged,
+                        &interaction,
+                        app.multicursor.editing(),
+                    );
                 }
                 let screen = pan_zoom.to_screen(screen_rect);
                 pan_zoom.scale /= self.pan_zoom.scale;
@@ -205,7 +235,8 @@ impl TabImpl for BoardView {
             );
         }
 
-        app.multicursor.update(ui.ctx(), ui.input(|input| input.key_down(Key::M)), screen);
+        app.multicursor
+            .update(ui.ctx(), ui.input(|input| input.key_down(Key::M)), screen);
 
         app.editor_shared
             .entry(self.board.uid())
@@ -217,6 +248,7 @@ impl TabImpl for BoardView {
                 ui,
                 screen,
                 matches!(app.selected_item, Some(SelectedItem::Selection)),
+                &app.multicursor
             );
 
         if !ui.ctx().egui_wants_keyboard_input() {
@@ -269,7 +301,12 @@ impl TabImpl for BoardView {
             .entry(self.board.uid())
             .or_default()
             .selection
-            .draw_overlay(&interaction, &ctx);
+            .draw_overlay(
+                &interaction,
+                &ctx,
+                self.active_selection_renderer.clone(),
+                &app.multicursor,
+            );
 
         self.handle_wire_interactions(
             &ctx,
@@ -781,19 +818,20 @@ impl BoardView {
                 let component = &quarter.component;
 
                 if let Some(pin) = quarter.pin.as_ref().filter(|_| draw_pins)
-                    && pin.wire.read().is_none() {
-                        let center = pos.convert(|v| v as f32 + 0.5);
-                        let dir = component.pins.read().get(pin.id).and_then(|p| p.desc.dir);
+                    && pin.wire.read().is_none()
+                {
+                    let center = pos.convert(|v| v as f32 + 0.5);
+                    let dir = component.pins.read().get(pin.id).and_then(|p| p.desc.dir);
 
-                        drawing::pin(
-                            ctx.screen.world_to_screen(center),
-                            (WIRE_WIDTH / 2.0) * ctx.screen.scale,
-                            &ctx.style.pins,
-                            dir,
-                            state.pin_color(pin, &ctx.style),
-                            pin_buffer.deref_mut(),
-                        );
-                    }
+                    drawing::pin(
+                        ctx.screen.world_to_screen(center),
+                        (WIRE_WIDTH / 2.0) * ctx.screen.scale,
+                        &ctx.style.pins,
+                        dir,
+                        state.pin_color(pin, &ctx.style),
+                        pin_buffer.deref_mut(),
+                    );
+                }
 
                 if self.components_drawn.contains(&component.id) {
                     continue;
@@ -1328,10 +1366,11 @@ impl BoardView {
                 };
 
                 let vec = direction.into_dir_f32() * add_len * ctx.screen.scale;
-                let wire_vector_screen = (direction.into_dir_f32() * (length as f32 + add_len)) * ctx.screen.scale;
+                let wire_vector_screen =
+                    (direction.into_dir_f32() * (length as f32 + add_len)) * ctx.screen.scale;
 
                 let startf = ctx.screen.world_to_screen(startf);
-                for c in multicursor.cursors_screen(startf - vec, ctx.screen.scale) {
+                for c in multicursor.cursors_scaled(startf - vec, ctx.screen.scale) {
                     ctx.painter.line_segment(
                         [c.into(), (c + wire_vector_screen).into()],
                         Stroke::new(WIRE_WIDTH * ctx.screen.scale, color),
@@ -1344,7 +1383,7 @@ impl BoardView {
                 {
                     if let Some(nonzero_len) = NonZeroU32::new(length) {
                         let mut editor = self.editor.write();
-                        for c in multicursor.cursors_world(start) { 
+                        for c in multicursor.cursors_discrete(start) {
                             match place {
                                 true => editor.place_wire(c, direction, nonzero_len),
                                 false => editor.remove_wire(c, direction, nonzero_len),
@@ -2247,7 +2286,14 @@ pub struct PanAndZoom {
 }
 
 impl PanAndZoom {
-    fn update(&mut self, ui: &Ui, rect: Rect, drag: bool, interaction: &Response, block_zoom: bool) {
+    fn update(
+        &mut self,
+        ui: &Ui,
+        rect: Rect,
+        drag: bool,
+        interaction: &Response,
+        block_zoom: bool,
+    ) {
         let zoom = ui.input(|input| {
             input
                 .multi_touch()
