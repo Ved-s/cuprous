@@ -248,7 +248,7 @@ impl TabImpl for BoardView {
                 ui,
                 screen,
                 matches!(app.selected_item, Some(SelectedItem::Selection)),
-                &app.multicursor
+                &app.multicursor,
             );
 
         if !ui.ctx().egui_wants_keyboard_input() {
@@ -317,7 +317,12 @@ impl TabImpl for BoardView {
 
         #[allow(clippy::collapsible_if)]
         if let Some(SelectedItem::Component(c)) = app.selected_item.as_ref() {
-            if let Err(e) = self.handle_component_placement(&interaction, &ctx, c.read().deref()) {
+            if let Err(e) = self.handle_component_placement(
+                &interaction,
+                &ctx,
+                c.read().deref(),
+                &app.multicursor,
+            ) {
                 app.editor_shared
                     .entry(self.board.uid())
                     .or_default()
@@ -1482,6 +1487,7 @@ impl BoardView {
         interaction: &Response,
         ctx: &PaintContext,
         blueprint: &ComponentBlueprint,
+        multicursor: &Multicursor,
     ) -> Result<(), InWorldError> {
         let world_mouse = ctx
             .ui
@@ -1495,48 +1501,50 @@ impl BoardView {
         let world_place_pos = world_mouse - blueprint.transformed_size.convert(|v| v as f32 / 2.0);
         let world_place_tile = world_place_pos.convert(|v| v.round() as isize);
 
-        Self::draw_component_for_placement(world_place_tile, blueprint, ctx);
-
         let mut overlap_buffer = None;
         let editor = self.editor.read();
 
-        for ((y, x), q) in (0..blueprint.transformed_size.y)
-            .product_clone(0..blueprint.transformed_size.x)
-            .product_clone(QuarterPos::ALL.iter().copied())
-        {
-            let pos = Vec2usize::new(x, y);
-            let quarter_pos = pos * 2 + q.into_position();
-            let quarter_pos = blueprint.transform.backtransform_pos(
-                blueprint.inner_size * 2,
-                quarter_pos,
-                Some(TransformSupport::Automatic),
-            );
-            if !blueprint
-                .imp
-                .occupies_quarter(blueprint.transform, quarter_pos)
+        for c in multicursor.cursors_discrete(world_place_tile) {
+            Self::draw_component_for_placement(c, blueprint, ctx);
+
+            for ((y, x), q) in (0..blueprint.transformed_size.y)
+                .product_clone(0..blueprint.transformed_size.x)
+                .product_clone(QuarterPos::ALL.iter().copied())
             {
-                continue;
+                let pos = Vec2usize::new(x, y);
+                let quarter_pos = pos * 2 + q.into_position();
+                let quarter_pos = blueprint.transform.backtransform_pos(
+                    blueprint.inner_size * 2,
+                    quarter_pos,
+                    Some(TransformSupport::Automatic),
+                );
+                if !blueprint
+                    .imp
+                    .occupies_quarter(blueprint.transform, quarter_pos)
+                {
+                    continue;
+                }
+
+                let world_pos = pos.convert(|v| v as isize) + c;
+
+                let Some(node) = editor.tiles.components().get(world_pos) else {
+                    continue;
+                };
+
+                if node.quarters.get(q).is_none() {
+                    continue;
+                }
+
+                let buffer = overlap_buffer.get_or_insert_with(get_pooled::<ColoredTriangleBuffer>);
+
+                let world_pos = world_pos.convert(|v| v as f32) + q.into_quarter_position_f32();
+                let screen_pos = ctx.screen.world_to_screen(world_pos);
+                buffer.add_new_rect(
+                    screen_pos,
+                    ctx.screen.scale * 0.5,
+                    Color32::RED.gamma_multiply(0.6).to_normalized_gamma_f32(),
+                )
             }
-
-            let world_pos = pos.convert(|v| v as isize) + world_place_tile;
-
-            let Some(node) = editor.tiles.components().get(world_pos) else {
-                continue;
-            };
-
-            if node.quarters.get(q).is_none() {
-                continue;
-            }
-
-            let buffer = overlap_buffer.get_or_insert_with(get_pooled::<ColoredTriangleBuffer>);
-
-            let world_pos = world_pos.convert(|v| v as f32) + q.into_quarter_position_f32();
-            let screen_pos = ctx.screen.world_to_screen(world_pos);
-            buffer.add_new_rect(
-                screen_pos,
-                ctx.screen.scale * 0.5,
-                Color32::RED.gamma_multiply(0.6).to_normalized_gamma_f32(),
-            )
         }
         drop(editor);
 
@@ -1562,22 +1570,24 @@ impl BoardView {
         draw_pin_labels(ctx, &mut iter);
 
         if interaction.clicked() {
-            let res = self
-                .editor
-                .write()
-                .place_component(world_place_tile, blueprint);
+            for c in multicursor.cursors_discrete(world_place_tile) {
+                let res = self
+                    .editor
+                    .write()
+                    .place_component(c, blueprint);
 
-            if let Err(e) = res {
-                let rect = Rect::from_min_size(
-                    world_place_tile.convert(|v| v as f32).into(),
-                    blueprint.transformed_size.convert(|v| v as f32).into(),
-                );
+                if let Err(e) = res {
+                    let rect = Rect::from_min_size(
+                        c.convert(|v| v as f32).into(),
+                        blueprint.transformed_size.convert(|v| v as f32).into(),
+                    );
 
-                return Err(InWorldError::new(
-                    rect,
-                    PLACEMENT_ERROR_DURATION,
-                    e.to_string(),
-                ));
+                    return Err(InWorldError::new(
+                        rect,
+                        PLACEMENT_ERROR_DURATION,
+                        e.to_string(),
+                    ));
+                }
             }
         }
 
