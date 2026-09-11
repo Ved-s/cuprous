@@ -22,7 +22,7 @@ do
     esac
 done
 
-if [[ $skip_wasmcli_version == 0]]
+if [[ $skip_wasmcli_version == 0 ]]
 then
     wasmbind_pkg_version=$(GITHUB_OUTPUT= bash ./get-wasmcli-version.sh)
 
