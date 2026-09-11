@@ -12,5 +12,5 @@ echo "$version"
 
 if [[ ! -z "$GITHUB_OUTPUT" ]]
 then
-    echo "version='$version'" >> $GITHUB_OUTPUT
+    echo "version=$version" >> $GITHUB_OUTPUT
 fi
