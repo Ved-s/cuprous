@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 force_wasmcli_version=0
+skip_wasmcli_version=0
 release=0
 
 for arg in "$@"
@@ -8,6 +9,9 @@ do
     case $arg in
         --force-wasmcli-version)
             force_wasmcli_version=1
+            ;;
+        --skip-wasmcli-version)
+            skip_wasmcli_version=1
             ;;
         --release)
             release=1
@@ -18,35 +22,38 @@ do
     esac
 done
 
-wasmbind_pkg_version=$(grep -ozP '(?<=name\s=\s\"wasm-bindgen\"\nversion\s=\s\")([^"]+)' Cargo.lock | tr -d '\0')
-
-if [[ ! -z "$wasmbind_pkg_version" ]]
+if [[ $skip_wasmcli_version == 0]]
 then
-    if [[ $force_wasmcli_version == 1 ]]
+    wasmbind_pkg_version=$(GITHUB_OUTPUT= bash ./get-wasmcli-version.sh)
+
+    if [[ ! -z "$wasmbind_pkg_version" ]]
     then
-        cargo install "wasm-bindgen-cli@$wasmbind_pkg_version"
-        cargo_install_result=$?
-        if [[ $cargo_install_result != 0 ]]
+        if [[ $force_wasmcli_version == 1 ]]
         then
-            echo "Error: \"cargo install wasm-bindgen-cli@$wasmbind_pkg_version\" exited with error code $cargo_install_result"
-            exit $cargo_install_result
+            cargo install "wasm-bindgen-cli@$wasmbind_pkg_version"
+            cargo_install_result=$?
+            if [[ $cargo_install_result != 0 ]]
+            then
+                echo "Error: \"cargo install wasm-bindgen-cli@$wasmbind_pkg_version\" exited with error code $cargo_install_result"
+                exit $cargo_install_result
+            fi
+        else 
+            wasmcli_version=$(wasm-bindgen --version | sed 's/wasm-bindgen //')
+            if [[ "$wasmcli_version" != "$wasmbind_pkg_version" ]]
+            then
+                echo "Expected wasm-bindgen-cli version: \"$wasmbind_pkg_version\", got \"$wasmcli_version\"" >&2
+                echo "Pass --force-wasmcli-version to install it with cargo" >&2
+                exit 1
+            fi
         fi
-    else 
-        wasmcli_version=$(wasm-bindgen --version | sed 's/wasm-bindgen //')
-        if [[ "$wasmcli_version" != "$wasmbind_pkg_version" ]]
-        then
-            echo "Expected wasm-bindgen-cli version: \"$wasmbind_pkg_version\", got \"$wasmcli_version\"" >&2
-            echo "Pass --force-wasmcli-version to install it with cargo" >&2
-            exit 1
-        fi
-    fi
-else
-    if [[ $force_wasmcli_version == 1 ]]
-    then
-        echo "Could not grep wasm-bindgen version out of Cargo.lock. Cannot force-install correct version." >&2
-        exit 1
     else
-        echo "Could not grep wasm-bindgen version out of Cargo.lock. Version check skipped." >&2
+        if [[ $force_wasmcli_version == 1 ]]
+        then
+            echo "Could not grep wasm-bindgen version out of Cargo.lock. Cannot force-install correct version." >&2
+            exit 1
+        else
+            echo "Could not grep wasm-bindgen version out of Cargo.lock. Version check skipped." >&2
+        fi
     fi
 fi
 

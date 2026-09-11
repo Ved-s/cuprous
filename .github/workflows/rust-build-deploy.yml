@@ -61,8 +61,17 @@ jobs:
     - name: Install Rust
       run: rustup default stable && rustup target add wasm32-unknown-unknown
 
+    - name: Get wasm-bindgen-version
+      id: wasmcli-version
+      run: bash ./get-wasmsli-version.sh
+
+    - name: Install wasm-bindgen-cli
+      uses: taiki-e/cache-cargo-install-action@v3
+      with:
+        tool: wasm-bindgen-cli@${{ steps.wasmcli-version.outputs.version }}
+
     - name: Build
-      run: bash ./build-web.sh --force-wasmcli-version --release
+      run: bash ./build-web.sh --skip-wasmcli-version --release
 
     - name: Package artifact
       uses: actions/upload-pages-artifact@v3
