@@ -41,7 +41,13 @@ then
         fi
     fi
 else
-    echo "Could not grep wasm-bindgen version out of Cargo.lock. Version check skipped." >&2
+    if [[ $force_wasmcli_version == 1 ]]
+    then
+        echo "Could not grep wasm-bindgen version out of Cargo.lock. Cannot force-install correct version." >&2
+        exit 1
+    else
+        echo "Could not grep wasm-bindgen version out of Cargo.lock. Version check skipped." >&2
+    fi
 fi
 
 do_release=""
