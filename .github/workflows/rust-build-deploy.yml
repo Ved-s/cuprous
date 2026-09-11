@@ -65,7 +65,7 @@ jobs:
       run: bash ./build-web.sh --force-wasmcli-version --release
 
     - name: Package artifact
-      uses: actions/upload-pages-artifact@v1
+      uses: actions/upload-pages-artifact@v3
       with:
         path: web/
 
@@ -84,9 +84,6 @@ jobs:
 
     runs-on: ubuntu-latest
     steps:
-      - name: Setup Pages
-        uses: actions/configure-pages@v3
-
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v2
+        uses: actions/deploy-pages@v4
