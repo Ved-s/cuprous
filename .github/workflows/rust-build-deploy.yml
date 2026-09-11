@@ -63,7 +63,7 @@ jobs:
 
     - name: Get wasm-bindgen-version
       id: wasmcli-version
-      run: bash ./get-wasmsli-version.sh
+      run: bash ./get-wasmcli-version.sh
 
     - name: Install wasm-bindgen-cli
       uses: taiki-e/cache-cargo-install-action@v3
