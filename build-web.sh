@@ -18,7 +18,7 @@ do
     esac
 done
 
-wasmbind_pkg_version=$(grep -ozP '(?<=name\s?=\s?\"wasm-bindgen\"\r?\nversion\s=\s\")([^"]+)' Cargo.lock | tr -d '\0')
+wasmbind_pkg_version=$(grep -ozP '(?<=name\s=\s\"wasm-bindgen\"\nversion\s=\s\")([^"]+)' Cargo.lock | tr -d '\0')
 
 if [[ ! -z "$wasmbind_pkg_version" ]]
 then
